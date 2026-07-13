@@ -1,32 +1,32 @@
 # Rust build artifacts
 indent-native/target/
 
-# Node / VS Code extension artifacts
-node_modules/
-*.vsix
-
-# Python artifacts
-__pycache__/
-*.pyc
-
-# IDE / OS files
-.idea/
-.DS_Store
-Thumbs.db
-
-# Deferred
+# Deferred / not for main repo
+indent/
+indent-language/
+indent-file-icons/
+indent-scrible/
+tree-sitter-indent/
 aether-release/
 Aether-Forge-IDE/
-indent-scrible/
-
-# Training data
+std/
 scripts/train-starcoder/
 
-# Watch / debug logs
-watch_*
+# Test/example files at root
+*.ind
+puzzles/
 
-# Old/stale files from rebrand
-*.glo
+# Root non-essentials
+.vscode/
+.github/
+PUBLISHING_EXTENSIONS.md
+RELEASING.md
 bot.py
 ath.txt
-puzzles/
+watch_*
+*.tar.gz
+*.png
+*.glo
+
+# But keep the indent logo
+!indent.svg

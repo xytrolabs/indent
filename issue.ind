@@ -1,9 +1,0 @@
-var age int = ask("int", "How old are you? ")
-if age >= 50
-    say "At " + age + " you are a senior"
-or age >= 18
-    say "At " + age + " you are an adult"
-or age >= 13
-    say "At " + age + " you are a teenager"
-otherwise
-    say "At " + age + " you are a child"  

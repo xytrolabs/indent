@@ -1,8 +1,0 @@
-#! io.ath
-#! Input/Output helpers for Aether-2
-
-fun Print value
-    say value
-
-fun PrintLine value
-    say value
