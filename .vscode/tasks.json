@@ -1,0 +1,94 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Current Indent File",
+      "type": "shell",
+      "command": "indent",
+      "args": [
+        "${file}"
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Lint Current Indent File",
+      "type": "shell",
+      "command": "indent",
+      "args": [
+        "lint",
+        "${file}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Check Current Indent File",
+      "type": "shell",
+      "command": "indent",
+      "args": [
+        "check",
+        "${file}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Format Current Indent File",
+      "type": "shell",
+      "command": "indent",
+      "args": [
+        "fmt",
+        "${file}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Indent REPL",
+      "type": "shell",
+      "command": "indent",
+      "args": [
+        "repl"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Indent Tests",
+      "type": "shell",
+      "command": "indent",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+# Maintainer: Stratos Labs <opensource@stratos-labs.com>
+# Contributor: Raf <raf@aether-lang.org>
+#
+# Aether is an indentation-based scripting language with a native Rust runtime.
+# Install:  yay -S aether
+#           paru -S aether
+
+pkgname=aether
+pkgver=2.3.0
+pkgrel=1
+pkgdesc="Simple, readable, beginner-friendly programming language with a native Rust runtime"
+arch=('x86_64' 'aarch64')
+url="https://github.com/stratos-labs/aether"
+license=('MIT')
+depends=('bash' 'curl')
+makedepends=()
+optdepends=()
+provides=('aether')
+conflicts=()
+replaces=()
+
+# Binary release — no compilation needed
+source_x86_64=("aether-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/stratos-labs/aether/releases/download/v${pkgver}/aether-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("aether-v${pkgver}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/stratos-labs/aether/releases/download/v${pkgver}/aether-v${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
+
+# SHA256 sums — update on each release with: sha256sum <file>
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  # Install binary
+  install -Dm755 "aether-v${pkgver}-${CARCH}-unknown-linux-gnu/aether" \
+    "${pkgdir}/usr/bin/aether"
+
+  # Install standard library
+  mkdir -p "${pkgdir}/usr/lib/aether"
+  cp -r "aether-v${pkgver}-${CARCH}-unknown-linux-gnu/std" \
+    "${pkgdir}/usr/lib/aether/std"
+
+  # Install companion tools if present
+  local srcdir="aether-v${pkgver}-${CARCH}-unknown-linux-gnu"
+  for tool in air aetherpkg; do
+    if [[ -f "${srcdir}/${tool}" ]]; then
+      install -Dm755 "${srcdir}/${tool}" "${pkgdir}/usr/bin/${tool}"
+    fi
+  done
+
+  # Install license and docs
+  install -Dm644 "${srcdir}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  if [[ -f "${srcdir}/LICENSE" ]]; then
+    install -Dm644 "${srcdir}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  fi
+}

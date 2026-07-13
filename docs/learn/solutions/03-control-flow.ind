@@ -1,0 +1,78 @@
+#! Solutions — Lesson 03: Control Flow
+
+fun GradeCalculator score
+    if score >= 90
+        say "A"
+    or score >= 80
+        say "B"
+    or score >= 70
+        say "C"
+    or score >= 60
+        say "D"
+    otherwise
+        say "F"
+
+say "--- Grade Calculator ---"
+GradeCalculator(95)
+GradeCalculator(72)
+GradeCalculator(55)
+
+fun SeasonDetector month
+    match month:
+        case "December":
+            say "Winter"
+        case "January":
+            say "Winter"
+        case "February":
+            say "Winter"
+        case "March":
+            say "Spring"
+        case "April":
+            say "Spring"
+        case "May":
+            say "Spring"
+        case "June":
+            say "Summer"
+        case "July":
+            say "Summer"
+        case "August":
+            say "Summer"
+        case "September":
+            say "Fall"
+        case "October":
+            say "Fall"
+        case "November":
+            say "Fall"
+        otherwise:
+            say "Unknown month"
+
+say "--- Season Detector ---"
+SeasonDetector("March")
+SeasonDetector("August")
+
+fun LoginValidator username password
+    if username == "admin"
+        if password == "secret"
+            say "Welcome!"
+        otherwise
+            say "Wrong password"
+    otherwise
+        say "Unknown user"
+
+say "--- Login Validator ---"
+LoginValidator("admin", "secret")
+LoginValidator("admin", "wrong")
+LoginValidator("hacker", "whatever")
+
+say "--- FizzBuzz ---"
+var n int = 1
+repeat until n > 20
+    if n % 3 == 0 and n % 5 == 0
+        say "FizzBuzz"
+    or n % 3 == 0
+        say "Fizz"
+    or n % 5 == 0
+        say "Buzz"
+    otherwise
+        say n
+    n is n + 1

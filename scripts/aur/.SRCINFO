@@ -1,0 +1,26 @@
+# Aether AUR Package
+#
+# To install from AUR:
+#   yay -S aether
+#
+# To build manually:
+#   git clone https://aur.archlinux.org/aether.git
+#   cd aether
+#   makepkg -si
+
+pkgbase = aether
+	pkgdesc = Simple, readable, beginner-friendly programming language with a native Rust runtime
+	pkgver = 0.1.2
+	pkgrel = 1
+	url = https://github.com/rafih110610/aether
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = bash
+	depends = curl
+	source_x86_64 = aether-v0.1.2-x86_64-unknown-linux-gnu.tar.gz::https://github.com/rafih110610/aether/releases/download/v0.1.2/aether-v0.1.2-x86_64-unknown-linux-gnu.tar.gz
+	source_aarch64 = aether-v0.1.2-aarch64-unknown-linux-gnu.tar.gz::https://github.com/rafih110610/aether/releases/download/v0.1.2/aether-v0.1.2-aarch64-unknown-linux-gnu.tar.gz
+	sha256sums_x86_64 = SKIP
+	sha256sums_aarch64 = SKIP
+
+pkgname = aether

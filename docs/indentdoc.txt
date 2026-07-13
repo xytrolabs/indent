@@ -1,0 +1,485 @@
+INDENTDOC
+=========
+
+Purpose
+-------
+This file is the current practical reference for Indent: language syntax, built-in runtime helpers, shipped modules, optional interoperability tools, and the AIR package manager.
+
+Core Value Types
+----------------
+string
+- Text value.
+- Example: "hello"
+- Common operations: concatenation with +, indexing with [index], length via len; value.
+
+int
+- Whole number.
+- Example: 42
+
+float
+- Decimal number.
+- Example: 3.14159
+
+boolean
+- True/false value.
+- Example: TRUE, FALSE, YES, NO, true, false
+
+list
+- Ordered sequence of values.
+- Example: [1, 2, 3]
+
+dictionary
+- Key/value map (runtime type name may show as dict).
+- Example: {"name": "Indent", "version": 1}
+
+module
+- Imported namespace containing functions and variables.
+
+empty
+- No-value sentinel.
+
+Core Syntax
+-----------
+Variable definition
+- def.var: username
+    string
+    "raf"
+
+- def.var: items
+    list
+    [1, 2, 3]
+
+- def.var: config
+    dict
+    {"key": "value"}
+
+Valid type annotations: string, int, float, boolean, dynamic, empty, list, dict
+
+Reassignment
+- username is "new-name"
+
+Type conversion for an existing variable
+- makeType: string of username
+
+Note on shipped modules
+- Some shipped modules also use `make:` as a mutation helper for existing variables. Prefer `is` for straightforward reassignment in new scripts.
+- Imported module functions now compose reliably during external invocation, so helpers inside a package can call sibling helpers by bare name when the package is loaded normally.
+
+Function definition
+- def.fun: Add(a:int, b:int) -> int
+    Give: a + b
+
+Function calls
+- Functions with no arguments can be stated directly, for example: RunActive
+- Functions with arguments should use semicolon and indentation:
+
+    Add;
+            1
+            2
+
+- `say` also supports multiline command style:
+
+    say;
+            "Hello from multiline say"
+
+- Value-producing calls also work in variable declarations and reassignment:
+
+    def.var: total
+        int
+        Add;
+            2
+            3
+
+    total is Multiply;
+        total
+        4
+
+- Method-style calls are supported on list/string/dictionary variables:
+
+    def.var: updated
+        list
+        items.append;
+            5
+
+    def.var: quick
+        list
+        items.append(6)
+
+- Common method aliases include:
+    `text.endswith; "suffix"`, `text.startswith; "prefix"`, `mapping.get; "key"; default`
+    `items.index; value`, `items.copy;`, `items.clear;`, `mapping.update; updates`
+
+Indexing
+- Lists and strings support positive and negative indexes, for example `items[0]` and `items[-1]`.
+- Dictionaries are indexed by string keys, for example `config["token"]`.
+- Dictionaries also support dot notation for known keys, for example `config.token` (equivalent to `config["token"]`).
+- Bracket slicing is supported for lists and strings:
+    `value[start:end]`, `value[:end]`, `value[start:]`, and `value[start:end:step]`.
+- In-place indexed mutation statements are supported:
+    `items[1] is 99` and `mapping["token"] is "new-value"`.
+- In-place list slice mutation statements are supported:
+    `items[1:3] is [7, 8, 9]` and `items[::2] is [1, 2, 3]`.
+
+Conditionals
+- if condition:
+    ...
+  or otherCondition:
+    ...
+  otherwise:
+    ...
+
+Match branching
+- Match valueExpr:
+    case optionA:
+    ...
+    case optionB:
+    ...
+    otherwise:
+    ...
+
+Boolean logic and operators
+- not, and, or are supported in expressions.
+- Comparison and arithmetic work with the usual numeric and string rules.
+- Membership checks are supported with `in` and `not in`.
+- Module-qualified access uses dot syntax after import, for example `math.sqrt` in an expression or `discord.Send;` with arguments.
+
+Exception-style control flow
+- Do:
+        ...
+    Catch as err:
+        ...
+    Otherwise:
+        ...
+    Lastly:
+        ...
+
+- `flag: <expression>` raises an error value that can be handled by `Catch`.
+- `Otherwise` runs only when `Do` completes without an error.
+- `Lastly` always runs.
+
+Loop forms
+- Repeat:
+    ...
+- Repeat 10:
+    ...
+- Repeat in items:
+    ...
+- Repeat item in items:
+    ...
+- Repeat until done:
+    ...
+- Repeat while condition:
+    ...
+
+Flow control
+- STOP
+- NEXT
+- RESET
+- break (alias of STOP)
+- continue (alias of NEXT)
+- restart (alias of RESET)
+
+Import forms
+- Get: math
+- Get: os as operatingSystem
+- Get: json -> Loads
+
+Import resolution
+- Imports are file-local to the current imported module file.
+- Use the names exported by the module you imported; if you want shorter names, import aliases explicitly.
+
+Built-in Functions
+------------------
+General
+- say; value and print; value -> write a line to stdout.
+- ask; type, prompt -> interactive input.
+- len; value -> length of string/list/dictionary.
+- typeOf; value -> runtime type name.
+- range; stop and range; start, stop, step -> list of integers.
+- slice; value, start?, end?, step? -> sliced list/string.
+- split; text, delimiter -> list of strings.
+- join; listValue, delimiter -> string.
+- upper; text
+- lower; text
+- trim; text
+- lstrip; text
+- rstrip; text
+- capitalize; text
+- title; text
+- swapcase; text
+- replace; text, from, to
+- index; container, value -> first index in list/string or -1.
+- copy; value -> cloned value.
+- clear; value -> empty string/list/dictionary.
+- keys; dictValue
+- values; dictValue
+- has_key; dictValue, key
+- items; dictValue -> list of [key, value] rows.
+- dict_get; dictValue, key, default?
+- dict_set; dictValue, key, value -> new dictionary.
+- dict_update; dictValue, updates -> merged dictionary.
+- dict_remove; dictValue, key -> new dictionary.
+- sort; listValue
+- reverse; listValue
+- sum; listValue, start?
+- min; listValue
+- max; listValue
+- any; listValue
+- all; listValue
+- count; container, value
+- append; listValue, value
+- extend; listValue, listValue
+- insert; listValue, index, value
+- pop; listValue, index? -> dictionary with item and list.
+- remove; listValue, value
+- enumerate; listValue, start?
+- zip; listA, listB
+- starts_with; text, prefix
+- ends_with; text, suffix
+- contains; container, item
+- is_missing; value -> TRUE for empty/empty string/empty list/empty dict.
+- default; value, fallback -> fallback when value is missing/empty.
+- coalesce; value1, value2, ... -> first non-missing value.
+- clamp; value, min, max -> numeric value constrained to range.
+- find; text, needle -> first index or -1.
+- int; value
+- int_or; value, fallback -> int conversion with fallback on conversion failure.
+- float; value
+- float_or; value, fallback -> float conversion with fallback on conversion failure.
+- bool; value
+- string; value
+- str; value (alias of string).
+- abs; number
+- inc; value, step? -> integer increment (default step = 1).
+- dec; value, step? -> integer decrement (default step = 1).
+- add_int; a, b -> integer addition.
+- sub_int; a, b -> integer subtraction.
+- mul_int; a, b -> integer multiplication.
+- div_int; a, b -> integer division (error if b = 0).
+- mod_int; a, b -> integer remainder (error if b = 0).
+- is_even; value -> TRUE if integer value is even.
+- is_odd; value -> TRUE if integer value is odd.
+- between_int; value, min, max -> inclusive integer range check.
+- assert; condition, message
+- assert_eq; left, right, message
+- process_exit; code
+
+Easy Int + Fallback Helpers
+---------------------------
+The functions below are designed for low-ceremony scripting where you want
+safe numeric behavior with minimal syntax.
+
+Missing-value checks
+- `is_missing(value)` returns TRUE for:
+  - `empty`
+  - `""`
+  - `[]`
+  - `{}`
+- Otherwise it returns FALSE.
+
+Fallback conversion helpers
+- `int_or(value, fallback)`:
+  - Tries `int(value)` first.
+  - If conversion fails, it returns `int(fallback)`.
+  - Useful when parsing environment/config input.
+- `float_or(value, fallback)` behaves the same for float conversion.
+
+Examples:
+
+def.var: retries
+    int
+    int_or;
+        os_getenv;
+            "INDENT_RETRIES"
+            ""
+        3
+
+def.var: timeoutSeconds
+    float
+    float_or;
+        os_getenv;
+            "INDENT_TIMEOUT"
+            ""
+        1.5
+
+Integer utility helpers
+- `inc(value)` increments by 1.
+- `inc(value, step)` increments by custom step.
+- `dec(value)` decrements by 1.
+- `dec(value, step)` decrements by custom step.
+
+- `add_int(a, b)`
+- `sub_int(a, b)`
+- `mul_int(a, b)`
+- `div_int(a, b)`
+- `mod_int(a, b)`
+
+These wrappers intentionally keep integer logic obvious for simple scripts,
+moderation counters, command quotas, and retry loops.
+
+Parity and range helpers
+- `is_even(value)` and `is_odd(value)` for direct parity checks.
+- `between_int(value, min, max)` checks inclusive bounds.
+- If `min > max`, bounds are auto-swapped.
+
+Examples:
+
+def.var: attempts
+    int
+    0
+
+attempts is inc;
+    attempts
+
+def.var: canRetry
+    boolean
+    between_int;
+        attempts
+        1
+        5
+
+def.var: isShardEven
+    boolean
+    is_even;
+        2
+
+Networking
+- http_get; url, authorization?
+- http_post_json; url, payload, authorization?
+- http_put_json; url, payload, authorization?
+- http_patch_json; url, payload, authorization?
+- http_delete; url, authorization?
+
+JSON
+- json_dumps; value
+- json_loads; text
+
+WebSocket
+- ws_connect; url
+- ws_send_text; socketId, text
+- ws_recv_text; socketId
+- ws_recv_text_timeout; socketId, timeoutSeconds
+- ws_close; socketId
+
+System
+- sys_version
+- sys_executable
+- sys_platform
+- sys_arch
+- sys_argv
+
+OS and Filesystem
+- os_getcwd
+- os_chdir; path
+- os_system; command
+- os_exists; path
+- os_is_file; path
+- os_is_dir; path
+- os_list_dir; path
+- os_mkdir; path
+- os_remove; path
+- os_rename; source, destination
+- os_getenv; key, default
+- os_setenv; key, value
+- os_environ
+- file_read_text; path
+- file_write_text; path, text
+- file_append_text; path, text
+
+Time
+- time_now
+- time_sleep; seconds
+- time_perf_counter
+
+Random
+- random_seed; seed
+- random_float
+- random_int; a, b
+- random_choice; listValue
+- random_shuffle; listValue
+
+Math
+- math_abs
+- math_sqrt
+- math_pow
+- math_floor
+- math_ceil
+- math_round
+- math_sin
+- math_cos
+- math_tan
+- math_asin
+- math_acos
+- math_atan
+- math_atan2
+- math_log
+- math_log10
+- math_exp
+
+Package Modules (Current)
+-------------------------
+- colors: color constants for demos and UI work.
+- sys: runtime metadata, process helpers, streams, argv, and executable details.
+- math: math constants and wrappers.
+- os: cwd/env/filesystem wrappers.
+- time: wall clock and sleep helpers.
+- random: seeded random utilities.
+- json: JSON encode/decode and file convenience.
+- agame: starter 2D game API.
+- discord: native Discord REST, session, and gateway helper API.
+- path: path and filesystem helper aliases.
+- http: HTTP wrapper utilities.
+- builtins: Len/TypeOf/Input/Assert aliases.
+- datetime: date/time wrappers built on time.
+
+AIR Package Manager
+-------------------
+AIR is the package manager for Indent modules and registry publishing.
+
+Commands
+- air init
+- air install [--local|--global] <name> [source]
+- air uninstall [--local|--global] <name>
+- air update [--local|--global] [name]
+- air search <query>
+- air list [--local|--global]
+- air index
+- air publish <name> <package-file> [description] [--no-push]
+- air registry show
+- air registry set <url-or-path>
+- air registry github <owner/repo> [ref] [index-path]
+- air registry reset
+
+Registry behavior
+- The current default registry is the GitHub registry at `rafih110610/indent-air` on `main`.
+- The default index path is `packages/index.txt` when using the GitHub registry helper.
+- `INDENTPKG_INDEX` can override the registry for a single command or from config.
+- AIR writes its config to `~/.config/indent/air.env`.
+- Known legacy registry URLs are migrated automatically to the current registry when possible.
+- `air registry github` can auto-detect whether the registry index lives at `packages/index.txt` or `index.txt`.
+- `air publish` clones the registry repo, copies the package file into the index path, updates the index entry, and pushes the commit unless `--no-push` is supplied.
+
+Current shipped modules
+- `packages/index.txt` is the source of truth for the shipped package list.
+- The registry currently includes colors, sys, math, os, time, random, json, agame, discord, path, http, builtins, and datetime.
+
+Quick Example
+-------------
+Get: sys
+Get: os
+Get: builtins
+
+say: "Indent version: " + sys.version
+say: "Current directory: " + os.GetCwd
+
+def.var: name
+    string
+    builtins.Input;
+        "Name: "
+
+say: "Hello " + name
+
+Current limits
+--------------
+- Indent has a practical runtime now, with active expansion of class model, async runtime, and framework depth.
+- The largest remaining gaps are class-model depth, async/await runtime breadth, and richer framework-level abstractions.

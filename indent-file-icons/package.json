@@ -1,0 +1,22 @@
+{
+  "name": "indent-icons",
+  "displayName": "Indent File Icons by Xytro Labs",
+  "description": "Professional SVG icons for .ind and .glo files",
+  "version": "1.0.0",
+  "publisher": "xytro-labs",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "contributes": {
+    "iconThemes": [
+      {
+        "id": "indent-seti-icons",
+        "label": "Indent Seti Icons",
+        "path": "./icons/indent-icon-theme.json"
+      }
+    ]
+  }
+}

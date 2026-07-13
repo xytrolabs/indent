@@ -1,0 +1,32 @@
+# Rust build artifacts
+indent-native/target/
+
+# Node / VS Code extension artifacts
+node_modules/
+*.vsix
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# IDE / OS files
+.idea/
+.DS_Store
+Thumbs.db
+
+# Deferred
+aether-release/
+Aether-Forge-IDE/
+indent-scrible/
+
+# Training data
+scripts/train-starcoder/
+
+# Watch / debug logs
+watch_*
+
+# Old/stale files from rebrand
+*.glo
+bot.py
+ath.txt
+puzzles/

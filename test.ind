@@ -1,0 +1,17 @@
+#! Aether-2 demo: ask for input
+say "Aether-2 Input Demo"
+
+var name string = ask "What is your name? "
+say "Hello " + name + "!"
+
+var age int = ask "How old are you? "
+say "You are " + age + " years old"
+
+if age >= 50
+    say "You are a senior"
+or age >= 18
+    say "You are an adult"
+or age >= 13
+    say "You are a teenager"
+otherwise
+    say "You are a child"
