@@ -28,5 +28,14 @@ watch_*
 *.png
 *.glo
 
+# Non-install scripts (keep out of public repo)
+scripts/aur-submit.sh
+scripts/new-angela.sh
+scripts/package-for-friend.sh
+scripts/package-linux-system-packages.sh
+scripts/publish.sh
+scripts/validate-registry.sh
+scripts/ci/
+
 # But keep the indent logo
 !indent.svg
