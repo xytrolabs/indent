@@ -6,25 +6,6 @@ Indent is a simple, readable, beginner-friendly programming language (v1.0.0). I
 
 **Pick your platform:**
 
-### 🐧 Debian / Ubuntu (apt)
-```bash
-curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install-pkg.sh | sudo bash
-```
-Then `sudo apt remove indent` to uninstall.
-
-### 🎩 Fedora / RHEL (dnf)
-```bash
-curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install-pkg.sh | sudo bash
-```
-The script auto-detects dnf/yum and installs the `.rpm`.
-
-### 🟣 Arch Linux (AUR)
-```bash
-yay -S indent
-# or:  paru -S indent
-# or:  git clone https://aur.archlinux.org/indent.git && cd indent && makepkg -si
-```
-
 ### 🍎 macOS (Homebrew)
 ```bash
 brew install xytrolabs/indent/indent
