@@ -1,4 +1,16 @@
-# Lesson 5 — Strings & Built-in Functions
+# Lesson 05 — Strings & Built-ins
+
+**Time**: 25 minutes  |  **Topics**: String operations, Type conversion, `range`, `enumerate`, `zip`, Math helpers
+
+---
+
+## 🎯 Learning Objectives
+- Manipulate strings: case, trim, split, join, search
+- Convert between types safely with `int_or`/`float_or`
+- Use `range`, `enumerate`, and `zip` for iteration
+- Apply math and utility helpers (`clamp`, `inc`, `abs`, etc.)
+
+---
 
 ## Strings
 

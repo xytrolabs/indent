@@ -230,3 +230,14 @@ Create a class hierarchy for shapes:
 - `Circle from Shape` with field `radius` (float), override `area()` → π × r²
 - `Rectangle from Shape` with fields `width` and `height` (float), override `area()` → w × h
 - Create one of each, print their names and areas
+
+---
+
+## 🎉 You've Completed the Indent Course!
+
+You now know everything you need to build real programs with Indent. Here's where to go next:
+
+- 📖 [The Complete Indent Guide](../INDENT_GUIDE.md) — Full language reference
+- ⚡ [Quick Reference](../quick-reference.md) — One-page cheat sheet
+- 📦 [Built-in Functions](../builtins-reference.md) — Every built-in, detailed
+- 🔧 Keep Indent current: `indent --update`

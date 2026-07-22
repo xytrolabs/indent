@@ -1,4 +1,17 @@
-# Lesson 2 — Functions & Branching
+# Lesson 02 — Functions & Types
+
+**Time**: 20 minutes  |  **Topics**: Functions, Parameters, Branching, Loops, Types, Conversion
+
+---
+
+## 🎯 Learning Objectives
+- Define functions with `fun` and return with `give`
+- Use inline and multi-line parameter styles
+- Branch with `if`/`or`/`otherwise`
+- Loop with `repeat`
+- Understand Indent's type system and conversions
+
+---
 
 ## Functions
 
@@ -144,4 +157,4 @@ var result int = double 21   # → 42
 
 ## Next Lesson
 
-➡️ [Lesson 3: Testing & Modules](03-testing.md)
+➡️ [Lesson 03: Control Flow](03-control-flow.md)

@@ -202,3 +202,8 @@ Write a function that takes `username` and `password` strings. Print:
 
 ### 🔥 Challenge: FizzBuzz
 Print numbers 1 to 20. For multiples of 3 print "Fizz", for multiples of 5 print "Buzz", for multiples of both print "FizzBuzz", otherwise print the number. Use `repeat` and `if`/`or`.
+
+---
+
+## 📖 Next Lesson
+→ [Lesson 04: Lists & Dictionaries](04-lists-and-dictionaries.md)

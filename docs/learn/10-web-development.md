@@ -228,3 +228,8 @@ Extend the blog project above to:
 
 ### 🔥 Challenge: Live Reload
 Build a script that regenerates your site every 5 seconds while the server is running. Use `repeat` with `time_sleep()` and re-run the build logic each iteration.
+
+---
+
+## 📖 Next Lesson
+→ [Lesson 11: Classes & Objects](11-classes.md)

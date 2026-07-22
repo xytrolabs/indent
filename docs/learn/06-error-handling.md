@@ -1,4 +1,17 @@
-# Lesson 6 — Error Handling
+# Lesson 06 — Error Handling
+
+**Time**: 25 minutes  |  **Topics**: do/catch/flag, Result type, Assertions, Error codes E001–E012
+
+---
+
+## 🎯 Learning Objectives
+- Handle errors with `do`/`catch`/`otherwise`/`lastly`
+- Raise your own errors with `flag`
+- Use assertions for debugging
+- Work with the Result type for explicit success/failure
+- Understand all 12 Indent error codes
+
+---
 
 Errors happen — files missing, network down, bad input. Indent gives you clean tools to handle them.
 
@@ -141,6 +154,25 @@ catch as err:
 | Division by zero | Check divisor before dividing |
 | Missing config | Use `default` or `coalesce` with fallbacks |
 | API error response | Check response status after HTTP call |
+
+### Error Codes Reference
+
+When Indent reports an error, it gives you a code to help diagnose:
+
+| Code | Meaning | Example |
+|---|---|---|
+| E001 | Type mismatch | Passing a string where an int is expected |
+| E002 | Undefined function | Calling a function that doesn't exist |
+| E003 | Import error | Module not found in search paths |
+| E004 | Syntax error | Missing quote, bad indentation, unexpected token |
+| E005 | Unwrap error | `.unwrap()` on an error value |
+| E006 | Undefined variable | Using a variable before declaring it with `var` |
+| E007 | Division by zero | `x / 0` or `x % 0` |
+| E008 | Index out of range | `list[99]` when list has 3 items |
+| E009 | Key not found | `dict["missing_key"]` |
+| E010 | File not found | Trying to read a file that doesn't exist |
+| E011 | Invalid JSON | Malformed JSON string in `json_loads` |
+| E012 | Network error | Connection refused, timeout, DNS failure |
 
 ---
 

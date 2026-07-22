@@ -1,4 +1,16 @@
-# Lesson 8 — Advanced Functions
+# Lesson 08 — Advanced Functions
+
+**Time**: 20 minutes  |  **Topics**: Parameter styles, Recursion, Function references, Named arguments, Composition
+
+---
+
+## 🎯 Learning Objectives
+- Use inline, multi-line, and parenthesized call styles
+- Write recursive functions
+- Pass functions as values (function references)
+- Compose small functions into pipelines
+
+---
 
 ## Two Parameter Styles
 

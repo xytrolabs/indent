@@ -1,4 +1,17 @@
-# Lesson 9 — Working with Data: JSON, HTTP, Time & Random
+# Lesson 09 — Data: JSON, HTTP, Time & Random
+
+**Time**: 30 minutes  |  **Topics**: JSON, HTTP requests, WebSocket, Time, Random numbers, Math
+
+---
+
+## 🎯 Learning Objectives
+- Parse and generate JSON
+- Make HTTP GET/POST/PUT/DELETE requests
+- Work with real-time WebSocket connections
+- Use timestamps, delays, and high-resolution timers
+- Generate random numbers and shuffle data
+
+---
 
 ## JSON
 
@@ -304,3 +317,8 @@ say "Took " + elapsed + " seconds"
 3. Write a dice-rolling simulator that uses `RandInt` and tracks statistics.
 4. Create a timer that counts down from N seconds, printing remaining time each second.
 5. Save a list of random passwords to a file in JSON format.
+
+---
+
+## 📖 Next Lesson
+→ [Lesson 10: Web Development](10-web-development.md)

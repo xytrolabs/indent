@@ -1,4 +1,17 @@
-# Lesson 4 — Lists & Dictionaries
+# Lesson 04 — Lists & Dictionaries
+
+**Time**: 25 minutes  |  **Topics**: Lists, Dictionaries, Slicing, Immutability, `any`/`all`
+
+---
+
+## 🎯 Learning Objectives
+- Create and manipulate lists and dictionaries
+- Access elements by index and key
+- Slice lists and use common operations
+- Understand immutability and use `is` for reassignment
+- Test collections with `any`, `all`, `contains`
+
+---
 
 ## Lists
 

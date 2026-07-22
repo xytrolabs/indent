@@ -1,4 +1,16 @@
-# Lesson 7 — File I/O & OS Operations
+# Lesson 07 — File I/O & OS
+
+**Time**: 20 minutes  |  **Topics**: File read/write, Directories, Environment variables, System commands
+
+---
+
+## 🎯 Learning Objectives
+- Read, write, and append files
+- Navigate the filesystem: list, create, delete, rename
+- Work with environment variables and paths
+- Run system commands from Indent
+
+---
 
 ## Reading and Writing Files
 
