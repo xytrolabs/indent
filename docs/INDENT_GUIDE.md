@@ -1,24 +1,6 @@
-# Indent — The Complete Language Reference
+# Your Journey with Indent
 
-> **Version**: 2.2.0  |  **Paradigm**: imperative, functional, object-oriented  |  **Typing**: static with dynamic escape hatch
-
----
-
-## Table of Contents
-1. [Getting Started](#1-getting-started)
-2. [Basic Syntax](#2-basic-syntax)
-3. [Variables & Types](#3-variables--types)
-4. [Functions](#4-functions)
-5. [Control Flow](#5-control-flow)
-6. [Loops](#6-loops)
-7. [Data Structures](#7-data-structures)
-8. [Imports & Modules](#8-imports--modules)
-9. [Error Handling](#9-error-handling)
-10. [Built-in Functions](#10-built-in-functions)
-11. [Expression Rules](#11-expression-rules)
-12. [Classes](#12-classes)
-13. [Standard Packages](#13-standard-packages)
-14. [Tooling](#14-tooling)
+> Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
 ---
 
@@ -26,109 +8,116 @@
 
 ### Installation
 
-| Platform | Command |
-|---|---|
-| Debian/Ubuntu | `curl -fsSL https://.../install-pkg.sh \| sudo bash` |
-| Fedora/RHEL | Same script — auto-detects dnf |
-| Arch | `yay -S indent` |
-| macOS | `brew install xytrolabs/indent/indent` |
-| Windows | `irm https://.../install.ps1 \| iex` |
-| Any Linux | `curl -fsSL https://.../install.sh \| bash` |
-
-### CLI Commands
-
 ```bash
-indent run file.ind       # Run script
-indent repl               # Interactive shell
-indent check file.ind     # Syntax check
-indent fmt file.ind       # Format code
-indent test path/         # Run tests
-indent new project-name   # Create project scaffold
-indent --debug file.ind   # Run with debugger
-indent lint file.ind      # Lint
+# Linux (any distro)
+curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.sh | bash
+
+# macOS
+brew install xytrolabs/indent/indent
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex
 ```
 
----
+### Your First Program
 
-## 2. Basic Syntax
+Create a file called `hello.ind`:
 
-### Comments
-```indent
-#! Single-line comment
-
-#!*
-Multi-line
-comment block
-#!*
-```
-
-> **CRITICAL**: `#` alone is a **hex color literal** (e.g., `#ff4d4d`), NOT a comment. Always use `#!`.
-
-### Output
 ```indent
 say "Hello, World!"
-say "Count: " + 42
-say upper("loud")
 ```
 
-### Input
-```indent
-var name string = ask("What is your name? ")
-var age int = ask("How old are you? ")
+Run it:
+
+```bash
+indent run hello.ind
+# → Hello, World!
 ```
+
+That's it. No `main` function, no semicolons, no boilerplate. Indent runs your code from top to bottom.
 
 ---
 
-## 3. Variables & Types
+## 2. Variables — Storing Information
 
-### Declaration
 ```indent
-var name string = "Ada"         # string
-var count int = 42               # int
-var price float = 3.14           # float
-var active boolean = true        # boolean
-var anything dynamic = [1, "hi"] # dynamic
-var nothing empty                # empty (null)
-var nums list = [1, 2, 3]       # list (typed list)
-var info dict = {"key": "val"}  # dict (typed dictionary)
+var name string = "Ada"
+var age int = 28
+var price float = 9.99
+var active boolean = true
+var anything dynamic = [1, "hello"]
+var nothing empty
 ```
 
-### Reassignment
+Indent has six main types: `string`, `int`, `float`, `boolean`, `dynamic`, and `empty`.
+
+Change a variable with `is`:
+
 ```indent
-count is 43
 name is "Grace"
+age is 29
 ```
 
 ### Type Rules
-| Type | Accepts |
-|---|---|
-| `string` | strings only |
-| `int` | integers only (not bool) |
-| `float` | int or float |
-| `boolean` | true/false |
-| `dynamic` | anything |
-| `empty` | only empty |
-| `list` | list values `[...]` |
-| `dict` | dictionary values `{...}` |
+
+| Type | Accepts | Example |
+|---|---|---|
+| `string` | Text only | `"Hello"` |
+| `int` | Whole numbers | `42` |
+| `float` | Decimal numbers | `3.14` |
+| `boolean` | `true` or `false` | `true` |
+| `dynamic` | Anything at all | `[1, "hi", true]` |
+| `empty` | Nothing (null) | `empty` |
+| `list` | Lists `[...]` | `[1, 2, 3]` |
+| `dict` | Dictionaries `{...}` | `{"key": "val"}` |
 
 ---
 
-## 4. Functions
+## 3. Printing & Input — Talking to Your User
 
-### Definition
+### Output
+
 ```indent
-# Inline params
+say "Hello"
+say "Your score: " + 42
+say upper("loud")        # "LOUD"
+```
+
+### Input
+
+```indent
+var name string = ask("What is your name? ")
+var age int = ask("int", "How old are you? ")
+```
+
+> Use `ask("int", ...)` or `ask("float", ...)` for numeric input. Plain `ask("...")` always returns a string.
+
+---
+
+## 4. Functions — Your Own Commands
+
+```indent
 fun greet person
     say "Hello " + person + "!"
 
-# Multi-line params
+greet("Ada")
+```
+
+Parameters go on the same line (inline) or each on their own line:
+
+```indent
 fun add
     a
     b
     give a + b
+
+var result int = add(10, 20)
 ```
 
-### Return
+### Returning Values
+
+Use `give` to return a value:
+
 ```indent
 fun max a b
     if a > b
@@ -137,37 +126,37 @@ fun max a b
         give b
 ```
 
-### Calling
-```indent
-greet("Ada")                   # ✅ Parens — works everywhere
-var result int = add(10, 20)   # ✅ In var declarations
-say max(5, 10)                 # ✅ In expressions
+### Calling Functions
 
-greet "Ada"                    # ✅ Space-separated, standalone only
+Parentheses work **everywhere** — prefer them:
+
+```indent
+greet("Ada")             # ✅ Works in all contexts
+var x int = add(10, 20)  # ✅ In assignments
+say max(5, 10)           # ✅ In expressions
 ```
 
-> **Rule**: `func(args)` works in ALL contexts. Prefer it.
+### Function References (v2.2+)
 
-### Function References (v2.2.0)
-Functions can be passed as values without being called:
+You can pass a function without calling it:
+
 ```indent
 fun handler x
     say "Got: " + x
 
 fun register fn
-    var name string = string(fn)
-    say "Registered: " + name
+    say "Registered: " + string(fn)
 
-register handler              # ✅ handler passed as reference, not called!
+register handler         # handler passed as value, not called!
 ```
-Previously bare function names were auto-called with zero arguments. Now they return a `Func` reference that can be converted to a string for `call_func`.
 
 ---
 
-## 5. Control Flow
+## 5. Making Decisions — `if`, `or`, `otherwise`
 
-### If / Or / Otherwise
 ```indent
+var age int = 20
+
 if age >= 18
     say "Adult"
 or age >= 13
@@ -176,18 +165,20 @@ otherwise
     say "Child"
 ```
 
-Indent uses `or` (not `elif`) and `otherwise` (not `else`).
+Indent uses `or` (instead of `elif`) and `otherwise` (instead of `else`).
 
-### Conditions with Functions
+Conditions can use functions directly:
+
 ```indent
-if starts_with(name, "A")     # ✅ Parens work
+if starts_with(name, "A")
     say "Starts with A"
 
-if len(items) > 0             # ✅ Operators work too
+if len(items) > 0
     say "Has items"
 ```
 
-### Match
+### Match — Multiple Values
+
 ```indent
 match color
     "red"
@@ -200,22 +191,32 @@ match color
 
 ---
 
-## 6. Loops
+## 6. Loops — Doing Things Repeatedly
 
-### Repeat N
+### Repeat N Times
+
 ```indent
 repeat 5
-    say "Iteration " + string(Reps + 1)
+    say "Hello!"        # prints 5 times
 ```
 
-### Repeat Over List
+Inside a loop, `Reps` gives you the current count (starting at 0):
+
+```indent
+repeat 5
+    say "Round " + string(Reps + 1)
+```
+
+### Repeat Over a List
+
 ```indent
 var colors dynamic = ["red", "green", "blue"]
 repeat color in colors
     say color
 ```
 
-### Repeat Until
+### Repeat Until a Condition
+
 ```indent
 var x int = 0
 repeat until x >= 10
@@ -223,189 +224,73 @@ repeat until x >= 10
 ```
 
 ### Loop Control
+
 | Keyword | Action |
 |---|---|
-| `stop` | Break out |
+| `stop` | Exit the loop |
 | `next` | Skip to next iteration |
-| `reset` | Restart from 0 |
-
-### Loop Variables
-- `Reps` — iteration counter (0-indexed)
-- `Item` — current item (or custom name)
+| `reset` | Restart from the beginning |
 
 ---
 
-## 7. Data Structures
+## 7. Lists & Dictionaries
 
-### Lists
+### Lists — Ordered Collections
 
-Lists hold ordered sequences of values. They are immutable — operations return **new** lists.
+Lists are **immutable** — operations return new lists:
 
 ```indent
-# Declaration
 var nums list = [1, 2, 3]
 var mixed dynamic = [1, "hello", true]
-var empty list = []
 
-# Access (zero-based, negative indexes count from end)
-var first int = nums[0]          # 1
-var last int = nums[-1]          # 3
+# Access (zero-based)
+var first int = nums[0]         # 1
+var last int = nums[-1]         # 3
 
-# Modification (creates new list)
-nums is nums + [4]               # [1, 2, 3, 4]
-nums is append(nums, 5)          # [1, 2, 3, 4, 5]
+# Add items (creates a new list)
+nums is nums + [4]              # [1, 2, 3, 4]
+nums is append(nums, 5)         # [1, 2, 3, 4, 5]
 
-# In-place element mutation
-nums[1] is 10                    # [1, 10, 3, 4, 5]
+# Modify in place
+nums[1] is 10                   # [1, 10, 3, 4, 5]
 
-# Slice assignment
-nums[1:3] is [7, 8]             # [1, 7, 8, 4, 5]
-
-# Slicing
-var slice dynamic = nums[2:4]    # [8, 4]
-var copy dynamic = nums[:]       # full copy
+# Slice
+var part dynamic = nums[1:3]    # [10, 3]
 
 # Common operations
-var size int = len(nums)         # 5
-var sorted dynamic = sort(nums)  # [1, 4, 5, 7, 8]
-var found boolean = contains(nums, 7)  # true
+var size int = len(nums)        # 5
+var sorted dynamic = sort(nums) # sorted copy
+var found boolean = contains(nums, 10)  # true
 ```
 
-### Dictionaries
+### Dictionaries — Key-Value Pairs
 
-Dictionaries store key-value pairs. They are also immutable — use `is` to reassign.
+Also immutable — reassign with `is`:
 
 ```indent
-# Declaration
 var person dict = {"name": "Ada", "age": 28}
-var empty dict = {}
 
-# Access (bracket or dot notation)
-var name string = person["name"]   # "Ada"
-say person.name                    # "Ada" — dot notation
+# Access
+say person["name"]              # "Ada"
+say person.name                 # "Ada" — dot notation works too!
 
-# In-place key mutation
+# Modify in place
 person["age"] is 29
 person.city is "Paris"
 
-# Add new keys
-var updated dynamic = dict_set(person, "country", "UK")
-
-# Nested modification: get → modify → reassign
-var inner dynamic = dict["key"]
-inner["sub"] is "value"
-dict["key"] is inner
-
-# Common operations
-var k dynamic = keys(person)       # ["age", "city", "name"]
-var has boolean = has_key(person, "name")  # true
-var size int = len(person)         # 3
-```
-
-### Common Ops
-| Op | Syntax |
-|---|---|
-| Length | `len(list)` |
-| Keys | `keys(dict)` |
-| Has key | `has_key(dict, key)` |
-| Contains | `contains(list, item)` |
-| Sort | `sort(list)` |
-| Slice | `slice(list, start, end)` |
-
----
-
-## 8. Imports & Modules
-
-```indent
-get math                        # Whole module
-get Pow from math               # Specific function
-get RandInt from random as R    # With alias
-```
-
-**Resolution order**: Same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
-
----
-
-## 9. Error Handling
-
-```indent
-do:
-    flag "Something broke"
-catch as err:
-    say "Error: " + err
-lastly:
-    say "Cleanup"
+# Check keys
+var has boolean = has_key(person, "name")   # true
+var k dynamic = keys(person)                # ["name", "age", "city"]
 ```
 
 ---
 
-## 10. Built-in Functions
+## 8. Classes — Your Own Types
 
-### I/O
-`say`, `ask(prompt)`, `ask(type, prompt)`
-
-### String
-`upper(s)`, `lower(s)`, `trim(s)`, `replace(text, from, to)`, `split(text, sep)`, `join(list, sep)`, `starts_with(s, prefix)`, `ends_with(s, suffix)`, `contains(s, sub)`, `slice(s, start, end)`, `len(s)`, `capitalize(s)`, `title(s)`
-
-### List/Dict
-`len(coll)`, `keys(dict)`, `values(dict)`, `sort(list)`, `reverse(list)`, `append(list, item)`, `contains(coll, item)`, `has_key(dict, key)`, `range(end)`, `range(start, end, step)`
-
-### JSON
-`json_loads(text)`, `json_dumps(value)`
-
-### HTTP
-`http_get(url)`, `http_post_json(url, body)`, `http_put_json(url, body)`, `http_patch_json(url, body)`, `http_delete(url)`, `http_serve_dir(path, port)`
-
-### File I/O
-`file_read_text(path)`, `file_write_text(path, text)`, `file_append_text(path, text)`
-
-### OS
-`os_getcwd()`, `os_exists(path)`, `os_list_dir(path)`, `os_mkdir(path)`, `os_remove(path)`, `os_system(cmd)`
-
-### Math
-`math_abs(n)`, `math_pow(base, exp)`, `math_sqrt(n)`, `math_floor(n)`, `math_ceil(n)`, `math_sin(n)`, `math_cos(n)`
-
-### Time
-`time_now()`, `time_sleep(ms)`
-
-### Conversion
-`int(v)`, `float(v)`, `string(v)`, `bool(v)`, `type_of(v)`
-
----
-
-## 11. Expression Rules
-
-| Context | `func(args)` | `func arg` |
-|---|---|---|
-| `say` | ✅ | ❌ |
-| `if` condition | ✅ | ❌ |
-| `x is` assignment | ✅ | ❌ |
-| `var x =` | ✅ | ✅ |
-| `give` | ✅ | ✅ |
-| Standalone | ✅ | ✅ |
-
-### Common Pitfalls
-```indent
-# ❌ Bare param in var — treated as function call
-fun bad text
-    var x string = text         # ERROR
-
-# ✅ Fix
-fun good text
-    var x string = string(text) # OK
-    var y string = "" + text    # OK
-```
-
-### Hex Colors
-`#ff4d4d`, `#3b82f6` — 3/4/6/8 hex digits. For comments use `#!`.
-
----
-
-## 12. Classes
-
-Indent classes bundle data and behavior together. Fields are **public by default** — accessible from anywhere without getters or setters.
+Classes bundle data and behavior together. Fields are **public by default** — no getters or setters needed.
 
 ### Defining a Class
+
 ```indent
 class Person
     var name string
@@ -420,69 +305,320 @@ class Person
 ```
 
 - `var` declarations become both **constructor parameters** and **instance fields**
-- `fun` declarations become **methods** scoped to the class
-- No `self`/`this` keyword — fields and methods are accessed directly by name
+- `fun` declarations become **methods**
+- No `self`/`this` keyword — access fields and methods directly by name
 
-### Instantiation
+### Creating Objects
+
 ```indent
 var ada dynamic = Person("Ada", 28)
 var bob dynamic = Person("Bob", 25)
 ```
 
-### Method Calls
+### Using Objects
+
 ```indent
 ada.greet()           # "Hello, I'm Ada, age 28"
 bob.birthday()        # "Happy birthday Bob!"
-```
-
-### Field Access
-```indent
 say ada.name          # "Ada"
 ada.age is 29         # Modify field
 ```
 
-### Class Design Rules
-| Rule | Details |
-|---|---|
-| Constructor | Matches positional args to `var` fields in order |
-| Methods | Use `fun` inside the class — same syntax as regular functions |
-| Fields | `var` declarations; become constructor params + instance fields |
-| No `self` | Fields and methods accessed by name directly |
-| Return | Methods use `give` to return values |
+### Inheritance
+
+```indent
+class Employee from Person
+    var role string
+
+    fun greet             # Override the parent's greet
+        say "I'm " + name + ", " + role
+
+var e dynamic = Employee("Bob", 35, "Engineer")
+e.greet()                # "I'm Bob, Engineer"
+```
 
 ---
 
-## 13. Standard Packages
+## 9. Error Handling — When Things Go Wrong
+
+### Do / Catch / Lastly
+
+```indent
+do:
+    flag "Something went wrong!"
+catch as err:
+    say "Error: " + err
+lastly:
+    say "This always runs"
+```
+
+- `do:` — the code that might fail
+- `catch as err:` — handles the error; `err` is the error message
+- `lastly:` — always runs, even if there was no error (like `finally`)
+
+### Raising Errors
+
+Use `flag` to raise an error from anywhere:
+
+```indent
+fun divide a b
+    if b == 0
+        flag "Cannot divide by zero"
+    give a / b
+```
+
+### Error Codes
+
+Indent gives you specific error codes to help diagnose problems:
+
+| Code | Meaning | Common Fix |
+|---|---|---|
+| `E001` | Type mismatch | Check what you're passing — use `type_of()` to inspect |
+| `E002` | Function not found | Check spelling; available: say, ask, len, range, int, string... |
+| `E003` | Import error | Module not found in search paths |
+| `E004` | Syntax error | Check indentation, missing quotes, or unexpected characters |
+| `E005` | Unwrap error | `.unwrap()` called on an error — handle the error first |
+| `E006` | Undefined variable | Did you forget `var`? Or is there a typo? |
+| `E007` | Division by zero | Guard with `if divisor != 0` before dividing |
+| `E008` | Index out of range | Check list length with `len()` before indexing |
+| `E009` | Key not found | Use `has_key(dict, key)` before accessing |
+| `E010` | File not found | Use `os_exists(path)` to verify the file exists |
+| `E011` | Invalid JSON | Check for missing quotes or commas in your JSON string |
+| `E012` | Network error | Check the URL and your connection |
+
+### Debugging
+
+Run with `--debug` to step through your code:
+
+```bash
+indent --debug myprogram.ind
+```
+
+Debugger commands:
+- `s` — step to the next line
+- `c` — continue to the end
+- `p expr` — print the value of an expression
+- `b 10` — set a breakpoint at line 10
+- `l` — show surrounding source code
+- `q` — quit the debugger
+
+---
+
+## 10. Modules — Organizing Your Code
+
+```indent
+get math                    # import math.ind from current directory
+get Pow from math           # import just one function
+get RandInt from random as R  # import with an alias
+```
+
+### Where Indent Looks for Modules
+
+1. Same directory as your script
+2. Parent directories (walking up)
+3. Directories in the `INDENT_PATH` environment variable
+4. `~/.local/share/indent/site-packages/`
+
+---
+
+## 11. Built-in Functions
+
+### String Operations
+`upper(s)` `lower(s)` `trim(s)` `replace(text, from, to)` `split(text, sep)` `join(list, sep)` `starts_with(s, prefix)` `ends_with(s, suffix)` `contains(s, sub)` `slice(s, start, end)` `capitalize(s)` `title(s)` `find(s, sub)` `index(s, sub)` `len(s)`
+
+### List & Dictionary
+`len(coll)` `keys(dict)` `values(dict)` `items(dict)` `has_key(dict, key)` `sort(list)` `reverse(list)` `append(list, item)` `extend(list1, list2)` `pop(list)` `insert(list, idx, item)` `remove(list, value)` `contains(coll, item)` `count(coll, item)` `sum(list)` `enumerate(list)` `zip(list1, list2)` `range(end)` `range(start, end)` `range(start, end, step)`
+
+### Conversion
+`int(v)` `float(v)` `string(v)` `bool(v)` `type_of(v)` `int_or(s, fallback)` `float_or(s, fallback)`
+
+### Math
+`abs(n)` `is_even(n)` `is_odd(n)` `clamp(v, min, max)` `math_pow(base, exp)` `math_sqrt(n)` `math_sin(n)` `math_cos(n)` `math_abs(n)` `math_floor(n)` `math_ceil(n)`
+
+### JSON
+`json_loads(text)` `json_dumps(value)`
+
+### Time
+`time_now()` `time_sleep(seconds)`
+
+### Random
+`random_int(min, max)` `random_choice(list)` `random_shuffle(list)` `random_float()`
+
+---
+
+## 12. Web & Network
+
+### HTTP Client
+
+```indent
+var data string = http_get("https://api.example.com/data")
+var resp string = http_post_json("https://api.example.com/submit", "{\"key\": \"val\"}")
+http_put_json(url, body)
+http_patch_json(url, body)
+http_delete(url)
+```
+
+### WebSocket Client
+
+```indent
+var id int = ws_connect("ws://localhost:8080")
+ws_send_text(id, "Hello server!")
+var msg string = ws_recv(id)
+```
+
+### HTTP Server
+
+Serve a directory of static files:
+
+```indent
+http_serve_dir("./public", 8080)
+say "Server running at http://localhost:8080"
+```
+
+---
+
+## 13. File I/O
+
+```indent
+# Read
+var text string = file_read_text("data.txt")
+
+# Write
+file_write_text("output.txt", "Hello, file!")
+
+# Append
+file_append_text("log.txt", "New entry\n")
+
+# Check
+if os_exists("data.txt")
+    say "File exists"
+
+# List directory
+var files dynamic = os_list_dir(".")
+
+# Other
+os_getcwd()
+os_mkdir("newfolder")
+os_remove("oldfile.txt")
+os_system("ls -la")
+```
+
+---
+
+## 14. Python Interop
+
+Call Python from Indent:
+
+```indent
+var result dynamic = python_eval("2 + 2")         # 4
+python_exec("print('Hello from Python!')")
+```
+
+Access Python modules:
+
+```indent
+var sys_version dynamic = py.sys.version
+var os_name dynamic = py.os.name
+```
+
+---
+
+## 15. GUI Applications
+
+Show HTML in a window:
+
+```indent
+gui_show_html("<h1>Hello!</h1><p>Rendered in a window.</p>")
+```
+
+---
+
+## 16. The Result Type
+
+Functions that can fail return a `Result`:
+
+```indent
+var r dynamic = ok("success")      # Create a success result
+var e dynamic = err("failed")      # Create an error result
+
+if is_ok(r)
+    say "Success: " + unwrap(r)    # Extract the value
+
+if is_err(e)
+    say "Error: " + error_message(e)
+```
+
+---
+
+## 17. Standard Packages
 
 | Package | Purpose |
 |---|---|
-| `html` | HTML templating, forms, pages |
+| `html` | HTML templating and forms |
 | `csv` | CSV parsing and generation |
 | `jsondb` | JSON file database |
-| `config` | INI config parsing |
+| `config` | INI config file parsing |
 | `json` | JSON encode/decode |
-| `http` | HTTP client |
+| `http` | HTTP client & server |
 | `math` | Math constants and functions |
 | `os` | OS and filesystem |
-| `time` | Time and sleep |
-| `random` | Random numbers |
+| `time` | Time utilities |
+| `random` | Random number generation |
 | `discord` | Discord bot framework |
 | `colors` | Named color constants |
 
 ---
 
-## 14. Tooling
+## 18. Tooling
 
-### Package Manager (air)
+### Package Manager
+
 ```bash
-air search color        # Search
-air install colors      # Install
-air list                # List installed
-air publish name file   # Publish
+air search colors          # Search for packages
+air install colors         # Install a package
+air list                   # List installed packages
+air publish name file      # Publish your package
 ```
 
 ### VS Code
+
 - **F5** — Run current file
 - **Syntax highlighting** — `indent-language` extension
 - **File icons** — `indent-file-icons` extension
-- **Snippets** — `fun`, `var`, `if`, `repeat` triggers
+- **Snippets** — Type `fun`, `var`, `if`, `repeat` for templates
+
+### Staying Current
+
+```bash
+indent --update              # Auto-update to the latest version
+```
+
+This pulls the latest code from GitHub, builds it, and replaces your current binary — no manual reinstall needed.
+
+### CLI Cheat Sheet
+
+```bash
+indent run file.ind          # Run a script
+indent repl                  # Interactive shell
+indent check file.ind        # Syntax check only
+indent fmt file.ind          # Auto-format code
+indent test path/            # Run tests
+indent new project-name      # Create project scaffold
+indent --debug file.ind      # Run with debugger
+indent lint file.ind         # Lint for issues
+indent --update              # Update to latest version
+```
+
+---
+
+## Golden Rules
+
+1. **`func(args)` works everywhere** — in `say`, `if`, assignments, nested calls. Prefer it.
+2. **`#!` for comments** — `#` alone is for hex colors like `#ff4d4d`
+3. **Lists and dicts are immutable** — use `is` + `+` to "change" them
+4. **Bare names in `var` are function calls** — use `string(param)` instead
+5. **Imports resolve** from same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
+
+---
+
+Next: [Quick Reference](quick-reference.md) · [Built-in Functions](builtins-reference.md) · [Classes Deep Dive](classes-design.md)

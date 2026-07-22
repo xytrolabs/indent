@@ -1,6 +1,6 @@
 [package]
 name = "indent-lsp"
-version = "1.0.0"
+version = "2.2.0"
 edition = "2021"
 description = "Language Server Protocol server for Indent — powered by Tower-LSP and indent-core"
 

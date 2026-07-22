@@ -123,9 +123,26 @@ lastly:
     say "cleanup"
 ```
 
+## Error Codes
+| Code | Meaning |
+|---|---|
+| E001 | Type mismatch |
+| E002 | Undefined function |
+| E003 | Import error |
+| E004 | Syntax error |
+| E005 | Unwrap on error |
+| E006 | Undefined variable |
+| E007 | Division by zero |
+| E008 | Index out of range |
+| E009 | Key not found in dict |
+| E010 | File not found |
+| E011 | Invalid JSON |
+| E012 | Network error |
+
 ## Golden Rules
 1. `func(args)` works **everywhere** — `say`, `if`, `is` assignments, nested. Prefer it.
 2. `#!` for comments, `#` is for hex colors only
 3. Lists/dicts are immutable — use `is` + `+` to accumulate
 4. Bare identifiers in `var` are treated as function calls — use `string(param)` instead
 5. Imports resolve: same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
+6. `indent --update` keeps you on the latest version — run it anytime!

@@ -290,7 +290,7 @@ impl fmt::Display for Value {
                 let joined = keys
                     .iter()
                     .map(|k| {
-                        let v = items.get(k).expect("key from map");
+                        let v = items.get(k).map_or(&Value::Empty, |v| v);
                         format!("\"{}\": {}", k, v)
                     })
                     .collect::<Vec<_>>()
@@ -303,7 +303,7 @@ impl fmt::Display for Value {
                 let joined = keys
                     .iter()
                     .map(|k| {
-                        let v = fields.get(*k).expect("key from map");
+                        let v = fields.get(*k).map_or(&Value::Empty, |v| v);
                         format!("{}: {}", k, v)
                     })
                     .collect::<Vec<_>>()
@@ -554,18 +554,30 @@ fn format_error_with_source(source: &str, err: &str) -> String {
     let line_no = extract_line_number(err);
     let lines: Vec<&str> = source.lines().collect();
 
-    // Determine error code
-    let code = if err.contains("expects") || err.contains("Cannot convert") || err.contains("Cannot add") {
+    // Determine error code — ordered from most specific to least
+    let code = if err.contains("division by zero") {
+        "E007" // division by zero
+    } else if err.contains("index out of range") || err.contains("index out of bounds") {
+        "E008" // index out of range
+    } else if err.contains("key not found") {
+        "E009" // key not found
+    } else if err.contains("file not found") || err.contains("no such file") || err.contains("Cannot open") {
+        "E010" // file not found
+    } else if err.contains("JSON") || err.contains("json") || err.contains("Invalid JSON") {
+        "E011" // JSON parse error
+    } else if err.contains("connection") || err.contains("network") || err.contains("timeout") || err.contains("refused") {
+        "E012" // network error
+    } else if err.contains("expects") || err.contains("Cannot convert") || err.contains("Cannot add") || err.contains("Cannot subtract") || err.contains("Cannot multiply") {
         "E001" // type mismatch
-    } else if err.contains("no function") || err.contains("has no function") {
+    } else if err.contains("no function") || err.contains("has no function") || err.contains("is not callable") {
         "E002" // undefined function
     } else if err.contains("import") || err.contains("Cannot import") || err.contains("Cannot load") {
         "E003" // import error
-    } else if err.contains("syntax") || err.contains("expected") || err.contains("unexpected") {
+    } else if err.contains("syntax") || err.contains("expected") || err.contains("unexpected") || err.contains("Unexpected indentation") {
         "E004" // syntax error
     } else if err.contains("unwrap") {
         "E005" // unwrap on err
-    } else if err.contains("variable") || err.contains("undefined") {
+    } else if err.contains("variable") || err.contains("undefined") || err.contains("not defined") {
         "E006" // undefined variable
     } else {
         "E000" // generic error
@@ -621,6 +633,24 @@ fn format_error_with_source(source: &str, err: &str) -> String {
     }
     if err.contains("not defined") || err.contains("Undefined") {
         out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m did you forget to declare this variable with 'var'? Or is there a typo?\n", arrow_style_empty()));
+    }
+    if err.contains("division by zero") {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check that the divisor is not zero before dividing. Use: if divisor != 0 then ...\n", arrow_style_empty()));
+    }
+    if err.contains("index out of range") {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m list indices start at 0. Use len() to check the list size before indexing.\n", arrow_style_empty()));
+    }
+    if err.contains("key not found") {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check if the key exists with has_key(dict, key) before accessing it.\n", arrow_style_empty()));
+    }
+    if err.contains("file not found") || err.contains("no such file") {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check the file path. Use os_exists(path) to verify a file exists before reading.\n", arrow_style_empty()));
+    }
+    if err.contains("JSON") || err.contains("json") {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check that your JSON string is valid. Use a JSON validator or check for missing quotes/commas.\n", arrow_style_empty()));
+    }
+    if err.contains("connection") || err.contains("refused") || err.contains("timeout") {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check the URL and your network connection. The server may be down or the address may be wrong.\n", arrow_style_empty()));
     }
 
     out
@@ -869,9 +899,13 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
         }
         Stmt::IfChain { branches, line } => {
             for (cond, body) in branches {
-                if cond.is_none() || eval_expr(cond.as_ref().unwrap(), ctx)
-                    .map_err(|e| format!("Line {}: {}", line, e))?.to_bool()
-                {
+                let is_true = match cond {
+                    None => true,  // otherwise branch
+                    Some(c) => eval_expr(c, ctx)
+                        .map_err(|e| format!("Line {}: {}", line, e))?
+                        .to_bool(),
+                };
+                if is_true {
                     return exec_block(body, ctx);
                 }
             }
@@ -7978,6 +8012,85 @@ fn parse_return_type(raw: &str) -> Option<String> {
     }
 }
 
+fn self_update() {
+    let repo_url = "https://github.com/xytrolabs/indent.git";
+    let tmp = std::env::temp_dir().join("indent-update");
+    
+    println!("⚡ Indent updater — fetching latest from GitHub...");
+    
+    // Clone or pull the repo
+    let git_result = if tmp.join(".git").exists() {
+        Command::new("git").args(&["-C", tmp.to_str().unwrap_or("/tmp/indent-update"), "pull", "--ff-only"])
+            .output()
+    } else {
+        let _ = std::fs::remove_dir_all(&tmp);
+        Command::new("git").args(&["clone", "--depth", "1", repo_url, tmp.to_str().unwrap_or("/tmp/indent-update")])
+            .output()
+    };
+    
+    match git_result {
+        Ok(out) if out.status.success() => {},
+        Ok(out) => {
+            eprintln!("Indent: git failed — {}\n{}", 
+                String::from_utf8_lossy(&out.stderr),
+                "Make sure git is installed and you have internet access.");
+            std::process::exit(1);
+        },
+        Err(e) => {
+            eprintln!("Indent: git not found — install git to use auto-update.\n  {}", e);
+            std::process::exit(1);
+        }
+    }
+    
+    println!("  ✓ Repository up to date");
+    println!("  Building with cargo...");
+    
+    let build = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(tmp.join("indent-native"))
+        .output();
+    
+    match build {
+        Ok(out) if out.status.success() => {},
+        Ok(out) => {
+            eprintln!("Indent: cargo build failed — {}\n{}",
+                String::from_utf8_lossy(&out.stderr),
+                "Make sure Rust is installed: https://rustup.rs");
+            std::process::exit(1);
+        },
+        Err(e) => {
+            eprintln!("Indent: cargo not found — install Rust: https://rustup.rs\n  {}", e);
+            std::process::exit(1);
+        }
+    }
+    
+    println!("  ✓ Build succeeded");
+    
+    // Copy the binary over the current one
+    let current = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("indent"));
+    let new_bin = tmp.join("indent-native/target/release/indent");
+    
+    if new_bin.exists() {
+        let backup = format!("{}.bak", current.display());
+        std::fs::copy(&current, &backup).ok();
+        
+        match std::fs::copy(&new_bin, &current) {
+            Ok(_) => {
+                println!("  ✓ Updated to the latest Indent!");
+                println!("  (Backup saved to {})", backup);
+            },
+            Err(e) => {
+                eprintln!("Indent: cannot replace binary — try running with sudo.\n  {}", e);
+                eprintln!("  New binary at: {}", new_bin.display());
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("Indent: built binary not found at {}", new_bin.display());
+        std::process::exit(1);
+    }
+}
+
 fn usage() {
     eprintln!("Usage:");
     eprintln!("  indent [--debug] [--break N[,M...]] <file.ind>");
@@ -7988,6 +8101,7 @@ fn usage() {
     eprintln!("  indent lint <file.ind>");
     eprintln!("  indent fmt [--check] <file.ind>");
     eprintln!("  indent new <project-name-or-path>");
+    eprintln!("  indent --update            Update to latest version");
     eprintln!("  indent --version");
 }
 
@@ -8521,6 +8635,11 @@ fn main() {
         return;
     }
 
+    if args[1] == "--update" || args[1] == "update" {
+        self_update();
+        return;
+    }
+
     if args[1] == "new" {
         if args.len() != 3 {
             usage();
@@ -8731,14 +8850,14 @@ fn main() {
 
     if debug {
         if let Err(err) = runtime.enable_debugger(&abs, breakpoints) {
-            eprintln!("Indent error: {err}");
+            let src = std::fs::read_to_string(&abs).unwrap_or_default();
+            eprintln!("{}", format_error_with_source(&src, &err));
             std::process::exit(1);
         }
     }
 
     match runtime.run_file(&abs) {
         Ok(()) => {
-            // Keep line fields considered used for linting in strict environments.
             for f in runtime.funcs.values() {
                 for s in &f.body {
                     touch_lines(s);
@@ -8750,7 +8869,8 @@ fn main() {
                 println!("Indent debug session ended.");
                 std::process::exit(0);
             }
-            eprintln!("Indent error: {err}");
+            let src = std::fs::read_to_string(&abs).unwrap_or_default();
+            eprintln!("{}", format_error_with_source(&src, &err));
             std::process::exit(1);
         }
     }

@@ -32,6 +32,12 @@ indent --version
 # → indent 0.1.2
 ```
 
+### Staying Current
+```bash
+indent --update    # Auto-update to the latest version
+```
+This pulls the latest code from GitHub, builds it, and replaces your current binary.
+
 ---
 
 ## 1. Hello World

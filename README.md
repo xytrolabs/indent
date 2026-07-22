@@ -65,6 +65,9 @@ indent repl
 # Check syntax
 indent check myfile.ind
 
+# Update to latest version
+indent --update
+
 # Create a new project
 indent new my-project
 ```
