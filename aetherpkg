@@ -1,0 +1,778 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_INDEX_DEFAULT="${SCRIPT_DIR}/packages/index.txt"
+INDEX_FALLBACK_URL="https://raw.githubusercontent.com/StratosLabs-Aether/air/main/packages/index.txt"
+INDEX_FALLBACK_URL_LEGACY="https://raw.githubusercontent.com/rafih110610/aether-air/master/index.txt"
+USER_AETHER_HOME="${HOME}/.local/share/aether"
+USER_SITE_PACKAGES="${USER_AETHER_HOME}/site-packages"
+USER_LOCKFILE="${USER_AETHER_HOME}/packages.lock"
+
+PACKAGES_DIR="aether_packages"
+LOCK_FILE="aether.lock"
+UPDATE_DEPENDENCIES="1"
+
+# ---- SemVer resolution using GitHub tags ----
+STATIC_SEMVER_REGISTRY="${AETHER_SEMVER_REGISTRY:-https://raw.githubusercontent.com/StratosLabs-Aether/air}"
+SEMVER_TAGS_CACHE=""
+
+# parse_package_spec "math@^1.2.0" → NAME_PART="math" VERSION_SPEC="^1.2.0"
+parse_package_spec() {
+  local raw="$1"
+  if [[ "$raw" == *@* ]]; then
+    NAME_PART="${raw%@*}"
+    VERSION_SPEC="${raw##*@}"
+  else
+    NAME_PART="$raw"
+    VERSION_SPEC=""
+  fi
+}
+
+# Compare two semver strings: > → 1, = → 0, < → -1
+semver_cmp() {
+  local v1="${1#v}"; v1="${v1#V}"
+  local v2="${2#v}"; v2="${v2#V}"
+  if [[ "$v1" == "$v2" ]]; then echo 0; return; fi
+  local IFS=.
+  local a=(${v1//-/ }) b=(${v2//-/ })
+  local i max
+  max=$((${#a[@]} > ${#b[@]} ? ${#a[@]} : ${#b[@]}))
+  for ((i=0; i<max; i++)); do
+    local av="${a[$i]:-0}" bv="${b[$i]:-0}"
+    av="${av%%[+-]*}"; bv="${bv%%[+-]*}"
+    if ((10#$av > 10#$bv)); then echo 1; return; fi
+    if ((10#$av < 10#$bv)); then echo -1; return; fi
+  done
+  echo 0
+}
+
+# Check if version matches caret spec: ^1.2.3 means >=1.2.3 <2.0.0
+semver_matches_caret() {
+  local version="$1" spec="$2"
+  spec="${spec#^}"
+  local -a s=(${spec//./ })
+  local cmp
+  cmp=$(semver_cmp "$version" "$spec")
+  if (( cmp < 0 )); then echo 0; return; fi
+  if (( 10#${s[0]} == 0 )); then
+    local next="0.$((10#${s[1]:-0} + 1)).0"
+    cmp=$(semver_cmp "$version" "$next")
+    if (( cmp < 0 )); then echo 1; return; fi
+    echo 0; return
+  fi
+  local next="$((10#${s[0]} + 1)).0.0"
+  cmp=$(semver_cmp "$version" "$next")
+  if (( cmp < 0 )); then echo 1; return; fi
+  echo 0
+}
+
+# Check if version matches tilde spec: ~1.2.3 means >=1.2.3 <1.3.0
+semver_matches_tilde() {
+  local version="$1" spec="$2"
+  spec="${spec#~}"
+  local -a s=(${spec//./ })
+  local cmp
+  cmp=$(semver_cmp "$version" "$spec")
+  if (( cmp < 0 )); then echo 0; return; fi
+  local next="${s[0]:-0}.$((10#${s[1]:-0} + 1)).0"
+  cmp=$(semver_cmp "$version" "$next")
+  if (( cmp < 0 )); then echo 1; return; fi
+  echo 0
+}
+
+# Fetch GitHub tags for the source repo, cached per session
+fetch_semver_tags() {
+  if [[ -n "$SEMVER_TAGS_CACHE" ]]; then
+    printf "%s" "$SEMVER_TAGS_CACHE"
+    return
+  fi
+  local api_url="https://api.github.com/repos/StratosLabs-Aether/air/tags?per_page=100"
+  local tags_json
+  tags_json="$(curl -fsSL --connect-timeout 5 --max-time 15 "$api_url" 2>/dev/null || true)"
+  if [[ -z "$tags_json" ]]; then
+    SEMVER_TAGS_CACHE=""
+    return 1
+  fi
+  SEMVER_TAGS_CACHE="$(printf '%s' "$tags_json" | python3 -c "
+import json, sys, re
+try:
+    data = json.load(sys.stdin)
+    for t in data:
+        name = t.get('name', '')
+        if re.match(r'^v?\d+\.\d+(\.\d+)?(-[\w.]+)?$', name):
+            print(name)
+except: pass
+" 2>/dev/null || true)"
+  printf "%s" "$SEMVER_TAGS_CACHE"
+}
+
+# Resolve a version spec to a semver tag (e.g. ^1.2 → v1.2.0)
+resolve_semver_tag() {
+  local spec="$1"
+  local tags
+  tags="$(fetch_semver_tags 2>/dev/null || true)"
+  if [[ -z "$tags" ]]; then
+    return 1
+  fi
+
+  # Exact version: 1.2.0 or v1.2.0
+  if [[ "$spec" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    local exact="${spec#v}"
+    local tag_v="v${exact}"
+    if printf '%s\n' "$tags" | grep -qxF "$tag_v"; then echo "$tag_v"; return; fi
+    if printf '%s\n' "$tags" | grep -qxF "$exact"; then echo "$exact"; return; fi
+  fi
+
+  # ^1.2.0 caret
+  if [[ "$spec" == ^* ]]; then
+    local best=""
+    while IFS= read -r tag; do
+      local version="${tag#v}"
+      if [[ $(semver_matches_caret "$version" "$spec") -eq 1 ]]; then
+        if [[ -z "$best" ]] || [[ $(semver_cmp "$version" "$best") -gt 0 ]]; then
+          best="$version"
+        fi
+      fi
+    done <<< "$tags"
+    if [[ -n "$best" ]]; then echo "v${best}"; return; fi
+  fi
+
+  # ~1.2.3 tilde
+  if [[ "$spec" == ~* ]]; then
+    local best=""
+    while IFS= read -r tag; do
+      local version="${tag#v}"
+      if [[ $(semver_matches_tilde "$version" "$spec") -eq 1 ]]; then
+        if [[ -z "$best" ]] || [[ $(semver_cmp "$version" "$best") -gt 0 ]]; then
+          best="$version"
+        fi
+      fi
+    done <<< "$tags"
+    if [[ -n "$best" ]]; then echo "v${best}"; return; fi
+  fi
+
+  # x-range: 1.x or 1.2.x
+  if [[ "$spec" =~ ^v?([0-9]+)\.x$ ]]; then
+    local major="${BASH_REMATCH[1]}"
+    local best=""
+    while IFS= read -r tag; do
+      local version="${tag#v}"
+      if [[ "$version" =~ ^${major}\. ]]; then
+        if [[ -z "$best" ]] || [[ $(semver_cmp "$version" "$best") -gt 0 ]]; then
+          best="$version"
+        fi
+      fi
+    done <<< "$tags"
+    if [[ -n "$best" ]]; then echo "v${best}"; return; fi
+  fi
+
+  return 1
+}
+
+# Build download URL for a package at a given version tag
+build_version_url() {
+  local name="$1" tag="$2"
+  printf "%s/%s/packages/%s.ath" "$STATIC_SEMVER_REGISTRY" "$tag" "$name"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  aetherpkg init
+  aetherpkg install [--local|--global] <name>[@version] [source]
+  aetherpkg add <name>[@version] [source]
+  aetherpkg uninstall [--local|--global] <name>
+  aetherpkg update [--local|--global] [name]
+  aetherpkg search <query>
+  aetherpkg index
+  aetherpkg list [--local|--global]
+
+Version syntax (uses GitHub tags on the source repo):
+  @1.2.0       exact version
+  @^1.0        caret: >=1.0.0 <2.0.0
+  @~1.2        tilde: >=1.2.0 <1.3.0
+  @2.x         any 2.x version
+
+Examples:
+  aetherpkg init
+  aetherpkg install --local colors ./packages/colors.ath
+  aetherpkg install colors              # auto: local if project, otherwise global
+  aetherpkg install --global colors
+  aetherpkg install math@2.5.0          # pin to exact version
+  aetherpkg install math@^2.0           # caret: latest 2.x
+  aetherpkg install math@~2.4           # tilde: latest 2.4.x
+  aetherpkg install web https://example.com/web.ath
+  aetherpkg search color
+  aetherpkg index
+  aetherpkg uninstall colors
+
+Env:
+  AETHERPKG_INDEX   Override index URL/path (defaults to Aether hosted index)
+  AETHERPKG_CONNECT_TIMEOUT  Seconds for connection timeout (default: 5)
+  AETHERPKG_MAX_TIME         Max seconds per HTTP fetch (default: 15)
+EOF
+}
+
+set_scope() {
+  local mode="$1"
+  case "$mode" in
+    local)
+      PACKAGES_DIR="aether_packages"
+      LOCK_FILE="aether.lock"
+      UPDATE_DEPENDENCIES="1"
+      ;;
+    global)
+      PACKAGES_DIR="$USER_SITE_PACKAGES"
+      LOCK_FILE="$USER_LOCKFILE"
+      UPDATE_DEPENDENCIES="0"
+      ;;
+    *)
+      echo "Invalid scope mode: $mode" >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_scope_mode() {
+  local requested="$1"
+  if [[ "$requested" == "local" || "$requested" == "global" ]]; then
+    printf "%s" "$requested"
+    return
+  fi
+  if [[ -f aether.toml ]]; then
+    printf "local"
+  else
+    printf "global"
+  fi
+}
+
+parse_scope_flag() {
+  local default_mode="$1"
+  shift
+
+  local mode="$default_mode"
+  if [[ $# -gt 0 ]]; then
+    case "$1" in
+      --local)
+        mode="local"
+        shift
+        ;;
+      --global)
+        mode="global"
+        shift
+        ;;
+    esac
+  fi
+
+  PARSED_SCOPE="$mode"
+  PARSED_ARGS=("$@")
+}
+
+ensure_scope_ready() {
+  if [[ "$UPDATE_DEPENDENCIES" == "1" ]]; then
+    if [[ ! -f aether.toml ]]; then
+      echo "Missing aether.toml for local install. Run: aetherpkg init" >&2
+      echo "Or install globally: aetherpkg install --global <name>" >&2
+      exit 1
+    fi
+  fi
+
+  mkdir -p "$PACKAGES_DIR"
+  if [[ ! -f "$LOCK_FILE" ]]; then
+    printf "lockfile_version=1\n" > "$LOCK_FILE"
+  fi
+}
+
+index_source() {
+  if [[ -n "${AETHERPKG_INDEX:-}" ]]; then
+    printf "%s" "$AETHERPKG_INDEX"
+    return
+  fi
+
+  if [[ -f "$LOCAL_INDEX_DEFAULT" ]]; then
+    printf "%s" "$LOCAL_INDEX_DEFAULT"
+    return
+  fi
+
+  printf "%s" "$INDEX_FALLBACK_URL"
+}
+
+resolve_index_to_file() {
+  local idx="$1"
+  local tmp
+  tmp="$(mktemp)"
+  local connect_timeout="${AETHERPKG_CONNECT_TIMEOUT:-5}"
+  local max_time="${AETHERPKG_MAX_TIME:-15}"
+
+  if [[ "$idx" =~ ^https?:// ]]; then
+    if ! curl -fsSL \
+      --connect-timeout "$connect_timeout" \
+      --max-time "$max_time" \
+      --retry 2 \
+      --retry-delay 1 \
+      "$idx" -o "$tmp"; then
+      # Try legacy fallback if primary index URL fails
+      if [[ -n "${INDEX_FALLBACK_URL_LEGACY:-}" && "$idx" != "$INDEX_FALLBACK_URL_LEGACY" ]]; then
+        rm -f "$tmp"
+        tmp="$(mktemp)"
+        if curl -fsSL \
+          --connect-timeout "$connect_timeout" \
+          --max-time "$max_time" \
+          --retry 2 \
+          --retry-delay 1 \
+          "$INDEX_FALLBACK_URL_LEGACY" -o "$tmp"; then
+          echo "Warning: using legacy registry; run 'air registry github StratosLabs-Aether/air' to upgrade" >&2
+          echo "$tmp"
+          return
+        fi
+      fi
+      rm -f "$tmp"
+      echo "Failed to fetch package index: $idx" >&2
+      echo "Tip: verify URL with 'air registry show' or increase timeout via AETHERPKG_MAX_TIME" >&2
+      exit 1
+    fi
+  else
+    if [[ ! -f "$idx" ]]; then
+      rm -f "$tmp"
+      echo "Package index file not found: $idx" >&2
+      exit 1
+    fi
+    cp "$idx" "$tmp"
+  fi
+
+  echo "$tmp"
+}
+
+RESOLVED_SOURCE=""
+RESOLVED_SHA256=""
+
+resolve_from_index() {
+  local name="$1"
+  local idx
+  idx="$(index_source)"
+
+  local idx_file
+  idx_file="$(resolve_index_to_file "$idx")"
+
+  local line
+  line="$(awk -F'|' -v pkg="$name" '
+    /^[[:space:]]*#/ { next }
+    NF >= 2 {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+      if ($1 == pkg) { print $0; exit }
+    }
+  ' "$idx_file")"
+
+  if [[ -z "$line" ]]; then
+    rm -f "$idx_file"
+    echo "Package '$name' not found in index: $idx" >&2
+    echo "Tip: set AETHERPKG_INDEX to your own index file or URL." >&2
+    exit 1
+  fi
+
+  local src
+  src="$(printf "%s" "$line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')"
+
+  # Extract SHA256 if present (new 4-field format: name|source|sha256|description)
+  RESOLVED_SHA256="$(printf "%s" "$line" | awk -F'|' 'NF >= 4 {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3); if ($3 ~ /^[a-f0-9]{64}$/) print $3; else print ""}')"
+
+  if [[ "$idx" =~ ^https?:// && ! "$src" =~ ^https?:// ]]; then
+    local base
+    base="${idx%/*}"
+    src="${src#./}"
+    src="${base}/${src}"
+  elif [[ ! "$idx" =~ ^https?:// && ! "$src" =~ ^https?:// && "$src" != /* ]]; then
+    local idx_dir
+    idx_dir="$(cd "$(dirname "$idx")" && pwd)"
+    src="${src#./}"
+    src="${idx_dir}/${src}"
+  fi
+
+  rm -f "$idx_file"
+  RESOLVED_SOURCE="$src"
+  printf "%s" "$src"
+}
+
+upsert_dependency() {
+  local name="$1"
+  local source="$2"
+
+  local tmp
+  tmp="$(mktemp)"
+
+  awk -v dep="$name" -v src="$source" '
+    BEGIN { in_deps=0; deps_seen=0; written=0 }
+    {
+      if ($0 ~ /^\[dependencies\][[:space:]]*$/) {
+        deps_seen=1
+        in_deps=1
+        print
+        next
+      }
+
+      if (in_deps && $0 ~ /^\[/) {
+        if (!written) {
+          printf "%s = \"%s\"\n", dep, src
+          written=1
+        }
+        in_deps=0
+      }
+
+      if (in_deps && $0 ~ "^[[:space:]]*" dep "[[:space:]]*=") {
+        if (!written) {
+          printf "%s = \"%s\"\n", dep, src
+          written=1
+        }
+        next
+      }
+
+      print
+    }
+    END {
+      if (!deps_seen) {
+        print ""
+        print "[dependencies]"
+      }
+      if (!written) {
+        printf "%s = \"%s\"\n", dep, src
+      }
+    }
+  ' aether.toml > "$tmp"
+
+  mv "$tmp" aether.toml
+}
+
+remove_dependency() {
+  local name="$1"
+  local tmp
+  tmp="$(mktemp)"
+
+  awk -v dep="$name" '
+    BEGIN { in_deps=0 }
+    {
+      if ($0 ~ /^\[dependencies\][[:space:]]*$/) {
+        in_deps=1
+        print
+        next
+      }
+      if (in_deps && $0 ~ /^\[/) {
+        in_deps=0
+      }
+      if (in_deps && $0 ~ "^[[:space:]]*" dep "[[:space:]]*=") {
+        next
+      }
+      print
+    }
+  ' aether.toml > "$tmp"
+
+  mv "$tmp" aether.toml
+}
+
+write_lock_entry() {
+  local name="$1"
+  local source="$2"
+  local checksum="$3"
+  local file="$4"
+
+  local tmp
+  tmp="$(mktemp)"
+
+  # Keep header and remove existing entry for this package name.
+  awk -F'|' -v pkg="$name" '
+    BEGIN { OFS="|" }
+    /^lockfile_version=/ { print; next }
+    NF == 0 { next }
+    $1 != pkg { print }
+  ' "$LOCK_FILE" > "$tmp"
+
+  printf "%s|%s|%s|%s\n" "$name" "$source" "$checksum" "$file" >> "$tmp"
+  mv "$tmp" "$LOCK_FILE"
+}
+
+remove_lock_entry() {
+  local name="$1"
+  local tmp
+  tmp="$(mktemp)"
+
+  awk -F'|' -v pkg="$name" '
+    /^lockfile_version=/ { print; next }
+    NF == 0 { next }
+    $1 != pkg { print }
+  ' "$LOCK_FILE" > "$tmp"
+
+  mv "$tmp" "$LOCK_FILE"
+}
+
+install_from_source() {
+  local name="$1"
+  local source="$2"
+
+  if [[ ! "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    echo "Invalid package name: $name" >&2
+    exit 1
+  fi
+
+  local target="${PACKAGES_DIR}/${name}.ath"
+  if [[ "$source" =~ ^https?:// ]]; then
+    curl -fsSL "$source" -o "$target"
+  else
+    if [[ ! -f "$source" ]]; then
+      echo "Source file not found: $source" >&2
+      exit 1
+    fi
+    cp "$source" "$target"
+  fi
+
+  local checksum
+  checksum="$(sha256sum "$target" | awk '{print $1}')"
+
+  # Verify against index SHA256 if available (package safety)
+  if [[ -n "${RESOLVED_SHA256:-}" ]]; then
+    if [[ "$checksum" != "$RESOLVED_SHA256" ]]; then
+      echo "❌ SAFETY CHECK FAILED: SHA256 mismatch for '$name'!" >&2
+      echo "   Expected: $RESOLVED_SHA256" >&2
+      echo "   Got:      $checksum" >&2
+      echo "   The package may have been tampered with or corrupted." >&2
+      rm -f "$target"
+      exit 1
+    fi
+    echo "✅ SHA256 verified: $checksum"
+  fi
+
+  write_lock_entry "$name" "$source" "$checksum" "$target"
+  if [[ "$UPDATE_DEPENDENCIES" == "1" ]]; then
+    upsert_dependency "$name" "$source"
+  fi
+
+  echo "Installed $name -> $target"
+  echo "Source: $source"
+  echo "Checksum: $checksum"
+}
+
+cmd_init() {
+  if [[ -f aether.toml ]]; then
+    echo "aether.toml already exists"
+  else
+    cat > aether.toml <<'EOF'
+name = "my-aether-project"
+version = "0.1.0"
+aether = ">=0.1.0"
+
+[dependencies]
+EOF
+    echo "Created aether.toml"
+  fi
+
+  if [[ -f aether.lock ]]; then
+    echo "aether.lock already exists"
+  else
+    printf "lockfile_version=1\n" > aether.lock
+    echo "Created aether.lock"
+  fi
+
+  mkdir -p aether_packages
+}
+
+cmd_install() {
+  parse_scope_flag "auto" "$@"
+  set -- "${PARSED_ARGS[@]}"
+
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
+    usage
+    exit 2
+  fi
+
+  local mode
+  mode="$(resolve_scope_mode "$PARSED_SCOPE")"
+  set_scope "$mode"
+  ensure_scope_ready
+
+  local raw_name="$1"
+
+  # Parse @version from package name, e.g. math@^1.2.0
+  parse_package_spec "$raw_name"
+  local name="$NAME_PART"
+  local ver="$VERSION_SPEC"
+
+  local source
+  if [[ $# -eq 2 ]]; then
+    source="$2"
+    RESOLVED_SHA256=""  # explicit source — no index SHA256 to verify
+  elif [[ -n "$ver" ]]; then
+    # Resolve SemVer spec → GitHub tag → download URL
+    RESOLVED_SHA256=""  # semver path uses Git tags for authenticity
+    local tag
+    tag="$(resolve_semver_tag "$ver" 2>/dev/null || true)"
+    if [[ -z "$tag" ]]; then
+      echo "Error: Could not resolve version '$ver' for package '$name'." >&2
+      echo "Try an exact version (1.2.0) or a range (^1.0, ~1.2)." >&2
+      exit 1
+    fi
+    source="$(build_version_url "$name" "$tag")"
+    echo "Resolved ${name}@${ver} → ${tag} → ${source}"
+  else
+    # Call directly (not in subshell) so RESOLVED_SHA256 propagates
+    resolve_from_index "$name" > /dev/null
+    source="$RESOLVED_SOURCE"
+  fi
+
+  install_from_source "$name" "$source"
+}
+
+cmd_uninstall() {
+  parse_scope_flag "auto" "$@"
+  set -- "${PARSED_ARGS[@]}"
+
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 2
+  fi
+
+  local mode
+  mode="$(resolve_scope_mode "$PARSED_SCOPE")"
+  set_scope "$mode"
+  ensure_scope_ready
+
+  local name="$1"
+  local target="${PACKAGES_DIR}/${name}.ath"
+  if [[ -f "$target" ]]; then
+    rm -f "$target"
+  fi
+
+  remove_lock_entry "$name"
+  if [[ "$UPDATE_DEPENDENCIES" == "1" ]]; then
+    remove_dependency "$name"
+  fi
+  echo "Uninstalled $name"
+}
+
+cmd_update() {
+  parse_scope_flag "auto" "$@"
+  set -- "${PARSED_ARGS[@]}"
+
+  local mode
+  mode="$(resolve_scope_mode "$PARSED_SCOPE")"
+  set_scope "$mode"
+  ensure_scope_ready
+
+  if [[ $# -eq 1 ]]; then
+    local name="$1"
+    local source
+    source="$(awk -F'|' -v pkg="$name" '$1==pkg {print $2; exit}' "$LOCK_FILE")"
+    if [[ -z "$source" ]]; then
+      echo "Package '$name' is not installed" >&2
+      exit 1
+    fi
+    install_from_source "$name" "$source"
+    return
+  fi
+
+  if [[ $# -ne 0 ]]; then
+    usage
+    exit 2
+  fi
+
+  local lines
+  lines="$(awk -F'|' 'NF==4 {print $1"|"$2}' "$LOCK_FILE")"
+  if [[ -z "$lines" ]]; then
+    echo "No installed packages to update"
+    return
+  fi
+
+  while IFS='|' read -r name source; do
+    [[ -z "$name" ]] && continue
+    install_from_source "$name" "$source"
+  done <<< "$lines"
+}
+
+cmd_search() {
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 2
+  fi
+
+  local query="$1"
+  local idx
+  idx="$(index_source)"
+  local idx_file
+  idx_file="$(resolve_index_to_file "$idx")"
+
+  local results
+  results="$(awk -F'|' -v q="$query" '
+    BEGIN { IGNORECASE=1 }
+    /^[[:space:]]*#/ { next }
+    NF >= 2 {
+      name=$1; src=$2; desc=""
+      if (NF >= 3) { desc=$3 }
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", src)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", desc)
+      line=tolower(name " " src " " desc)
+      if (index(line, tolower(q)) > 0) {
+        printf "%-18s %-45s %s\n", name, src, desc
+      }
+    }
+  ' "$idx_file")"
+
+  if [[ -n "$results" ]]; then
+    printf "%s\n" "$results"
+  else
+    echo "No packages found for query: $query"
+  fi
+
+  rm -f "$idx_file"
+}
+
+cmd_index() {
+  echo "Aether package index: $(index_source)"
+}
+
+cmd_list() {
+  parse_scope_flag "auto" "$@"
+  set -- "${PARSED_ARGS[@]}"
+  if [[ $# -ne 0 ]]; then
+    usage
+    exit 2
+  fi
+
+  local mode
+  mode="$(resolve_scope_mode "$PARSED_SCOPE")"
+  set_scope "$mode"
+
+  if [[ ! -f "$LOCK_FILE" ]]; then
+    echo "No lockfile found"
+    exit 0
+  fi
+  awk -F'|' '
+    /^lockfile_version=/ { next }
+    NF == 4 {
+      printf "%-20s %-50s %s\n", $1, $4, $3
+    }
+  ' "$LOCK_FILE"
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 2
+  fi
+
+  local cmd="$1"
+  shift
+
+  case "$cmd" in
+    init) cmd_init "$@" ;;
+    add) cmd_install "$@" ;;
+    install) cmd_install "$@" ;;
+    uninstall|remove|rm) cmd_uninstall "$@" ;;
+    update|upgrade) cmd_update "$@" ;;
+    search|find) cmd_search "$@" ;;
+    index) cmd_index ;;
+    list) cmd_list "$@" ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+main "$@"

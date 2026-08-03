@@ -148,7 +148,7 @@ else
     green "✓ Built and installed indent from source"
 
     # Copy companion tools from the cloned repo
-    for tool in air indentpkg; do
+    for tool in air aetherpkg; do
       if [[ -f "$BUILD_DIR/${tool}" ]]; then
         cp "$BUILD_DIR/${tool}" "${BIN_DIR}/${tool}"
         chmod +x "${BIN_DIR}/${tool}"
@@ -177,7 +177,7 @@ TOOLEOF
   green "✓ Downloaded indent"
 
   # Install companion tools from the same release
-  for tool in air indentpkg; do
+  for tool in air aetherpkg; do
     TOOL_SRC="$(find "$TMP_DIR" -type f -name "$tool" | head -n1 || true)"
     if [[ -n "$TOOL_SRC" ]]; then
       cp "$TOOL_SRC" "${BIN_DIR}/${tool}"
@@ -246,12 +246,11 @@ LAUNCHEREOF
 chmod +x "$LAUNCHER"
 green "✓ Created launcher: $LAUNCHER"
 
-# ---- auto-configure registry for air/indentpkg ----
+# ---- auto-configure registry for air/aetherpkg ----
 CONFIG_DIR="${HOME}/.config/indent"
 mkdir -p "$CONFIG_DIR"
 cat > "${CONFIG_DIR}/air.env" <<CFGEOF
-INDENTPKG_INDEX=https://raw.githubusercontent.com/xytrolabs/indent/main/packages/index.txt
-AIR_REGISTRY_REPO=xytrolabs/indent
+AIR_REGISTRY_REPO=xytrolabs/air
 AIR_REGISTRY_REF=main
 AIR_REGISTRY_INDEX_PATH=packages/index.txt
 CFGEOF

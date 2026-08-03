@@ -104,7 +104,7 @@ if [[ -d "${PROJECT_DIR}/packages" ]]; then
 fi
 
 # ---- install companion scripts ----
-for tool in air indentpkg; do
+for tool in air aetherpkg; do
   if [[ -f "${PROJECT_DIR}/${tool}" ]]; then
     cp "${PROJECT_DIR}/${tool}" "${BIN_DIR}/${tool}"
     chmod +x "${BIN_DIR}/${tool}"
