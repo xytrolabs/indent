@@ -6,14 +6,12 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $env:USERPROFILE ".config\indent"
 $ConfigFile = Join-Path $ConfigDir "air.json"
-$DefaultRegistryRepo = "XytroLabs-Indent/air"
-$DefaultRegistryRef = "master"
-$DefaultRegistryIndexPath = "index.txt"
+$DefaultRegistryRepo = "xytrolabs/air"
+$DefaultRegistryRef = "main"
+$DefaultRegistryIndexPath = "packages/index.txt"
 $DefaultRegistryUrl = "https://raw.githubusercontent.com/$DefaultRegistryRepo/$DefaultRegistryRef/$DefaultRegistryIndexPath"
 $LegacyRegistryUrls = @(
-    "https://raw.githubusercontent.com/indent-lang/packages/main/index.txt",
-    "https://raw.githubusercontent.com/XytroLabs-Indent/air/main/packages/index.txt",
-    "https://raw.githubusercontent.com/XytroLabs-Indent/air/main/packages/index.txt",
+    "https://raw.githubusercontent.com/xytrolabs/indent/main/aether-release/packages/index.txt"
     "https://raw.githubusercontent.com/xytro-labs/Indent.ind/main/packages/index.txt"
 )
 
