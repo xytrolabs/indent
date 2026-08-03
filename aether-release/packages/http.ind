@@ -1,0 +1,63 @@
+#! http.ath
+#! HTTP client module for Aether
+
+Get: json
+
+def.fun: Get(url:string, authorization:string) -> dynamic
+    def.var: result
+        dynamic
+        http_get;
+            url
+            authorization
+    Give: result
+
+def.fun: Delete(url:string, authorization:string) -> dynamic
+    def.var: result
+        dynamic
+        http_delete;
+            url
+            authorization
+    Give: result
+
+def.fun: PostJson(url:string, payload:dynamic, authorization:string) -> dynamic
+    def.var: result
+        dynamic
+        http_post_json;
+            url
+            payload
+            authorization
+    Give: result
+
+def.fun: PutJson(url:string, payload:dynamic, authorization:string) -> dynamic
+    def.var: result
+        dynamic
+        http_put_json;
+            url
+            payload
+            authorization
+    Give: result
+
+def.fun: PatchJson(url:string, payload:dynamic, authorization:string) -> dynamic
+    def.var: result
+        dynamic
+        http_patch_json;
+            url
+            payload
+            authorization
+    Give: result
+
+def.fun: IsOk(response:dynamic) -> boolean
+    Give: response["ok"]
+
+def.fun: StatusCode(response:dynamic) -> int
+    Give: response["status"]
+
+def.fun: Text(response:dynamic) -> string
+    Give: response["body"]
+
+def.fun: Json(response:dynamic) -> dynamic
+    def.var: payload
+        dynamic
+        json.Loads;
+            response["body"]
+    Give: payload

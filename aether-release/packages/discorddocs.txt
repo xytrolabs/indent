@@ -1,0 +1,695 @@
+discord.ind - Indent Discord Module Docs
+========================================
+
+Overview
+--------
+discord.ind gives you a native Discord API surface for Indent scripts.
+It currently supports:
+- Bot token auth and session checks
+- A persistent gateway runner for staying online
+- Prefix command registration and automatic MESSAGE_CREATE handling
+- Channel message send/edit/delete
+- Button/component message builders and send helpers
+- DM send flow
+- Reactions and typing
+- Slash command registration and interaction replies
+- Gateway websocket connect/identify/recv/heartbeat/close helpers
+- Gateway polling with timeout, reconnect backoff, and ready-state tracking
+- Event packet parsing helpers
+- Extended REST helpers for guild/member/role/channel moderation and command management
+- Thread, emoji, invite, and scheduled-event helpers
+- Interaction deferral/original response edit/delete helpers
+
+Important implementation note
+-----------------------------
+discord.ind is a script-oriented native toolkit.
+It covers practical bot operations while keeping loop scheduling and reconnect
+policy explicit in your script. Use `Run`/`Start` (or `RunActive`) to keep a
+live gateway connection open after setup; `UseToken` only stores the active
+session and does not block by itself.
+
+For the most ergonomic setup, prefer `UseToken` + `Add*CommandActive` +
+`RunSimpleActive`. That path is intentionally minimal and keeps command
+registration plus runtime dispatch in one straightforward flow.
+
+The current command/gateway design is a clean-room Indent implementation
+inspired by discord.py architecture (Client/Bot setup, intents resolution,
+dispatch-style message processing, and reconnect behavior). Imported module
+helpers now compose reliably inside `discord.ind`, so the simplified helper
+paths below are safe to use in normal scripts.
+
+Quick start
+-----------
+Simplest flow (set token once, then use natural commands):
+
+Get: UseToken From: discord
+Get: Send From: discord
+Get: IsSuccess From: discord
+Get: StatusCode From: discord
+Get: BodyText From: discord
+
+UseToken;
+	"YOUR_BOT_TOKEN"
+
+def.var: sent
+	dynamic
+	Send;
+		"YOUR_CHANNEL_ID"
+		"Hello from Indent"
+
+say: "ok? " + IsSuccess(sent)
+say: "status: " + StatusCode(sent)
+say: BodyText(sent)
+
+If you want the bot to stay online, start a gateway session after setup:
+
+Get: RunActive From: discord
+
+UseToken;
+	"YOUR_BOT_TOKEN"
+RunActive
+
+Very simple, very functional bot mode (recommended)
+---------------------------------------------------
+Use this when you want minimal syntax, command args, and action commands
+without ceremony.
+
+Newest easy-mode helpers (lowest ceremony)
+- `QuickBot(token, prefix)` to create + activate a bot in one call.
+- `QuickBotWithStatus(token, prefix, status, watching)` to create, activate,
+  and set normalized presence immediately.
+- `UseEnvToken(envName, fallback)` to bootstrap token from env with fallback.
+- `SetupSimpleActive(...)` and `SetupSimpleActiveWithModeration(...)` to
+	configure active session + commands in one call.
+- `AddReply`/`AddReplyActive` as friendlier aliases for text commands.
+- `AddReplies`/`AddRepliesActive` to register many text commands in one call.
+- `ActionCreateTextChannel`, `ActionDeleteChannel`, `ActionBanMember`,
+  `ActionApiPost` to build action payloads without manual dictionaries.
+- `AddModerationPackActive(guildId)` to preload `mkchan`, `rmchan`, and `ban`.
+- `Say`, `SayEmbed`, `SayButtons`, `DMUser`, `React`, `Unreact`, `Typing`,
+	`FetchChannelActive`, and `FetchMessageActive` for active-session convenience.
+
+Example:
+
+Get: QuickBotWithStatus From: discord
+Get: SetupSimpleActiveWithModeration From: discord
+Get: AddRepliesActive From: discord
+Get: RunSimpleActive From: discord
+
+QuickBotWithStatus;
+	"YOUR_BOT_TOKEN"
+	"!"
+	"online"
+	"mod queue"
+
+SetupSimpleActiveWithModeration;
+	"YOUR_BOT_TOKEN"
+	"!"
+	"online"
+	"mod queue"
+	[{"name": "ping", "response": "pong"}, {"name": "kick", "response": "kick; {0}"}]
+	"YOUR_GUILD_ID"
+
+RunSimpleActive
+
+Ready-to-run example script: `examples/angela_simple.ind`
+Moderation puzzle example script: `examples/angela_mod_puzzle.ind`
+
+Get: UseToken From: discord
+Get: AddTextCommandActive From: discord
+Get: AddActionCommandActive From: discord
+Get: SetStatusActive From: discord
+Get: SetWatchingActivityActive From: discord
+Get: RunSimpleActive From: discord
+
+UseToken;
+	"YOUR_BOT_TOKEN"
+
+SetStatusActive;
+	"online"
+
+SetWatchingActivityActive;
+	"mod puzzles"
+
+AddTextCommandActive;
+	"ping"
+	"pong"
+
+AddTextCommandActive;
+	"kick"
+	"kick; {0}"
+
+AddActionCommandActive;
+	"mkchan"
+	{"type": "create_text_channel", "guild_id": "YOUR_GUILD_ID", "topic": "Created by Indent command", "ack": "Creating channel..."}
+
+RunSimpleActive
+
+Startup troubleshooting for Angela/simple bots
+---------------------------------------------
+- If token is still `YOUR_BOT_TOKEN`, `RunActive`/`RunSimpleActive` now fail fast with a clear flag message.
+- If Discord returns 401 on gateway startup, confirm bot token is valid and bot is invited to your server.
+- If bot connects but command replies do not fire, ensure Message Content intent is enabled in Discord Developer Portal.
+- Use `SetStatusActive` and one of the `Set*ActivityActive` helpers before `RunSimpleActive`.
+
+Buttons/components quick example
+--------------------------------
+Get: BuildButton From: discord
+Get: SendButtons From: discord
+
+def.var: approveButton
+	dynamic
+	BuildButton;
+		"approve_case"
+		"Approve"
+		1
+
+def.var: denyButton
+	dynamic
+	BuildButton;
+		"deny_case"
+		"Deny"
+		4
+
+SendButtons;
+	"YOUR_CHANNEL_ID"
+	"Choose moderation outcome:"
+	[approveButton, denyButton]
+
+Minimal runnable bot loop (register one command, then run):
+
+Get: CreateBot From: discord
+Get: WithToken From: discord
+Get: AddTextCommand From: discord
+Get: Run From: discord
+
+def.var: bot
+	dynamic
+	CreateBot;
+		"!"
+		{"guilds": TRUE, "guild_messages": TRUE, "direct_messages": TRUE, "message_content": TRUE, "guild_members": TRUE, "guild_presences": TRUE, "typing": TRUE, "reactions": TRUE}
+
+def.var: authed
+	dynamic
+	WithToken;
+		bot
+		"YOUR_BOT_TOKEN"
+
+def.var: ready
+	dynamic
+	AddTextCommand;
+		authed
+		"ping"
+		"pong"
+
+Run;
+	ready
+
+Text command arguments (simple placeholders)
+-------------------------------------------
+`AddTextCommand` also supports message arguments using `{0}`, `{1}`, ...
+placeholders in the response string.
+
+Example:
+
+def.var: withKickText
+	dynamic
+	AddTextCommand;
+		ready
+		"kick"
+		"kick; {0}"
+
+Then in Discord:
+- `!kick user123` returns `kick; user123`
+
+Action commands (same simple style, but with complex behavior)
+--------------------------------------------------------------
+Use AddActionCommand when you want the same command declaration pattern,
+but the output is an operation instead of plain text.
+
+Get: AddActionCommand From: discord
+
+def.var: withAction
+	dynamic
+	AddActionCommand;
+		ready
+		"mkchan"
+		{"type": "create_text_channel", "guild_id": "YOUR_GUILD_ID", "topic": "Created by Indent command", "ack": "Creating channel..."}
+
+Run;
+	withAction
+
+Then in Discord:
+- `!mkchan raids` creates a new text channel named `raids`
+
+Supported built-in action types:
+- `create_text_channel`
+- `delete_channel`
+- `create_role`
+- `ban_member`
+- `api_post` (generic REST escape hatch)
+
+Action values can use either fixed fields in the action object or command
+arguments from the message content.
+
+Persistent live session pattern
+-------------------------------
+`UseToken` prepares the active session object.
+`RunActive` keeps the bot online by opening the gateway, identifying, and
+continuing to heartbeat on the gateway loop.
+
+`RunSimpleActive` is the streamlined runner that keeps this same behavior but
+executes command parsing/dispatch in one place for the active-session command
+APIs (`AddTextCommandActive` / `AddActionCommandActive`).
+
+Use this when you want the Indent script to keep a long-lived live session.
+
+Structured flow (keep a bot/session object):
+
+Get: Login From: discord
+Get: WithToken From: discord
+Get: CreateBot From: discord
+Get: IntentsMessageContentValue From: discord
+Get: SendMessage From: discord
+Get: IsSuccess From: discord
+Get: StatusCode From: discord
+Get: BodyText From: discord
+
+def.var: bot
+	dynamic
+	CreateBot;
+		"!"
+		33281
+
+def.var: authed
+	dynamic
+	WithToken;
+		bot
+		"YOUR_BOT_TOKEN"
+
+def.var: sent
+	dynamic
+	SendMessage;
+		authed
+		"YOUR_CHANNEL_ID"
+		"Hello from Indent"
+
+def.var: sentOk
+	dynamic
+	IsSuccess;
+		sent
+
+def.var: sentStatus
+	dynamic
+	StatusCode;
+		sent
+
+def.var: sentBody
+	dynamic
+	BodyText;
+		sent
+
+say: "ok? " + sentOk
+say: "status: " + sentStatus
+say: sentBody
+
+Why `def.var` and `dynamic` exist
+---------------------------------
+- `def.var` is the variable declaration statement in Indent. It does define the variable.
+- `dynamic` means "let this value be any runtime type" (dictionary/list/string/etc).
+- In Discord helpers, many returns are JSON-like dictionaries, so `dynamic` is the natural type.
+- `UseToken` gives you the session-based flow; `Send`, `SendEmbed`, and `DM` reuse that session, while `SendWith`, `SendEmbedWith`, and `DMWith` accept explicit token/bot values.
+
+Publishing fix: why your publish failed
+----------------------------------------
+Your AIR registry was set to branch master, but the registry repo now uses main.
+
+Use:
+air registry github rafih110610/indent-air main index.txt
+air registry show
+air publish discord packages/discord.ind "Native Discord bot and gateway helper API"
+
+Core API reference
+------------------
+Auth and base
+- CreateBot; prefix, intents
+- CreateSimpleBot; token, prefix
+- QuickBot; token, prefix
+- QuickBotWithStatus; token, prefix, status, watching
+- UseEnvToken; envName, fallback
+- SetupSimpleActive; token, prefix, status, watching, replies
+- SetupSimpleActiveWithModeration; token, prefix, status, watching, replies, guildId
+- WithToken; bot, token
+- WithStatus; bot, status
+- WithActivity; bot, name, activityType
+- WithWatchingActivity; bot, name
+- Login; token
+- GetMe; bot
+- Client; token
+- Bot; token
+- UseToken; token
+- UseBot; bot
+- Run; bot
+- Start; bot
+- Session
+- IsSessionReady
+- ClearSession
+- Verify; token
+- PresenceActive
+- SetPresenceActive; status, activities, afk
+- SetStatusActive; status
+- SetActivityActive; name, activityType
+- SetPlayingActivityActive; name
+- SetStreamingActivityActive; name, url
+- SetListeningActivityActive; name
+- SetWatchingActivityActive; name
+- SetCompetingActivityActive; name
+- ClearActivityActive
+- ApplyPresenceActive; socketId
+
+Live gateway runner
+- RunActive
+- RunSimpleActive
+- OpenGatewaySession; bot
+
+Intents
+- IntentsDefault                        -> dict of booleans
+- IntentsAll                            -> dict of booleans
+- IntentsDefaultValue                   -> 513
+- IntentsMessageContentValue           -> 33281
+- IntentsFlags                          -> canonical flag -> bit map
+- ResolveIntentsValue; intents         -> int bitfield
+- UseBot; bot                          -> activates the current session object
+
+Command helpers
+- AddTextCommand; bot, name, response
+- AddReply; bot, name, response
+- AddReplies; bot, replies
+- AddTextCommandActive; name, response
+- AddReplyActive; name, response
+- AddRepliesActive; replies
+- AddTextCommand response supports `{0}`, `{1}`, ... placeholders from command args
+- AddActionCommand; bot, name, action
+- AddActionCommandActive; name, action
+- ActionCreateTextChannel; guildId, topic, ack
+- ActionDeleteChannel; ack
+- ActionBanMember; guildId, deleteMessageSeconds, ack
+- ActionApiPost; route, payload, ack
+- AddModerationPackActive; guildId
+- ClearCommands; bot
+- ResolveCommand; bot, content
+- ProcessMessageCreate; bot, payload
+- ExecuteCommandAction; bot, commandAction
+
+Messaging
+- SendMessage; bot, channelId, content
+- SendRichMessage; bot, channelId, payload
+- SendEmbedMessage; bot, channelId, embed
+- SendComponentsMessage; bot, channelId, content, components
+- SendButtonsMessage; bot, channelId, content, buttons
+- EditMessage; bot, channelId, messageId, content
+- DeleteMessage; bot, channelId, messageId
+- GetMessage; bot, channelId, messageId
+- TriggerTyping; bot, channelId
+- Say; channelId, content
+- SayEmbed; channelId, title, description, color
+- SayButtons; channelId, content, buttons
+- Typing; channelId
+- FetchChannelActive; channelId
+- FetchMessageActive; channelId, messageId
+
+DM
+- CreateDM; bot, userId
+- SendDM; bot, userId, content
+- DMUser; userId, content
+
+Guild and channel lookup
+- GetGuild; bot, guildId
+- GetChannel; bot, channelId
+
+Reactions
+- AddReaction; bot, channelId, messageId, emoji
+- RemoveOwnReaction; bot, channelId, messageId, emoji
+- React; channelId, messageId, emoji
+- Unreact; channelId, messageId, emoji
+
+Slash commands and interactions
+- RegisterGlobalSlashCommand; bot, appId, name, description
+- ReplyInteraction; bot, interactionId, interactionToken, content
+- ReplyInteractionWithComponents; bot, interactionId, interactionToken, content, components, ephemeral
+- FollowupInteraction; bot, appId, interactionToken, content
+- FollowupInteractionWithComponents; bot, appId, interactionToken, content, components
+
+Webhook
+- SendWebhook; webhookUrl, content
+
+Formatting helpers
+- Mention; userId
+- Channel; channelId
+- Role; roleId
+- Emoji; name, emojiId
+
+Response helpers
+- IsSuccess; result
+- StatusCode; result
+- BodyText; result
+
+Gateway helpers
+- RunActive                              -> blocking live gateway session loop
+- GatewayInfo; bot
+- GatewayOpen; url
+- GatewayIdentify; socketId, token, intents
+- GatewayHeartbeat; socketId, seq
+- GatewayRecv; socketId
+- GatewayClose; socketId
+- ws_recv_text_timeout; socketId, timeoutSeconds (runtime builtin used by RunActive)
+- GatewaySetPresence; socketId, status, afk
+- GatewaySetPresenceWithActivities; socketId, status, activities, afk
+- GatewayRequestGuildMembers; socketId, guildId, query, limit
+
+Gateway packet parsing
+- ParseGatewayOpcode; packet
+- ParseGatewaySeq; packet
+- ParseGatewayType; packet
+- ParseGatewayData; packet
+- IsGatewayDispatch; packet
+- IsGatewayHello; packet
+- IsGatewayHeartbeatAck; packet
+
+Builders
+- BuildMessage; channelId, content
+- BuildEmbed; title, description, color
+- BuildAllowedMentions; parseEveryone, parseRoles, parseUsers
+- BuildButton; customId, label, style
+- BuildLinkButton; label, url
+- BuildActionRow; components
+- BuildButtonRows; buttons
+- BuildActivity; name, activityType
+- ActivityPlaying; name
+- ActivityStreaming; name, url
+- ActivityListening; name
+- ActivityWatching; name
+- ActivityCompeting; name
+
+Extended REST helpers
+- ApiGet; bot, route
+- ApiPost; bot, route, payload
+- ApiPut; bot, route, payload
+- ApiPatch; bot, route, payload
+- ApiDelete; bot, route
+- FetchUser; bot, userId
+- FetchGuilds; bot
+- FetchGuildChannels; bot, guildId
+- FetchGuildRoles; bot, guildId
+- FetchGuildMember; bot, guildId, userId
+- EditGuildMemberNick; bot, guildId, nick
+- AddGuildMemberRole; bot, guildId, userId, roleId
+- RemoveGuildMemberRole; bot, guildId, userId, roleId
+- BanMember; bot, guildId, userId, deleteMessageSeconds
+- UnbanMember; bot, guildId, userId
+- BulkDeleteMessages; bot, channelId, messageIds
+- PinMessage; bot, channelId, messageId
+- UnpinMessage; bot, channelId, messageId
+- FetchPinnedMessages; bot, channelId
+- CreateGuildTextChannel; bot, guildId, name, topic
+- EditChannel; bot, channelId, payload
+- DeleteChannel; bot, channelId
+- CreatePublicThread; bot, channelId, messageId, name, autoArchiveMinutes
+- CreateWebhook; bot, channelId, name
+- FetchApplication; bot
+- FetchGlobalCommands; bot, appId
+- CreateGlobalCommand; bot, appId, commandPayload
+- EditGlobalCommand; bot, appId, commandId, commandPayload
+- DeleteGlobalCommand; bot, appId, commandId
+- Send; channelId, content
+- SendEmbed; channelId, title, description, color
+- SendButtons; channelId, content, buttons
+- DM; userId, content
+- SendWith; tokenOrBot, channelId, content
+- SendEmbedWith; tokenOrBot, channelId, title, description, color
+- SendButtonsWith; tokenOrBot, channelId, content, buttons
+- DMWith; tokenOrBot, userId, content
+- FetchChannel; bot, channelId
+- FetchMessage; bot, channelId, messageId
+
+Additional convenience helpers
+- ModifyCurrentUser; bot, username, avatar
+- LeaveGuild; bot, guildId
+- CreateGuildRole; bot, guildId, name, permissions, color, hoist, mentionable
+- EditGuildRole; bot, guildId, roleId, payload
+- DeleteGuildRole; bot, guildId, roleId
+- KickMember; bot, guildId, userId
+- TimeoutMember; bot, guildId, userId, untilIso
+- RemoveTimeout; bot, guildId, userId
+- FetchChannelMessages; bot, channelId
+- FetchChannelMessagesBefore; bot, channelId, beforeMessageId, limit
+- FetchChannelMessagesAfter; bot, channelId, afterMessageId, limit
+- FetchChannelMessagesAround; bot, channelId, aroundMessageId, limit
+- CrosspostMessage; bot, channelId, messageId
+- StartThreadWithoutMessage; bot, channelId, name, autoArchiveMinutes, threadType
+- JoinThread; bot, threadId
+- LeaveThread; bot, threadId
+- AddThreadMember; bot, threadId, userId
+- RemoveThreadMember; bot, threadId, userId
+- FetchThreadMembers; bot, threadId, withMember
+- CreateGuildEmoji; bot, guildId, name, imageDataUri, roles
+- EditGuildEmoji; bot, guildId, emojiId, name, roles
+- DeleteGuildEmoji; bot, guildId, emojiId
+- CreateGuildScheduledEvent; bot, guildId, payload
+- FetchGuildScheduledEvents; bot, guildId, withUserCount
+- EditGuildScheduledEvent; bot, guildId, eventId, payload
+- DeleteGuildScheduledEvent; bot, guildId, eventId
+- CreateInvite; bot, channelId, maxAge, maxUses, temporary, unique
+- FetchGuildInvites; bot, guildId
+- DeleteInvite; bot, inviteCode
+- RegisterGuildSlashCommand; bot, appId, guildId, name, description
+- FetchGuildCommands; bot, appId, guildId
+- EditGuildCommand; bot, appId, guildId, commandId, payload
+- DeleteGuildCommand; bot, appId, guildId, commandId
+- BulkOverwriteGlobalCommands; bot, appId, commands
+- BulkOverwriteGuildCommands; bot, appId, guildId, commands
+- DeferInteraction; bot, interactionId, interactionToken, ephemeral
+- EditOriginalInteraction; bot, appId, interactionToken, payload
+- DeleteOriginalInteraction; bot, appId, interactionToken
+- EditWebhookMessage; bot, webhookId, webhookToken, messageId, payload
+- DeleteWebhookMessage; bot, webhookId, webhookToken, messageId
+- FetchAuditLog; bot, guildId
+- FetchAuditLogFiltered; bot, guildId, userId, actionType, limit
+
+Current native limitations
+--------------------------
+- Full async framework orchestration is still script-managed.
+- Event-dispatch/cache abstractions are lighter than full framework models.
+- Gateway reconnect strategy remains explicit in user scripts.
+
+Gateway starter example
+-----------------------
+Get: Login From: discord
+Get: GatewayInfo From: discord
+Get: GatewayOpen From: discord
+Get: GatewayIdentify From: discord
+Get: GatewayRecv From: discord
+Get: GatewayHeartbeat From: discord
+Get: GatewayClose From: discord
+Get: IntentsMessageContentValue From: discord
+Get: ParseGatewayOpcode From: discord
+Get: ParseGatewayData From: discord
+Get: IsSuccess From: discord
+Get: BodyText From: discord
+
+def.var: session
+	dynamic
+	Login;
+		"YOUR_BOT_TOKEN"
+
+def.var: me
+	dynamic
+	session
+
+def.var: info
+	dynamic
+	GatewayInfo;
+		me
+
+def.var: infoOk
+	dynamic
+	IsSuccess;
+		info
+
+if infoOk:
+	def.var: infoBody
+		dynamic
+		BodyText;
+			info
+
+	def.var: details
+		dynamic
+		json_loads;
+			infoBody
+
+	def.var: opened
+		dynamic
+		GatewayOpen;
+			details["url"]
+
+	if opened["ok"]:
+		def.var: sid
+			int
+			opened["socket_id"]
+
+		GatewayIdentify;
+			sid
+			me["token"]
+			IntentsMessageContentValue
+
+		def.var: first
+			dynamic
+			GatewayRecv;
+				sid
+
+		if first["ok"]:
+			def.var: op
+				int
+				ParseGatewayOpcode;
+					first
+			say: "first op=" + op
+			if op == 10:
+				def.var: helloData
+					dynamic
+					ParseGatewayData;
+						first
+				GatewayHeartbeat;
+					sid
+					0
+
+		GatewayClose;
+			sid
+
+Common workflow mapping cheat sheet
+-----------------------------------
+- client.run TOKEN                     -> UseToken/RunActive gateway loop
+- UseToken + RunActive                 -> REST setup, then stay online
+- channel.send "hi"                   -> SendMessage
+- user.send "hi"                      -> SendDM
+- message.edit ...                     -> EditMessage
+- message.delete                        -> DeleteMessage
+- add_reaction / remove_reaction       -> AddReaction / RemoveOwnReaction
+- slash command registration           -> RegisterGlobalSlashCommand
+- interaction.response.send_message    -> ReplyInteraction
+- webhook.send ...                     -> SendWebhook
+
+Troubleshooting
+---------------
+1) Publish fails with clone error
+	- Ensure registry is main branch:
+	  air registry github rafih110610/indent-air main index.txt
+
+2) 401 / 403 from Discord
+	- Token invalid or bot missing permission in guild/channel.
+
+3) 404 on message/channel routes
+	- Channel ID or message ID wrong, or bot cannot access it.
+
+4) Gateway closes quickly
+	- You must heartbeat using the hello interval and keep processing recv packets.
+

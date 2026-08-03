@@ -1,0 +1,37 @@
+#! time.ath
+#! Time module for Aether-2
+
+var timezone string = "UTC"
+var daylight boolean = false
+
+fun Time
+    give time_now
+
+fun Sleep
+    seconds
+    give time_sleep seconds
+
+fun PerfCounter
+    give time_perf_counter
+
+fun LocalTime
+    timestamp
+    var ts float = timestamp
+    if ts < 0
+        ts is time_now
+    give {"timestamp": ts}
+
+fun GmTime
+    timestamp
+    var ts float = timestamp
+    if ts < 0
+        ts is time_now
+    give {"timestamp": ts}
+
+fun Strftime
+    format
+    timestamp
+    var ts float = timestamp
+    if ts < 0
+        ts is time_now
+    give format + " @ " + ts

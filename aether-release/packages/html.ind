@@ -1,0 +1,145 @@
+#! html.ath — HTML templating & builder for Aether-2
+
+#! ---- HTML escaping ----
+fun Escape text
+    var s1 string = replace(text, "&", "&amp;")
+    var s2 string = replace(s1, "<", "&lt;")
+    var s3 string = replace(s2, ">", "&gt;")
+    var s4 string = replace(s3, "\"", "&quot;")
+    give replace(s4, "'", "&#39;")
+
+#! ---- Tag builder ----
+fun Tag name attrs content
+    var html string = "<" + name
+    var attrKeys dynamic = keys(attrs)
+    repeat key in attrKeys
+        var val string = attrs[key]
+        html is html + " " + key + "=\"" + Escape(val) + "\""
+    html is html + ">" + content + "</" + name + ">"
+    give html
+
+#! ---- Self-closing tag ----
+fun VoidTag name attrs
+    var html string = "<" + name
+    var attrKeys dynamic = keys(attrs)
+    repeat key in attrKeys
+        var val string = attrs[key]
+        html is html + " " + key + "=\"" + Escape(val) + "\""
+    html is html + " />"
+    give html
+
+#! ---- Template: replace {{key}} with dict values ----
+fun Render template vars
+    var result string = template
+    var varKeys dynamic = keys(vars)
+    repeat key in varKeys
+        var placeholder string = "{{" + key + "}}"
+        var value string = vars[key]
+        result is replace(result, placeholder, value)
+    give result
+
+#! ---- Element helpers ----
+fun Div attrs content
+    give Tag("div", attrs, content)
+
+fun Span attrs content
+    give Tag("span", attrs, content)
+
+fun Heading level attrs content
+    give Tag("h" + level, attrs, content)
+
+fun Paragraph attrs content
+    give Tag("p", attrs, content)
+
+fun Link href text
+    give Tag("a", {"href": href}, text)
+
+fun Image src alt
+    give VoidTag("img", {"src": src, "alt": alt})
+
+fun ListItem content
+    give Tag("li", {}, content)
+
+fun UnorderedList items
+    var html string = "<ul>"
+    repeat item in items
+        html is html + ListItem(item)
+    html is html + "</ul>"
+    give html
+
+fun OrderedList items
+    var html string = "<ol>"
+    repeat item in items
+        html is html + ListItem(item)
+    html is html + "</ol>"
+    give html
+
+fun TableRow cells
+    var html string = "<tr>"
+    repeat cell in cells
+        html is html + Tag("td", {}, cell)
+    html is html + "</tr>"
+    give html
+
+fun Table headers rows
+    var html string = "<table>"
+    if len(headers) > 0
+        html is html + "<thead><tr>"
+        repeat h in headers
+            html is html + Tag("th", {}, h)
+        html is html + "</tr></thead>"
+    html is html + "<tbody>"
+    repeat row in rows
+        html is html + TableRow(row)
+    html is html + "</tbody></table>"
+    give html
+
+#! ---- Full HTML5 page ----
+fun Page title headExtra bodyContent
+    var safeTitle string = Escape(title)
+    var html string = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+    html is html + Tag("meta", {"charset": "UTF-8"}, "")
+    html is html + Tag("meta", {"name": "viewport", "content": "width=device-width, initial-scale=1.0"}, "")
+    html is html + Tag("title", {}, safeTitle)
+    html is html + headExtra
+    html is html + "\n</head>\n<body>\n"
+    html is html + bodyContent
+    html is html + "\n</body>\n</html>"
+    give html
+
+#! ---- Asset helpers ----
+fun StyleLink href
+    give VoidTag("link", {"rel": "stylesheet", "href": href})
+
+fun Script src
+    give Tag("script", {"src": src}, "")
+
+fun InlineStyle css
+    give Tag("style", {}, css)
+
+#! ---- Form helpers ----
+fun Input inputType name attrs
+    var merged dynamic = {}
+    var attrKeys dynamic = keys(attrs)
+    repeat key in attrKeys
+        merged[key] is attrs[key]
+    merged["type"] is inputType
+    merged["name"] is name
+    give VoidTag("input", merged)
+
+fun TextInput name attrs
+    give Input("text", name, attrs)
+
+fun TextArea name attrs content
+    var merged dynamic = {}
+    var attrKeys dynamic = keys(attrs)
+    repeat key in attrKeys
+        merged[key] is attrs[key]
+    merged["name"] is name
+    give Tag("textarea", merged, content)
+
+fun Button attrs content
+    give Tag("button", attrs, content)
+
+fun Form action method content
+    give Tag("form", {"action": action, "method": method}, content)

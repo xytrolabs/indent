@@ -1,0 +1,25 @@
+#! random.ath
+#! Pseudo-random module for Aether-2
+
+var currentSeed int = 0
+
+fun Seed
+    value
+    currentSeed is value
+    give random_seed value
+
+fun Random
+    give random_float
+
+fun RandInt
+    a
+    b
+    give random_int a b
+
+fun Choice
+    items
+    give random_choice items
+
+fun Shuffle
+    items
+    give random_shuffle items

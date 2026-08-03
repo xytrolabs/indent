@@ -1,0 +1,81 @@
+#! csv.ath — CSV parsing & generation for Aether-2
+
+fun StripQuotes s
+    if len(s) < 2
+        give s
+    var first string = slice(s, 0, 1)
+    var lastStart int = len(s) - 1
+    var last string = slice(s, lastStart, len(s))
+    if first == "\""
+        if last == "\""
+            give slice(s, 1, len(s) - 1)
+    give s
+
+fun Parse text
+    var rows dynamic = []
+    var lines dynamic = split(text, "\n")
+    repeat line in lines
+        var t string = trim(line)
+        if len(t) == 0
+            next
+        var cols dynamic = split(t, ",")
+        var cleanCols dynamic = []
+        repeat col in cols
+            var c string = trim(col)
+            cleanCols is cleanCols + [StripQuotes(c)]
+        rows is rows + [cleanCols]
+    give rows
+
+fun Stringify rows
+    var out string = ""
+    var rowCount int = len(rows)
+    var idx int = 0
+    repeat row in rows
+        var line string = ""
+        var colCount int = len(row)
+        var cidx int = 0
+        repeat col in row
+            var colStr string = string(col)
+            if contains(colStr, ",")
+                colStr is "\"" + colStr + "\""
+            or contains(colStr, "\"")
+                colStr is "\"" + replace(colStr, "\"", "\"\"") + "\""
+            line is line + colStr
+            cidx is cidx + 1
+            if cidx < colCount
+                line is line + ","
+        out is out + line
+        idx is idx + 1
+        if idx < rowCount
+            out is out + "\n"
+    give out
+
+fun Read path
+    give Parse(file_read_text(path))
+
+fun Write path rows
+    give file_write_text(path, Stringify(rows))
+
+fun Headers rows
+    if len(rows) == 0
+        give []
+    give rows[0]
+
+fun ToDicts rows
+    var result dynamic = []
+    if len(rows) < 2
+        give result
+    var headers dynamic = rows[0]
+    var hLen int = len(headers)
+    var idx int = 1
+    repeat until idx >= len(rows)
+        var row dynamic = rows[idx]
+        var dict dynamic = {}
+        var colIdx int = 0
+        repeat col in row
+            if colIdx < hLen
+                dict[headers[colIdx]] is string(col)
+            colIdx is colIdx + 1
+        result is result + [dict]
+        idx is idx + 1
+    give result

@@ -1,0 +1,17 @@
+get NewBot from discord
+get kick from discord
+get ban from discord
+get sendMsg from discord
+get addRole from discord
+get add from discord
+get on from discord
+get load from discord
+
+say "All clean blocks imported!"
+var bot dynamic = NewBot "test" "%"
+say "Bot created with prefix: " + bot["prefix"]
+
+fun testCmd bot user reason
+    sendMsg bot "Test reply"
+add bot "test" testCmd
+say "Command registered"

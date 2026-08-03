@@ -1,0 +1,11 @@
+#! path.ath
+#! Path utilities for Aether-2
+
+fun Join a b
+    give a + "/" + b
+
+fun Base path
+    give path
+
+fun Dir path
+    give path

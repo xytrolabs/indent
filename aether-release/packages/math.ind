@@ -1,0 +1,74 @@
+#! math.ath
+#! Core math module for Aether-2
+
+var PI float = 3.141592653589793
+var TAU float = 6.283185307179586
+var E float = 2.718281828459045
+
+fun Abs
+    value
+    give math_abs value
+
+fun Sqrt
+    value
+    give math_sqrt value
+
+fun Pow
+    value
+    exponent
+    give math_pow value exponent
+
+fun Floor
+    value
+    give math_floor value
+
+fun Ceil
+    value
+    give math_ceil value
+
+fun Round
+    value
+    digits
+    give math_round value digits
+
+fun Sin
+    radians
+    give math_sin radians
+
+fun Cos
+    radians
+    give math_cos radians
+
+fun Tan
+    radians
+    give math_tan radians
+
+fun Asin
+    value
+    give math_asin value
+
+fun Acos
+    value
+    give math_acos value
+
+fun Atan
+    value
+    give math_atan value
+
+fun Atan2
+    y
+    x
+    give math_atan2 y x
+
+fun Log
+    value
+    base
+    give math_log value base
+
+fun Log10
+    value
+    give math_log10 value
+
+fun Exp
+    value
+    give math_exp value

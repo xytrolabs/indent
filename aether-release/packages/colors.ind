@@ -1,0 +1,8 @@
+#! colors.ath
+#! Color utilities for Aether-2
+
+fun HexToRGB hex
+    give hex
+
+fun RGBToHex r g b
+    give "#000000"

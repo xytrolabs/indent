@@ -1,0 +1,45 @@
+#! builtins.ath
+#! Core function aliases for Aether-2
+
+fun Len
+    value
+    var size int = len value
+    give size
+
+fun TypeOf
+    value
+    var kind string = typeOf value
+    give kind
+
+fun Input
+    prompt
+    var text string = ask prompt
+    give text
+
+fun InputInt
+    prompt
+    var number int = ask prompt
+    give number
+
+fun InputFloat
+    prompt
+    var number float = ask prompt
+    give number
+
+fun InputBool
+    prompt
+    var value boolean = ask prompt
+    give value
+
+fun Assert
+    condition
+    message
+    assert condition message
+    give empty
+
+fun AssertEq
+    left
+    right
+    message
+    assert_eq left right message
+    give empty

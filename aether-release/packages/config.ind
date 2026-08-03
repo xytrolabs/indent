@@ -1,0 +1,49 @@
+#! config.ath — INI-style config parser for Aether-2
+
+fun Parse text
+    var config dynamic = {}
+    var currentSection string = ""
+    var lines dynamic = split(text, "\n")
+    repeat line in lines
+        var t string = trim(line)
+        if len(t) == 0
+            next
+        var first string = slice(t, 0, 1)
+        if first == ";"
+            next
+        or first == "#"
+            next
+        if starts_with(t, "[")
+            if ends_with(t, "]")
+                var endPos int = len(t) - 1
+                currentSection is slice(t, 1, endPos)
+                config[currentSection] is {}
+        otherwise
+            if contains(t, "=")
+                var parts dynamic = split(t, "=")
+                if len(parts) >= 2
+                    var key string = trim(parts[0])
+                    var value string = trim(parts[1])
+                    if len(currentSection) > 0
+                        var sec dynamic = config[currentSection]
+                        sec[key] is value
+                        config[currentSection] is sec
+                    otherwise
+                        config[key] is value
+    give config
+
+fun Read path
+    give Parse(file_read_text(path))
+
+fun Get config key defaultVal
+    if has_key(config, key)
+        give config[key]
+    give defaultVal
+
+fun GetSection config section key defaultVal
+    if has_key(config, section) == FALSE
+        give defaultVal
+    var sec dynamic = config[section]
+    if has_key(sec, key)
+        give sec[key]
+    give defaultVal

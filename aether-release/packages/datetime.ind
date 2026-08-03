@@ -1,0 +1,8 @@
+#! datetime.ath
+#! DateTime module for Aether-2
+
+fun Now
+    give time_now
+
+fun Format timestamp
+    give timestamp + ""

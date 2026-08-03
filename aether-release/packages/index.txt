@@ -1,0 +1,18 @@
+# name|source|description
+colors|./colors.ind|Basic color constants for demos
+sys|./sys.ind|System module with runtime/process metadata and streams
+math|./math.ind|Core math functions and constants
+os|./os.ind|Operating system and filesystem helpers
+time|./time.ind|Time, sleep, and structured clock helpers
+random|./random.ind|Pseudo-random number utilities
+json|./json.ind|JSON encode/decode helpers
+agame|./agame.ind|Starter 2D game API for Indent
+discord|./discord.ind|Discord.py-inspired bot, gateway, and REST helper API for Indent
+path|./path.ind|Path and filesystem helper utilities for Indent
+http|./http.ind|HTTP client helper utilities for Indent
+builtins|./builtins.ind|Built-in function aliases and input/assert helpers
+datetime|./datetime.ind|Datetime and clock helpers built on time module
+html|./html.ind|HTML templating, builder, and page generation helpers
+csv|./csv.ind|CSV parsing, generation, and dict conversion
+jsondb|./jsondb.ind|JSON file-based database with find, add, update, delete
+config|./config.ind|INI-style config file parser

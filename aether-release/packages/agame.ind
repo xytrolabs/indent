@@ -1,0 +1,103 @@
+#! agame.ath
+#! Starter 2D game module for Aether
+
+#! =========================
+#! Lifecycle
+#! =========================
+
+def.var: initialized
+    bool
+    false
+
+def.fun: Init
+    initialized is true
+    Give: bool
+
+
+def.fun: Quit
+    initialized is false
+    Give: Empty
+
+#! =========================
+#! Display
+#! =========================
+
+def.var: WindowTitle
+    string
+    "Aether Game"
+
+def.var: WindowWidth
+    int
+    800
+
+def.var: WindowHeight
+    int
+    600
+
+def.fun: SetMode
+    def.var: width
+        int
+        800
+    def.var: height
+        int
+        600
+    WindowWidth is width
+    WindowHeight is height
+    Give: dictionary[string, int]
+
+
+def.fun: SetCaption
+    def.var: title
+        string
+        "Aether Game"
+    WindowTitle is title
+    Give: Empty
+
+#! =========================
+#! Events & Timing
+#! =========================
+
+def.fun: PollEvents
+    #! Runtime should return normalized event dictionaries
+    Give: list[dictionary[string, Any]]
+
+
+def.fun: Tick
+    def.var: fps
+        int
+        60
+    #! Runtime should cap frame rate and return delta milliseconds
+    Give: int
+
+#! =========================
+#! Drawing API (stubs)
+#! =========================
+
+def.fun: Fill
+    def.var: color
+        string
+        "#000000"
+    Give: Empty
+
+
+def.fun: DrawRect
+    def.var: x
+        int
+        0
+    def.var: y
+        int
+        0
+    def.var: width
+        int
+        10
+    def.var: height
+        int
+        10
+    def.var: color
+        string
+        "#ffffff"
+    Give: Empty
+
+
+def.fun: Present
+    Give: Empty

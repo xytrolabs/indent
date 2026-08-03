@@ -1,0 +1,80 @@
+#! jsondb.ath — JSON file-based database for Aether-2
+
+fun Load path
+    if os_exists(path) == FALSE
+        give []
+    give json_loads(file_read_text(path))
+
+fun Save path data
+    give file_write_text(path, json_dumps(data))
+
+fun FindAll path conditions
+    var records dynamic = Load(path)
+    var result dynamic = []
+    repeat record in records
+        var matches boolean = TRUE
+        var condKeys dynamic = keys(conditions)
+        repeat key in condKeys
+            if record[key] != conditions[key]
+                matches is FALSE
+        if matches
+            result is result + [record]
+    give result
+
+fun FindOne path conditions
+    var results dynamic = FindAll(path, conditions)
+    if len(results) == 0
+        give {}
+    give results[0]
+
+fun Add path record
+    var records dynamic = Load(path)
+    records is records + [record]
+    Save(path, records)
+    give record
+
+fun Update path conditions updates
+    var records dynamic = Load(path)
+    var updated int = 0
+    var idx int = 0
+    repeat record in records
+        var matches boolean = TRUE
+        var condKeys dynamic = keys(conditions)
+        repeat key in condKeys
+            if record[key] != conditions[key]
+                matches is FALSE
+        if matches
+            var updateKeys dynamic = keys(updates)
+            repeat key in updateKeys
+                record[key] is updates[key]
+            records[idx] is record
+            updated is updated + 1
+        idx is idx + 1
+    Save(path, records)
+    give updated
+
+fun Delete path conditions
+    var records dynamic = Load(path)
+    var kept dynamic = []
+    var deleted int = 0
+    repeat record in records
+        var matches boolean = TRUE
+        var condKeys dynamic = keys(conditions)
+        repeat key in condKeys
+            if record[key] != conditions[key]
+                matches is FALSE
+        if matches
+            deleted is deleted + 1
+        otherwise
+            kept is kept + [record]
+    Save(path, kept)
+    give deleted
+
+fun Size path
+    give len(Load(path))
+
+fun All path
+    give Load(path)
+
+fun Create path
+    give Save(path, [])

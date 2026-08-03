@@ -1,0 +1,23 @@
+#! json.ath
+#! JSON module for Aether-2
+
+fun Loads
+    text
+    give json_loads text
+
+fun Load
+    path
+    var raw string = file_read_text path
+    give json_loads raw
+
+fun Dumps
+    value
+    pretty
+    give json_dumps value
+
+fun Dump
+    value
+    path
+    pretty
+    var text string = json_dumps value
+    give file_write_text path text

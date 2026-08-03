@@ -1,0 +1,78 @@
+#! os.ath
+#! Operating-system module for Aether-2
+
+var name string = sys_platform
+var sep string = "/"
+var linesep string = "\n"
+
+fun Environ
+    give os_getcwd
+
+fun GetEnv
+    key
+    defaultValue
+    give os_getenv key defaultValue
+
+fun SetEnv
+    key
+    value
+    give os_setenv key value
+
+fun GetCwd
+    give os_getcwd
+
+fun Chdir
+    path
+    give os_chdir path
+
+fun Exit
+    code
+    process_exit code
+    give empty
+
+fun System
+    command
+    give os_system command
+
+fun Exists
+    path
+    give os_exists path
+
+fun IsFile
+    path
+    give os_is_file path
+
+fun IsDir
+    path
+    give os_is_dir path
+
+fun ListDir
+    path
+    give os_list_dir path
+
+fun Mkdir
+    path
+    give os_mkdir path
+
+fun Remove
+    path
+    give os_remove path
+
+fun Rename
+    source
+    destination
+    give os_rename source destination
+
+fun ReadText
+    path
+    give file_read_text path
+
+fun WriteText
+    path
+    text
+    give file_write_text path text
+
+fun AppendText
+    path
+    text
+    give file_append_text path text
