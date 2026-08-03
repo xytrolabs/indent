@@ -1,6 +1,6 @@
 # Lesson 01 — Hello Indent!
 
-**Time**: 15 minutes  |  **Topics**: Install, Hello World, Variables, Functions, Branching, Loops
+**Time**: 15 minutes  |  **Topics**: Install, Hello World, Variables, String Interpolation, Functions, Branching, Loops
 
 ---
 
@@ -8,9 +8,10 @@
 - Install Indent and verify it works
 - Write and run your first Indent program
 - Declare variables with types
+- Use `%name%` string interpolation
 - Define and call functions
 - Use `if`/`or`/`otherwise` for decisions
-- Loop with `repeat`
+- Loop with `repeat` / `for`
 
 ---
 
@@ -29,14 +30,8 @@ irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 
 ### Verify
 ```bash
 indent --version
-# → indent 0.1.2
+# → indent 1.2.0
 ```
-
-### Staying Current
-```bash
-indent --update    # Auto-update to the latest version
-```
-This pulls the latest code from GitHub, builds it, and replaces your current binary.
 
 ---
 
@@ -46,13 +41,14 @@ Create `hello.ind`:
 
 ```indent
 #! This is a comment. Comments start with #! (hash-bang).
-#! The # character alone is reserved for hex colors like #ff0000.
-say "Hello, Indent!"
+var name string = "Indent"
+say "Hello, %name%!"
 ```
 
 Run it:
 ```bash
 indent run hello.ind
+# → Hello, Indent!
 ```
 
 ---

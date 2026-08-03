@@ -1,7 +1,7 @@
-# Indent Built-in Functions — API Reference
+# Indent Built-in Functions — API Reference (v1.2.0)
 
-> Complete reference for every built-in function available in Indent 2.2.0.
-> **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`, `list`, `dict`
+> Complete reference for every built-in function available in Indent 1.2.0.
+> **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`
 
 ---
 
@@ -341,6 +341,59 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 |---|---|
 | `math_asin(n)` / `math_acos(n)` / `math_atan(n)` | Inverse trigonometry (returns radians) |
 | `math_atan2(y, x)` | Two-argument arctangent |
+
+---
+
+## Regex (🆕 v1.2)
+
+| Function | Returns | Description |
+|---|---|---|
+| `regex_match(pattern, text)` | boolean | True if regex pattern matches text |
+| `regex_search(pattern, text)` | dict or empty | First match as `{start, end, text}` |
+| `regex_findall(pattern, text)` | list | All matches as list of strings |
+| `regex_replace(pattern, repl, text)` | string | Replace all regex matches |
+| `regex_split(pattern, text)` | list | Split text by regex pattern |
+
+## Datetime (🆕 v1.2)
+
+| Function | Returns | Description |
+|---|---|---|
+| `time_utc()` | float | Unix timestamp (alias for `time_now`) |
+| `time_format(ts, [fmt])` | string | Format timestamp (default: `"%Y-%m-%d %H:%M:%S"`) |
+| `time_parse(str, [fmt])` | float | Parse datetime string to timestamp |
+
+## Crypto & Encoding (🆕 v1.2)
+
+| Function | Returns | Description |
+|---|---|---|
+| `uuid()` | string | Generate random UUID v4 |
+| `base64_encode(text)` | string | Encode text to Base64 |
+| `base64_decode(text)` | string | Decode Base64 text |
+| `hash_sha256(text)` | string | SHA256 hex hash of text |
+
+## Path & Filesystem (🆕 v1.2)
+
+| Function | Returns | Description |
+|---|---|---|
+| `glob(pattern)` | list | List files matching wildcard (e.g. `"*.ind"`) |
+| `path_join(a, b, ...)` | string | Join path components |
+| `path_basename(path)` | string | Extract filename from path |
+| `path_dirname(path)` | string | Extract directory from path |
+
+## Functional (🆕 v1.2)
+
+| Function | Returns | Description |
+|---|---|---|
+| `map(list, func_name)` | list | Apply function to each list element |
+| `filter(list, func_name)` | list | Filter list by predicate function |
+
+## String Helpers (🆕 v1.2)
+
+| Function | Returns | Description |
+|---|---|---|
+| `pad_left(text, width, char)` | string | Left-pad string to given width |
+| `pad_right(text, width, char)` | string | Right-pad string to given width |
+| `repeat_str(text, count)` | string | Repeat string N times |
 
 ---
 
