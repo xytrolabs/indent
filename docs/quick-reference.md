@@ -1,10 +1,17 @@
-# Indent Quick Reference
+# Indent Quick Reference (v1.2.0)
 
 ## Basics
 ```indent
 #! Comment                  say "Hello"                 # Output
 var x int = 42              # Variable (string/int/float/boolean/dynamic/empty/list/dict)
 x is 43                     # Reassign
+null                        # Null/none value (alias for empty)
+```
+
+## String Interpolation
+```indent
+var name string = "Ada"
+say "Hello %name%!"         # → "Hello Ada!"
 ```
 
 ## Functions
@@ -16,44 +23,55 @@ greet("Ada")                # Call — parenthesized form works everywhere
 fun add a b                 # Multi-param
     give a + b              # Return
 
-# Function references (v2.2.0)
+fun greet name = "World"    # Default parameter (v1.2)
+    say "Hello " + name
+greet                       # → "Hello World!"
+greet "Ada"                 # → "Hello Ada!"
+
+fun add a b as int          # Return type annotation (v1.2)
+    give a + b
+
+# Function references
 fun handler x
     say x
 register handler            # Pass function without calling it!
+
+# Lambda (v1.2)
+var double = fn(x): x * 2
+say double 5                # → 10
 ```
 
 ## Classes
 ```indent
-class Person                # Define a class
-    var name string         # Fields = constructor params (public by default)
+class Person
+    var name string
     var age int
-    fun greet               # Methods
+    fun greet
         say "I'm " + name
 
-var p dynamic = Person "Ada" 28    # Natural — no () needed
-p.greet()                   # Method call
-say p.name                  # Field access — public!
+var p dynamic = Person "Ada" 28
+p.greet()
+say p.name
 
-# Inheritance (v2.8+)
 class Employee from Person
     var role string
-    fun greet               # Override parent method
+    fun greet
         say "I'm " + name + ", " + role
 
 var e dynamic = Employee "Bob" 35 "Engineer"
-e.greet()                   # "I'm Bob, Engineer"
+e.greet()
 ```
 
 ## Control Flow
 ```indent
-if x > 10                   # if / or / otherwise
+if x > 10
     say "big"
 or x > 5
     say "medium"
 otherwise
     say "small"
 
-match x:                    # Match — requires colon + case keyword
+match x:
     case "a":
         say "Alpha"
     otherwise:
@@ -65,25 +83,63 @@ match x:                    # Match — requires colon + case keyword
 repeat 5                    # Fixed count (Reps is 0-indexed)
 repeat item in list         # Over items
 repeat until x == 10        # Conditional
+for x in list               # for alias (v1.2)
 stop / next / reset         # Break / continue / restart
+```
+
+## Expressions (v1.2)
+```indent
+# Comprehensions
+[x * x for x in range 5]          # → [0, 1, 4, 9, 16]
+{x: x * 2 for x in range 3}       # → {"0": 0, "1": 2, "2": 4}
+[x for x in list if x > 5]        # Filtered
+
+# Ternary
+var s string = "adult" if age >= 18 else "child"
+
+# Chained comparisons
+if 0 < x < 10                     # → x > 0 and x < 10
+
+# Bitwise operators
+5 & 3    # → 1 (AND)
+5 | 3    # → 7 (OR)
+5 ^ 3    # → 6 (XOR)
+~5       # → -6 (NOT)
+1 << 2   # → 4 (shift left)
+8 >> 2   # → 2 (shift right)
+
+# Identity
+x is empty          # true if x is null/empty
+x is not y          # identity check
 ```
 
 ## Data
 ```indent
-var list list = [1, 2, 3]      # Typed list
-var dict dict = {"key": "val"}  # Typed dict
-var mixed dynamic = [1, "hi"]   # Dynamic list
-list[0]                         # Index access
-dict["key"]                     # Key access
-list is list + [4]              # Append (lists are immutable)
-person.name                     # Dot notation for dicts
+var list list = [1, 2, 3]
+var dict dict = {"key": "val"}
+var mixed dynamic = [1, "hi"]
+list[0]
+dict["key"]
+list is list + [4]
+person.name
 ```
 
 ## Imports
 ```indent
 get math                    # Whole module
+import math                 # import alias (v1.2)
 get Pow from math           # One function
+import Pow from math        # Same with import (v1.2)
 get RandInt from random as R # Aliased
+```
+
+## File Handling (v1.2)
+```indent
+open "data.txt" for read as f:
+    say f                   # reads file content into f
+
+open "out.txt" for write as f:
+    f is "Hello World!"     # writes to file
 ```
 
 ## Common Builtins
@@ -94,20 +150,81 @@ upper(s) / lower(s) / trim(s) / replace(s, from, to)
 split("a,b", ",") / join([1,2], ",")
 starts_with(s, pre) / ends_with(s, suf) / contains(s, sub)
 slice(s, start, end) / find(s, sub) / index(s, sub)
+pad_left(s, 10, " ") / pad_right(s, 10, " ") / repeat_str(s, 3)
 keys(dict) / values(dict) / has_key(dict, key) / items(dict)
 sort(list) / reverse(list) / append(list, item) / pop(list) / insert(list, idx, item)
 extend(list1, list2) / remove(list, value) / enumerate(list) / zip(list1, list2)
+map(list, func) / filter(list, func)    # Functional (v1.2)
 range(end) / range(start, end, step)
 int("42") / float("3.14") / string(42) / bool("true")
 int_or(s, fallback) / float_or(s, fallback) / type_of(value)
 abs(n) / is_even(n) / is_odd(n) / between_int(v, min, max) / inc(v) / dec(v)
 assert(cond) / assert_eq(a, b) / do/catch/flag
 copy(val) / clear(val) / count(container, item) / sum(list)
+```
+
+## Regex (v1.2)
+```indent
+regex_match("hel+o", "hello")        # → true
+regex_search("\\d+", "abc123")       # → {start: 3, end: 6, text: "123"}
+regex_findall("\\d+", "a1b2c3")     # → ["1", "2", "3"]
+regex_replace("\\d", "X", "a1b2")   # → "aXbX"
+regex_split(",\\s*", "a, b, c")     # → ["a", "b", "c"]
+```
+
+## Date/Time (v1.2)
+```indent
+time_now()                  # Unix timestamp (float)
+time_utc()                  # Same as time_now
+time_format(ts, "%Y-%m-%d") # Format timestamp
+time_parse("2024-01-15")    # Parse ISO date to timestamp
+time_sleep(0.5)             # Sleep seconds
+```
+
+## Crypto & Encoding (v1.2)
+```indent
+uuid()                      # Random UUID v4
+base64_encode("hello")      # → "aGVsbG8="
+base64_decode("aGVsbG8=")   # → "hello"
+hash_sha256("hello")        # SHA256 hex string
+file_sha256("file.txt")     # SHA256 of file
+```
+
+## File & Path (v1.2)
+```indent
+glob("*.ind")               # List files matching pattern
+path_join("/home", "user") # → "/home/user"
+path_basename("/a/b.txt")  # → "b.txt"
+path_dirname("/a/b.txt")   # → "/a"
+```
+
+## JSON, HTTP, WebSocket
+```indent
 json_loads(text) / json_dumps(value)
 http_get(url) / http_post_json(url, body)
 ws_connect(url) / ws_send_text(id, text)
+```
+
+## OS & System
+```indent
 file_read_text(path) / file_write_text(path, text) / file_sha256(path)
 os_getcwd() / os_exists(path) / os_list_dir(path) / os_system(cmd) / os_mkdir(path)
+os_getenv("HOME") / os_setenv("KEY", "val")
+process_exit(0)
+```
+
+## Error Handling
+```indent
+do:
+    flag "message"
+catch as err:
+    say err
+lastly:
+    say "cleanup"
+```
+
+## Error Codes
+| Code | Meaning |
 time_now() / time_sleep(seconds)
 random_int(min, max) / random_choice(list) / random_shuffle(list) / random_float()
 math_pow(base, exp) / math_sqrt(n) / math_sin(n) / math_abs(n) / math_floor(n) / math_ceil(n)

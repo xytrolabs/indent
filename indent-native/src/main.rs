@@ -68,6 +68,7 @@ enum Stmt {
         params: Vec<FunctionParam>,
         return_type: Option<String>,
         body: Vec<Stmt>,
+        is_generator: bool,
     },
     Give { line: usize, expr: String },
     IfChain {
@@ -120,6 +121,20 @@ enum Stmt {
         methods: Vec<Stmt>,
     },
     Flag { line: usize, expr: String },
+    Yield { line: usize, expr: String },
+    Decorator {
+        line: usize,
+        name: String,
+        args: Vec<ArgItem>,
+        target: Box<Stmt>,
+    },
+    Open {
+        line: usize,
+        mode: String,
+        path_expr: String,
+        binding: Option<String>,
+        body: Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +178,7 @@ enum ArgItem {
 struct FunctionParam {
     name: String,
     ty: Option<String>,
+    default_value: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,13 +186,14 @@ struct FunctionDef {
     params: Vec<FunctionParam>,
     return_type: Option<String>,
     body: Vec<Stmt>,
+    is_generator: bool,
 }
 
 // ---- Classes (OOP) ----
 #[derive(Debug, Clone)]
 struct ClassField {
     name: String,
-    ty: String,
+    _ty: String,
 }
 
 #[derive(Debug, Clone)]
@@ -430,6 +447,39 @@ fn is_missing_value(value: &Value) -> bool {
         Value::Dict(v) => v.is_empty(),
         _ => false,
     }
+}
+
+/// Interpolate %varname% placeholders in a string with values from the execution context.
+fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            // Find closing %
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != b'%' {
+                j += 1;
+            }
+            if j < bytes.len() && j > start {
+                let var_name = &s[start..j];
+                if let Some(val) = ctx.get_var(var_name) {
+                    out.push_str(&val.to_string());
+                } else {
+                    // Keep literal %varname% if var not found
+                    out.push('%');
+                    out.push_str(var_name);
+                    out.push('%');
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 fn to_i64_value(value: &Value) -> Result<i64, String> {
@@ -719,6 +769,7 @@ impl<'a> ExecContext<'a> {
 enum Control {
     None,
     Return(Value),
+    Yield(Value),
     Stop,
     Next,
     Reset,
@@ -729,6 +780,11 @@ fn exec_block(body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, Strin
         let control = exec_stmt(stmt, ctx)?;
         match control {
             Control::None => {}
+            Control::Yield(v) => {
+                // In a generator context, accumulate and continue
+                // For now, propagate yield up to the function caller
+                return Ok(Control::Yield(v));
+            }
             _ => return Ok(control),
         }
     }
@@ -758,7 +814,11 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
     match stmt {
         Stmt::Say { expr, line } => {
             let v = eval_expr(expr, ctx).map_err(|e| format!("Line {}: {}", line, e))?;
-            println!("{v}");
+            let interpolated = match v {
+                Value::Str(ref s) => Value::Str(interpolate_string(s, ctx)),
+                _ => v,
+            };
+            println!("{interpolated}");
             Ok(Control::None)
         }
         Stmt::DefVar {
@@ -806,6 +866,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                             params: params.clone(),
                             return_type: None,
                             body: body.clone(),
+                            is_generator: false,
                         },
                     );
                 }
@@ -882,12 +943,14 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             params,
             return_type,
             body,
+            is_generator,
             ..
         } => {
             let f = FunctionDef {
                 params: params.clone(),
                 return_type: return_type.clone(),
                 body: body.clone(),
+                is_generator: *is_generator,
             };
             ctx.rt.funcs.insert(name.clone(), f.clone());
             ctx.rt.callables.insert(name.clone(), Callable::Local(f));
@@ -1018,6 +1081,68 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             let value = eval_expr(expr, ctx)?;
             Err(format!("Line {}: {}", line, value))
         }
+        Stmt::Yield { line, expr } => {
+            let value = eval_expr(expr, ctx)
+                .map_err(|e| format!("Line {}: {}", line, e))?;
+            Ok(Control::Yield(value))
+        }
+        Stmt::Decorator { line: _, name, args, target } => {
+            // Decorators: apply the decorator function to the target
+            // For now, execute the decorator as a function call and bind the result
+            let _ = exec_call(name, args, ctx)?;
+            // Then execute the decorated target
+            exec_stmt(target, ctx)
+        }
+        Stmt::Open { line, mode, path_expr, binding, body } => {
+            let path_val = eval_expr(path_expr, ctx)
+                .map_err(|e| format!("Line {}: {}", line, e))?;
+            let path = path_val.to_string();
+
+            let file = std::fs::OpenOptions::new()
+                .read(mode == "read")
+                .write(mode == "write" || mode == "append")
+                .append(mode == "append")
+                .create(mode == "write" || mode == "append")
+                .truncate(mode == "write")
+                .open(&path)
+                .map_err(|e| format!("Line {}: open failed for '{}': {}", line, path, e))?;
+
+            // Read entire file into string if in read mode
+            let content = if mode == "read" {
+                Some(std::fs::read_to_string(&path)
+                    .map_err(|e| format!("Line {}: read failed for '{}': {}", line, path, e))?)
+            } else {
+                None
+            };
+
+            // Bind the value
+            if let Some(bind) = binding {
+                let val = match mode.as_str() {
+                    "read" => Value::Str(content.unwrap_or_default()),
+                    _ => Value::Str(path.clone()),
+                };
+                ctx.define_local(bind, val);
+            }
+
+            // Execute the body
+            let result = exec_block(body, ctx);
+
+            // Write back if in write mode
+            if mode == "write" || mode == "append" {
+                if let Some(bind) = binding {
+                    if let Some(val) = ctx.get_var(bind) {
+                        let text = val.to_string();
+                        std::fs::write(&path, text)
+                            .map_err(|e| format!("Line {}: write failed for '{}': {}", line, path, e))?;
+                    }
+                }
+            }
+
+            // Close the file (drop happens automatically)
+            drop(file);
+
+            result
+        }
     }
 }
 
@@ -1042,7 +1167,10 @@ fn stmt_line(stmt: &Stmt) -> usize {
         | Stmt::Import { line, .. }
         | Stmt::Call { line, .. }
         | Stmt::BareExpr { line, .. }
-        | Stmt::Flag { line, .. } => *line,
+        | Stmt::Flag { line, .. }
+        | Stmt::Yield { line, .. }
+        | Stmt::Decorator { line, .. }
+        | Stmt::Open { line, .. } => *line,
     }
 }
 
@@ -1586,7 +1714,7 @@ fn invoke_object_method(
     method_def: &FunctionDef,
     fields: &HashMap<String, Value>,
     args: &[Value],
-    ctx: &ExecContext<'_>,
+    _ctx: &ExecContext<'_>,
 ) -> Result<Value, String> {
     // We need a mutable context for exec_block. Create a temporary runtime wrapper.
     // The method body executes with fields as local variables.
@@ -1610,6 +1738,7 @@ fn invoke_object_method(
     
     match exec_block(&method_def.body, &mut temp_ctx)? {
         Control::Return(v) => Ok(v),
+        Control::Yield(v) => Ok(Value::List(vec![v])),
         Control::None => Ok(Value::Empty),
         _ => Err("STOP/NEXT/RESET cannot be used in a method".to_string()),
     }
@@ -1775,6 +1904,9 @@ fn invoke_function(
                 v.clone()
             } else if let Some(v) = positional.get(idx) {
                 v.clone()
+            } else if let Some(default_expr) = &param.default_value {
+                // Evaluate the default expression
+                eval_expr(default_expr, ctx).unwrap_or(Value::Empty)
             } else {
                 ctx.pop_frame();
                 return Err(format!("Missing argument for parameter '{}'", param.name));
@@ -1808,24 +1940,51 @@ fn invoke_function(
         ctx.define_local(k, v.clone());
     }
 
-    let output = match exec_block(&f.body, ctx)? {
-        Control::Return(v) => {
-            if let Some(rt) = &f.return_type {
-                let checked = coerce_type(0, "return", rt, v)
-                    .map_err(|_| format!("Return value does not match declared type '{}'", rt))?;
-                Ok(checked)
-            } else {
-                Ok(v)
+    let output = if f.is_generator {
+        // Generator: execute body, collect all yields into a list
+        let mut yielded_values = Vec::new();
+        loop {
+            match exec_block(&f.body, ctx)? {
+                Control::Yield(v) => {
+                    yielded_values.push(v);
+                    // Continue collecting — generators yield multiple values
+                    // Simple model: yield from top-level only, no re-entry
+                    // For now, break after first yield (simplified generator)
+                    break;
+                }
+                Control::Return(v) => {
+                    yielded_values.push(v);
+                    break;
+                }
+                Control::None => break,
+                _ => return Err("STOP/NEXT/RESET cannot be used outside a loop".to_string()),
             }
         }
-        Control::None => {
-            if f.return_type.is_some() {
-                Err("Function declares a return type but no Give statement returned a value".to_string())
-            } else {
-                Ok(Value::Empty)
+        Ok(Value::List(yielded_values))
+    } else {
+        match exec_block(&f.body, ctx)? {
+            Control::Return(v) => {
+                if let Some(rt) = &f.return_type {
+                    let checked = coerce_type(0, "return", rt, v)
+                        .map_err(|_| format!("Return value does not match declared type '{}'", rt))?;
+                    Ok(checked)
+                } else {
+                    Ok(v)
+                }
             }
+            Control::None => {
+                if f.return_type.is_some() {
+                    Err("Function declares a return type but no Give statement returned a value".to_string())
+                } else {
+                    Ok(Value::Empty)
+                }
+            }
+            Control::Yield(v) => {
+                // Single yield in non-generator function wraps in list
+                Ok(Value::List(vec![v]))
+            }
+            _ => Err("STOP/NEXT/RESET cannot be used outside a loop".to_string()),
         }
-        _ => Err("STOP/NEXT/RESET cannot be used outside a loop".to_string()),
     };
 
     ctx.pop_frame();
@@ -3993,14 +4152,288 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(python_run_file_builtin(&positional[0].to_string()))
         }
-        "string" => {
-            if positional.len() != 1 {
-                return Some(Err("string expects exactly 1 argument".to_string()));
+        // ── Regex (v2.6.0) ──────────────────────────────────────
+        "regex_match" => {
+            if positional.len() != 2 {
+                return Some(Err("regex_match expects exactly 2 arguments: regex_match(pattern, text)".to_string()));
             }
-            Some(Ok(Value::Str(positional[0].to_string())))
+            let pattern = positional[0].to_string();
+            let text = positional[1].to_string();
+            match regex::Regex::new(&pattern) {
+                Ok(re) => Some(Ok(Value::Bool(re.is_match(&text)))),
+                Err(e) => Some(Err(format!("regex_match: invalid pattern: {e}"))),
+            }
+        }
+        "regex_search" => {
+            if positional.len() != 2 {
+                return Some(Err("regex_search expects exactly 2 arguments: regex_search(pattern, text)".to_string()));
+            }
+            let pattern = positional[0].to_string();
+            let text = positional[1].to_string();
+            match regex::Regex::new(&pattern) {
+                Ok(re) => match re.find(&text) {
+                    Some(m) => {
+                        let mut map = HashMap::new();
+                        map.insert("start".to_string(), Value::Int(m.start() as i64));
+                        map.insert("end".to_string(), Value::Int(m.end() as i64));
+                        map.insert("text".to_string(), Value::Str(m.as_str().to_string()));
+                        Some(Ok(Value::Dict(map)))
+                    }
+                    None => Some(Ok(Value::Empty)),
+                },
+                Err(e) => Some(Err(format!("regex_search: invalid pattern: {e}"))),
+            }
+        }
+        "regex_findall" => {
+            if positional.len() != 2 {
+                return Some(Err("regex_findall expects exactly 2 arguments: regex_findall(pattern, text)".to_string()));
+            }
+            let pattern = positional[0].to_string();
+            let text = positional[1].to_string();
+            match regex::Regex::new(&pattern) {
+                Ok(re) => {
+                    let matches: Vec<Value> = re.find_iter(&text)
+                        .map(|m| Value::Str(m.as_str().to_string()))
+                        .collect();
+                    Some(Ok(Value::List(matches)))
+                },
+                Err(e) => Some(Err(format!("regex_findall: invalid pattern: {e}"))),
+            }
+        }
+        "regex_replace" => {
+            if positional.len() != 3 {
+                return Some(Err("regex_replace expects exactly 3 arguments: regex_replace(pattern, replacement, text)".to_string()));
+            }
+            let pattern = positional[0].to_string();
+            let replacement = positional[1].to_string();
+            let text = positional[2].to_string();
+            match regex::Regex::new(&pattern) {
+                Ok(re) => Some(Ok(Value::Str(re.replace_all(&text, replacement.as_str()).to_string()))),
+                Err(e) => Some(Err(format!("regex_replace: invalid pattern: {e}"))),
+            }
+        }
+        "regex_split" => {
+            if positional.len() != 2 {
+                return Some(Err("regex_split expects exactly 2 arguments: regex_split(pattern, text)".to_string()));
+            }
+            let pattern = positional[0].to_string();
+            let text = positional[1].to_string();
+            match regex::Regex::new(&pattern) {
+                Ok(re) => {
+                    let parts: Vec<Value> = re.split(&text).map(|s| Value::Str(s.to_string())).collect();
+                    Some(Ok(Value::List(parts)))
+                },
+                Err(e) => Some(Err(format!("regex_split: invalid pattern: {e}"))),
+            }
+        }
+        // ── Datetime (v2.6.0) ──────────────────────────────────
+        "time_utc" => {
+            if !positional.is_empty() {
+                return Some(Err("time_utc expects no arguments".to_string()));
+            }
+            Some(time_utc_builtin())
+        }
+        "time_format" => {
+            if positional.len() < 1 || positional.len() > 2 {
+                return Some(Err("time_format expects 1 or 2 arguments: time_format(timestamp, [format])".to_string()));
+            }
+            Some(time_format_builtin(&positional[0], positional.get(1)))
+        }
+        "time_parse" => {
+            if positional.len() < 1 || positional.len() > 2 {
+                return Some(Err("time_parse expects 1 or 2 arguments: time_parse(datetime_str, [format])".to_string()));
+            }
+            Some(time_parse_builtin(&positional[0], positional.get(1)))
+        }
+        // ── String extras ──────────────────────────────────────
+        "pad_left" => {
+            if positional.len() != 3 {
+                return Some(Err("pad_left expects exactly 3 arguments: pad_left(text, width, char)".to_string()));
+            }
+            let text = positional[0].to_string();
+            let width = match &positional[1] { Value::Int(v) => *v as usize, _ => return Some(Err("pad_left width must be int".to_string())) };
+            let pad = positional[2].to_string();
+            let pad_char = pad.chars().next().unwrap_or(' ');
+            let len = text.chars().count();
+            if len >= width {
+                Some(Ok(Value::Str(text)))
+            } else {
+                let padding: String = std::iter::repeat(pad_char).take(width - len).collect();
+                Some(Ok(Value::Str(format!("{}{}", padding, text))))
+            }
+        }
+        "pad_right" => {
+            if positional.len() != 3 {
+                return Some(Err("pad_right expects exactly 3 arguments: pad_right(text, width, char)".to_string()));
+            }
+            let text = positional[0].to_string();
+            let width = match &positional[1] { Value::Int(v) => *v as usize, _ => return Some(Err("pad_right width must be int".to_string())) };
+            let pad = positional[2].to_string();
+            let pad_char = pad.chars().next().unwrap_or(' ');
+            let len = text.chars().count();
+            if len >= width {
+                Some(Ok(Value::Str(text)))
+            } else {
+                let padding: String = std::iter::repeat(pad_char).take(width - len).collect();
+                Some(Ok(Value::Str(format!("{}{}", text, padding))))
+            }
+        }
+        "repeat_str" => {
+            if positional.len() != 2 {
+                return Some(Err("repeat_str expects exactly 2 arguments: repeat_str(text, count)".to_string()));
+            }
+            let text = positional[0].to_string();
+            let count = match &positional[1] { Value::Int(v) => *v as usize, _ => return Some(Err("repeat_str count must be int".to_string())) };
+            Some(Ok(Value::Str(text.repeat(count))))
+        }
+        // ── UUID ───────────────────────────────────────────────
+        "uuid" => {
+            if !positional.is_empty() {
+                return Some(Err("uuid expects no arguments".to_string()));
+            }
+            Some(Ok(Value::Str(uuid_v4())))
+        }
+        // ── Base64 ─────────────────────────────────────────────
+        "base64_encode" => {
+            if positional.len() != 1 {
+                return Some(Err("base64_encode expects exactly 1 argument: base64_encode(text)".to_string()));
+            }
+            let text = positional[0].to_string();
+            Some(Ok(Value::Str(base64_encode(&text))))
+        }
+        "base64_decode" => {
+            if positional.len() != 1 {
+                return Some(Err("base64_decode expects exactly 1 argument: base64_decode(text)".to_string()));
+            }
+            let text = positional[0].to_string();
+            match base64_decode(&text) {
+                Ok(s) => Some(Ok(Value::Str(s))),
+                Err(e) => Some(Err(e)),
+            }
+        }
+        // ── File glob ──────────────────────────────────────────
+        "glob" => {
+            if positional.len() != 1 {
+                return Some(Err("glob expects exactly 1 argument: glob(pattern)".to_string()));
+            }
+            let pattern = positional[0].to_string();
+            Some(Ok(Value::List(simple_glob(&pattern))))
+        }
+        // ── Path helpers ───────────────────────────────────────
+        "path_join" => {
+            if positional.len() < 2 {
+                return Some(Err("path_join expects at least 2 arguments".to_string()));
+            }
+            let mut path = PathBuf::from(positional[0].to_string());
+            for p in &positional[1..] {
+                path = path.join(p.to_string());
+            }
+            Some(Ok(Value::Str(path.to_string_lossy().to_string())))
+        }
+        "path_basename" => {
+            if positional.len() != 1 {
+                return Some(Err("path_basename expects exactly 1 argument".to_string()));
+            }
+            let path_str = positional[0].to_string();
+            let p = Path::new(&path_str);
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            Some(Ok(Value::Str(name)))
+        }
+        "path_dirname" => {
+            if positional.len() != 1 {
+                return Some(Err("path_dirname expects exactly 1 argument".to_string()));
+            }
+            let path_str = positional[0].to_string();
+            let p = Path::new(&path_str);
+            let parent = p.parent().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            Some(Ok(Value::Str(parent)))
+        }
+        // ── Hash text ──────────────────────────────────────────
+        "hash_sha256" => {
+            if positional.len() != 1 {
+                return Some(Err("hash_sha256 expects exactly 1 argument".to_string()));
+            }
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(positional[0].to_string().as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            Some(Ok(Value::Str(hash)))
+        }
+        // ── Map / Filter ───────────────────────────────────────
+        "map" => {
+            if positional.len() != 2 {
+                return Some(Err("map expects exactly 2 arguments: map(list, function_name)".to_string()));
+            }
+            let items = match &positional[0] { Value::List(v) => v.clone(), _ => return Some(Err("map expects a list".to_string())) };
+            let func_name = positional[1].to_string();
+            let mut out = Vec::with_capacity(items.len());
+            for item in &items {
+                // Note: map can't call user functions from builtins — needs runtime context
+                // For now, try builtin lookup
+                match invoke_builtin(&func_name, &[item.clone()]) {
+                    Some(Ok(result)) => out.push(result),
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return Some(Err(format!("map: function '{}' not found", func_name))),
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "filter" => {
+            if positional.len() != 2 {
+                return Some(Err("filter expects exactly 2 arguments: filter(list, function_name)".to_string()));
+            }
+            let items = match &positional[0] { Value::List(v) => v.clone(), _ => return Some(Err("filter expects a list".to_string())) };
+            let func_name = positional[1].to_string();
+            let mut out = Vec::new();
+            for item in &items {
+                match invoke_builtin(&func_name, &[item.clone()]) {
+                    Some(Ok(result)) if result.to_bool() => out.push(item.clone()),
+                    Some(Err(e)) => return Some(Err(e)),
+                    _ => {}
+                }
+            }
+            Some(Ok(Value::List(out)))
         }
         _ => None,
     }
+}
+
+fn simple_glob(pattern: &str) -> Vec<Value> {
+    let mut results = Vec::new();
+    let p = Path::new(pattern);
+    // Determine base directory and pattern
+    let (base_dir, file_pattern) = if let Some(parent) = p.parent() {
+        if parent.as_os_str().is_empty() {
+            (PathBuf::from("."), pattern.to_string())
+        } else {
+            (parent.to_path_buf(), p.file_name().unwrap_or_default().to_string_lossy().to_string())
+        }
+    } else {
+        (PathBuf::from("."), pattern.to_string())
+    };
+    // Simple glob: only supports * at end or beginning, and exact matches
+    if let Ok(entries) = std::fs::read_dir(&base_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let matches = if file_pattern == "*" {
+                true
+            } else if file_pattern.starts_with('*') {
+                name.ends_with(&file_pattern[1..])
+            } else if file_pattern.ends_with('*') {
+                name.starts_with(&file_pattern[..file_pattern.len()-1])
+            } else {
+                name == file_pattern
+            };
+            if matches {
+                if let Ok(full) = entry.path().canonicalize() {
+                    results.push(Value::Str(full.to_string_lossy().to_string()));
+                } else {
+                    results.push(Value::Str(entry.path().to_string_lossy().to_string()));
+                }
+            }
+        }
+    }
+    results
 }
 
 fn sys_executable_builtin() -> Result<Value, String> {
@@ -4346,6 +4779,123 @@ fn time_now_builtin() -> Result<Value, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("time_now failed: {e}"))?;
     Ok(Value::Float(now.as_secs_f64()))
+}
+
+fn time_utc_builtin() -> Result<Value, String> {
+    time_now_builtin()
+}
+
+fn time_format_builtin(timestamp: &Value, format: Option<&Value>) -> Result<Value, String> {
+    use std::time::UNIX_EPOCH;
+    let ts_secs = match timestamp {
+        Value::Float(f) => *f,
+        Value::Int(i) => *i as f64,
+        _ => return Err("time_format expects a numeric timestamp".to_string()),
+    };
+    let fmt_str = format.map(|v| v.to_string()).unwrap_or_else(|| "%Y-%m-%d %H:%M:%S".to_string());
+    // Simple formatting using chrono-style specifiers
+    let secs = ts_secs.trunc() as i64;
+    let nanos = ((ts_secs - ts_secs.trunc()) * 1_000_000_000.0) as u32;
+    let d = UNIX_EPOCH + std::time::Duration::new(secs as u64, nanos);
+    // Basic format: just return ISO 8601 for now
+    let total_secs = d.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let days = total_secs / 86400;
+    let time_secs = total_secs % 86400;
+    let hours = time_secs / 3600;
+    let minutes = (time_secs % 3600) / 60;
+    let seconds = time_secs % 60;
+    let result = if fmt_str.contains("%Y") {
+        // Very basic date calc (approximately correct for ~50 years around 2000)
+        let year = 1970 + (days / 365) as i64;
+        let day_of_year = days % 365;
+        let mut month = 1;
+        let months_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut remaining = day_of_year as usize;
+        for &md in &months_days {
+            if remaining < md { break; }
+            remaining -= md;
+            month += 1;
+        }
+        let day = remaining + 1;
+        format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
+    } else {
+        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    };
+    Ok(Value::Str(result))
+}
+
+fn time_parse_builtin(datetime_str: &Value, _format: Option<&Value>) -> Result<Value, String> {
+    let text = datetime_str.to_string();
+    // Try ISO 8601: YYYY-MM-DD HH:MM:SS
+    let parts: Vec<&str> = text.split(&['-', ' ', ':', 'T'][..]).collect();
+    if parts.len() >= 6 {
+        if let (Ok(y), Ok(m), Ok(d), Ok(h), Ok(min), Ok(s)) = (
+            parts[0].parse::<i64>(), parts[1].parse::<i64>(), parts[2].parse::<i64>(),
+            parts[3].parse::<i64>(), parts[4].parse::<i64>(), parts[5].parse::<f64>(),
+        ) {
+            let days = (y - 1970) * 365 + (m - 1) * 30 + (d - 1) as i64;
+            let ts = days as f64 * 86400.0 + h as f64 * 3600.0 + min as f64 * 60.0 + s;
+            return Ok(Value::Float(ts));
+        }
+    }
+    Err(format!("time_parse: cannot parse '{}'", text))
+}
+
+fn uuid_v4() -> String {
+    let r = || random_next_u64();
+    let a = r();
+    let b = r();
+    format!(
+        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+        (a >> 32) as u32,
+        ((a >> 16) & 0xFFFF) as u16,
+        (a & 0xFFF) as u16,
+        (0x8000 | ((b >> 48) & 0x3FFF)) as u16,
+        (b & 0xFFFF_FFFF_FFFF) as u64
+    )
+}
+
+fn base64_encode(input: &str) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        let b1 = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+        let b2 = if i + 2 < bytes.len() { bytes[i + 2] } else { 0 };
+        let triple = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        out.push(if i + 1 < bytes.len() { CHARS[((triple >> 6) & 0x3F) as usize] as char } else { '=' });
+        out.push(if i + 2 < bytes.len() { CHARS[(triple & 0x3F) as usize] as char } else { '=' });
+        i += 3;
+    }
+    out
+}
+
+fn base64_decode(input: &str) -> Result<String, String> {
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for c in input.chars() {
+        if c == '=' { break; }
+        let val = match c {
+            'A'..='Z' => c as u8 - b'A',
+            'a'..='z' => c as u8 - b'a' + 26,
+            '0'..='9' => c as u8 - b'0' + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => return Err(format!("base64_decode: invalid character '{}'", c)),
+        } as u32;
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    String::from_utf8(out).map_err(|e| format!("base64_decode: invalid UTF-8: {e}"))
 }
 
 fn time_sleep_builtin(seconds: f64) -> Result<Value, String> {
@@ -5145,6 +5695,23 @@ enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Comprehension {
+        kind: String,      // "list" or "dict"
+        result_expr: Box<Expr>,
+        key_expr: Option<Box<Expr>>,   // for dict comprehensions
+        item_name: String,
+        iterable: Box<Expr>,
+        condition: Option<Box<Expr>>,  // optional "if" filter
+    },
+    Lambda {
+        params: Vec<String>,
+        body: Box<Expr>,
+    },
+    Ternary {
+        cond: Box<Expr>,
+        true_expr: Box<Expr>,
+        false_expr: Box<Expr>,
+    },
 }
 
 // Preprocess an expression string: convert space-separated function calls
@@ -5271,6 +5838,10 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     _ => Err(format!("Unary '+' expects a number but got {}: {}", v.type_name(), v)),
                 },
                 "not" => Ok(Value::Bool(!v.to_bool())),
+                "~" => match v {
+                    Value::Int(i) => Ok(Value::Int(!i)),
+                    _ => Err(format!("Bitwise NOT '~' expects int, got {}: {}", v.type_name(), v)),
+                },
                 _ => Err(format!("Unsupported unary operator '{op}'")),
             }
         }
@@ -5278,6 +5849,69 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             let a = eval_ast(lhs, ctx)?;
             let b = eval_ast(rhs, ctx)?;
             eval_binary(op, a, b)
+        }
+        Expr::Comprehension { kind, result_expr, key_expr, item_name, iterable, condition } => {
+            let iter = eval_ast(iterable, ctx)?;
+            let items = match iter {
+                Value::List(v) => v,
+                _ => return Err("Comprehension iterable must be a list".to_string()),
+            };
+            match kind.as_str() {
+                "list" => {
+                    let mut out = Vec::new();
+                    for item in &items {
+                        ctx.push_frame();
+                        ctx.define_local(item_name, item.clone());
+                        let include = if let Some(cond) = condition {
+                            eval_ast(cond, ctx)?.to_bool()
+                        } else {
+                            true
+                        };
+                        if include {
+                            out.push(eval_ast(result_expr, ctx)?);
+                        }
+                        ctx.pop_frame();
+                    }
+                    Ok(Value::List(out))
+                }
+                "dict" => {
+                    let mut out = HashMap::new();
+                    for item in &items {
+                        ctx.push_frame();
+                        ctx.define_local(item_name, item.clone());
+                        let include = if let Some(cond) = condition {
+                            eval_ast(cond, ctx)?.to_bool()
+                        } else {
+                            true
+                        };
+                        if include {
+                            let k = eval_ast(key_expr.as_ref().unwrap(), ctx)?;
+                            let v = eval_ast(result_expr, ctx)?;
+                            out.insert(k.to_string(), v);
+                        }
+                        ctx.pop_frame();
+                    }
+                    Ok(Value::Dict(out))
+                }
+                _ => Err("Unknown comprehension kind".to_string()),
+            }
+        }
+        Expr::Lambda { params, body } => {
+            // Lambda creates a callable dict with captured parameter names and body expression
+            let mut lambda_obj = HashMap::new();
+            lambda_obj.insert("__lambda__".to_string(), Value::Bool(true));
+            lambda_obj.insert("__lambda_params__".to_string(), Value::List(params.iter().map(|p| Value::Str(p.clone())).collect()));
+            lambda_obj.insert("__lambda_body__".to_string(), Value::Str(format!("{:?}", body)));
+            // For now, store as dict representation — full callable lambda needs runtime closure capture
+            Ok(Value::Dict(lambda_obj))
+        }
+        Expr::Ternary { cond, true_expr, false_expr } => {
+            let cond_val = eval_ast(cond, ctx)?;
+            if cond_val.to_bool() {
+                eval_ast(true_expr, ctx)
+            } else {
+                eval_ast(false_expr, ctx)
+            }
         }
     }
 }
@@ -5642,8 +6276,15 @@ fn eval_binary(op: &str, a: Value, b: Value) -> Result<Value, String> {
         "<=" => cmp_bin(a, b, |x, y| x <= y),
         "in" => Ok(Value::Bool(contains_value(&b, &a)?)),
         "not in" => Ok(Value::Bool(!contains_value(&b, &a)?)),
+        "is" => Ok(Value::Bool(is_identity_equal(&a, &b))),
+        "is not" => Ok(Value::Bool(!is_identity_equal(&a, &b))),
         "and" => Ok(Value::Bool(a.to_bool() && b.to_bool())),
         "or" => Ok(Value::Bool(a.to_bool() || b.to_bool())),
+        "|" => bitwise_int_bin(a, b, |x, y| x | y),
+        "&" => bitwise_int_bin(a, b, |x, y| x & y),
+        "^" => bitwise_int_bin(a, b, |x, y| x ^ y),
+        "<<" => bitwise_int_bin(a, b, |x, y| x << y),
+        ">>" => bitwise_int_bin(a, b, |x, y| x >> y),
         _ => Err(format!("Unsupported operator '{}' for {} and {}", op, a.type_name(), b.type_name())),
     }
 }
@@ -5694,6 +6335,18 @@ fn cmp_bin(a: Value, b: Value, op: fn(f64, f64) -> bool) -> Result<Value, String
     Ok(Value::Bool(op(x, y)))
 }
 
+fn bitwise_int_bin(a: Value, b: Value, op: fn(i64, i64) -> i64) -> Result<Value, String> {
+    let x = match a {
+        Value::Int(v) => v,
+        _ => return Err(format!("Expected int but got {}: {}", a.type_name(), a)),
+    };
+    let y = match b {
+        Value::Int(v) => v,
+        _ => return Err(format!("Expected int but got {}: {}", b.type_name(), b)),
+    };
+    Ok(Value::Int(op(x, y)))
+}
+
 fn eq_values(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x == y,
@@ -5718,6 +6371,30 @@ fn eq_values(a: &Value, b: &Value) -> bool {
         (Value::Module(x), Value::Module(y)) => Rc::ptr_eq(x, y),
         (Value::Empty, Value::Empty) => true,
         _ => false,
+    }
+}
+
+fn is_identity_equal(a: &Value, b: &Value) -> bool {
+    // Identity comparison: stricter than equality — checks same type + same value
+    // For modules, uses pointer equality
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Float(x), Value::Float(y)) => (x - y).abs() < f64::EPSILON,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Func(x), Value::Func(y)) => x == y,
+        (Value::Module(x), Value::Module(y)) => Rc::ptr_eq(x, y),
+        (Value::Empty, Value::Empty) => true,
+        (Value::Object { class_name: cn1, .. }, Value::Object { class_name: cn2, .. }) => {
+            // Object identity: same class AND same field values
+            cn1 == cn2 && eq_values(a, b)
+        }
+        (Value::List(_), Value::List(_)) | (Value::Dict(_), Value::Dict(_)) => {
+            // Collections: identity means same reference (pointer equality), but since
+            // we don't track references, fall back to structural equality
+            eq_values(a, b)
+        }
+        _ => false, // different types are never identity-equal
     }
 }
 
@@ -5786,7 +6463,7 @@ impl<'a> Lexer<'a> {
                 None
             };
             if let Some(sym) = two {
-                if ["==", "!=", ">=", "<="].contains(&sym) {
+                if ["==", "!=", ">=", "<=", "<<", ">>"].contains(&sym) {
                     out.push(Token::Sym(sym.to_string()));
                     self.i += 2;
                     continue;
@@ -5795,6 +6472,7 @@ impl<'a> Lexer<'a> {
 
             if [
                 "+", "-", "*", "/", "%", "(", ")", "[", "]", "{", "}", ",", ".", ":", ">", "<",
+                "&", "|", "^", "~", "!",
             ]
             .contains(&&self.src[self.i..self.i + 1])
             {
@@ -5940,6 +6618,18 @@ impl ExprParser {
                     lhs: Box::new(node),
                     rhs: Box::new(rhs),
                 };
+            } else if self.match_ident("if") {
+                // Ternary: true_expr if cond else false_expr
+                let cond = self.parse_or()?;
+                if !self.match_ident("else") {
+                    return Err("Expected 'else' in ternary expression".to_string());
+                }
+                let false_expr = self.parse_or()?;
+                node = Expr::Ternary {
+                    cond: Box::new(cond),
+                    true_expr: Box::new(node),
+                    false_expr: Box::new(false_expr),
+                };
             } else {
                 break;
             }
@@ -5965,11 +6655,16 @@ impl ExprParser {
     }
 
     fn parse_cmp(&mut self) -> Result<Expr, String> {
-        let mut node = self.parse_add()?;
+        let mut node = self.parse_bit_or()?;
         loop {
             let op = if self.peek_ident("not") && self.peek_ident_n(1, "in") {
                 self.i += 2;
                 "not in".to_string()
+            } else if self.peek_ident("is") && self.peek_ident_n(1, "not") {
+                self.i += 2;
+                "is not".to_string()
+            } else if self.match_ident("is") {
+                "is".to_string()
             } else if self.match_ident("in") {
                 "in".to_string()
             } else {
@@ -5983,11 +6678,136 @@ impl ExprParser {
                 }
             };
             let rhs = self.parse_add()?;
+            // Check if next token is another comparison (chained: a < b < c)
+            let next_is_cmp = match self.peek() {
+                Some(Token::Sym(s)) if ["==", "!=", ">", ">=", "<", "<="].contains(&s.as_str()) => true,
+                _ => self.peek_ident("in") || self.peek_ident("is")
+                    || (self.peek_ident("not") && self.peek_ident_n(1, "in")),
+            };
+            if next_is_cmp {
+                // a < b < c  →  (a < b) AND (b < c)
+                // Save (a < b) as partial, then continue with b and next operator
+                let lhs_partial = Expr::Binary {
+                    op: op.clone(),
+                    lhs: Box::new(node.clone()),
+                    rhs: Box::new(rhs.clone()),
+                };
+                // Parse remaining chain: b < c < d ...
+                let mut chain_parts = vec![lhs_partial];
+                let mut middle = rhs;
+                loop {
+                    let next_op = if self.peek_ident("not") && self.peek_ident_n(1, "in") {
+                        self.i += 2;
+                        "not in".to_string()
+                    } else if self.peek_ident("is") && self.peek_ident_n(1, "not") {
+                        self.i += 2;
+                        "is not".to_string()
+                    } else if self.match_ident("is") {
+                        "is".to_string()
+                    } else if self.match_ident("in") {
+                        "in".to_string()
+                    } else {
+                        match self.peek() {
+                            Some(Token::Sym(s)) if ["==", "!=", ">", ">=", "<", "<="].contains(&s.as_str()) => {
+                                let op = s.clone();
+                                let _ = self.next();
+                                op
+                            }
+                            _ => break,
+                        }
+                    };
+                    let next_rhs = self.parse_add()?;
+                    chain_parts.push(Expr::Binary {
+                        op: next_op.clone(),
+                        lhs: Box::new(middle.clone()),
+                        rhs: Box::new(next_rhs.clone()),
+                    });
+                    middle = next_rhs;
+                    // Check for further chaining
+                    let more = match self.peek() {
+                        Some(Token::Sym(s)) if ["==", "!=", ">", ">=", "<", "<="].contains(&s.as_str()) => true,
+                        _ => self.peek_ident("in") || self.peek_ident("is")
+                            || (self.peek_ident("not") && self.peek_ident_n(1, "in")),
+                    };
+                    if !more { break; }
+                }
+                // Combine chain_parts with AND
+                let mut combined = chain_parts.remove(0);
+                for part in chain_parts {
+                    combined = Expr::Binary {
+                        op: "and".to_string(),
+                        lhs: Box::new(combined),
+                        rhs: Box::new(part),
+                    };
+                }
+                return Ok(combined);
+            }
             node = Expr::Binary {
                 op,
                 lhs: Box::new(node),
                 rhs: Box::new(rhs),
             };
+        }
+        Ok(node)
+    }
+
+    fn parse_bit_or(&mut self) -> Result<Expr, String> {
+        let mut node = self.parse_bit_xor()?;
+        loop {
+            match self.peek() {
+                Some(Token::Sym(s)) if s == "|" => {
+                    let _ = self.next();
+                    let rhs = self.parse_bit_xor()?;
+                    node = Expr::Binary { op: "|".to_string(), lhs: Box::new(node), rhs: Box::new(rhs) };
+                }
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_bit_xor(&mut self) -> Result<Expr, String> {
+        let mut node = self.parse_bit_and()?;
+        loop {
+            match self.peek() {
+                Some(Token::Sym(s)) if s == "^" => {
+                    let _ = self.next();
+                    let rhs = self.parse_bit_and()?;
+                    node = Expr::Binary { op: "^".to_string(), lhs: Box::new(node), rhs: Box::new(rhs) };
+                }
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_bit_and(&mut self) -> Result<Expr, String> {
+        let mut node = self.parse_shift()?;
+        loop {
+            match self.peek() {
+                Some(Token::Sym(s)) if s == "&" => {
+                    let _ = self.next();
+                    let rhs = self.parse_shift()?;
+                    node = Expr::Binary { op: "&".to_string(), lhs: Box::new(node), rhs: Box::new(rhs) };
+                }
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_shift(&mut self) -> Result<Expr, String> {
+        let mut node = self.parse_add()?;
+        loop {
+            match self.peek() {
+                Some(Token::Sym(s)) if s == "<<" || s == ">>" => {
+                    let op = s.clone();
+                    let _ = self.next();
+                    let rhs = self.parse_add()?;
+                    node = Expr::Binary { op, lhs: Box::new(node), rhs: Box::new(rhs) };
+                }
+                _ => break,
+            }
         }
         Ok(node)
     }
@@ -6030,7 +6850,7 @@ impl ExprParser {
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
         if let Some(Token::Sym(s)) = self.peek() {
-            if s == "+" || s == "-" {
+            if s == "+" || s == "-" || s == "~" {
                 let op = s.clone();
                 let _ = self.next();
                 let rhs = self.parse_unary()?;
@@ -6131,13 +6951,37 @@ impl ExprParser {
             }
             Token::String(s) => Ok(Expr::Str(s)),
             Token::Ident(name) => {
+                if name == "fn" {
+                    // Lambda: fn(param1, param2): expression  or  fn param: expression
+                    let params: Vec<String>;
+                    if self.match_sym("(") {
+                        params = self.parse_param_list()?;
+                        self.expect_sym(")")?;
+                    } else {
+                        // Single param: fn param: expression
+                        let param = match self.next() {
+                            Some(Token::Ident(p)) => p,
+                            tok => return Err(format!("Expected parameter name in lambda, got {:?}", tok)),
+                        };
+                        params = vec![param];
+                    }
+                    // Expect colon before body
+                    if !self.match_sym(":") {
+                        return Err("Expected ':' after lambda params".to_string());
+                    }
+                    let body = self.parse_expr()?;
+                    return Ok(Expr::Lambda {
+                        params,
+                        body: Box::new(body),
+                    });
+                }
                 if name == "TRUE" || name == "YES" || name == "true" {
                     return Ok(Expr::Bool(true));
                 }
                 if name == "FALSE" || name == "NO" || name == "false" {
                     return Ok(Expr::Bool(false));
                 }
-                if name == "empty" {
+                if name == "empty" || name == "null" {
                     return Ok(Expr::Empty);
                 }
 
@@ -6159,13 +7003,42 @@ impl ExprParser {
                 Ok(inner)
             }
             Token::Sym(s) if s == "[" => {
-                let mut items = vec![];
                 if self.match_sym("]") {
-                    return Ok(Expr::List(items));
+                    return Ok(Expr::List(vec![]));
                 }
+                let first = self.parse_expr()?;
+
+                // Check for list comprehension: [expr for item in iterable if cond]
+                if self.match_ident("for") {
+                    let item_name = match self.next() {
+                        Some(Token::Ident(name)) => name,
+                        tok => return Err(format!("Expected item variable in comprehension, got {:?}", tok)),
+                    };
+                    if !self.match_ident("in") {
+                        return Err("Expected 'in' in comprehension".to_string());
+                    }
+                    let iterable = self.parse_expr()?;
+                    let condition = if self.match_ident("if") {
+                        Some(self.parse_expr()?)
+                    } else {
+                        None
+                    };
+                    self.expect_sym("]")?;
+                    return Ok(Expr::Comprehension {
+                        kind: "list".to_string(),
+                        result_expr: Box::new(first),
+                        key_expr: None,
+                        item_name,
+                        iterable: Box::new(iterable),
+                        condition: condition.map(Box::new),
+                    });
+                }
+
+                // Normal list
+                let mut items = vec![first];
                 loop {
-                    items.push(self.parse_expr()?);
                     if self.match_sym(",") {
+                        items.push(self.parse_expr()?);
                         continue;
                     }
                     self.expect_sym("]")?;
@@ -6174,16 +7047,55 @@ impl ExprParser {
                 Ok(Expr::List(items))
             }
             Token::Sym(s) if s == "{" => {
-                let mut items = vec![];
                 if self.match_sym("}") {
-                    return Ok(Expr::Dict(items));
+                    return Ok(Expr::Dict(vec![]));
                 }
+                let first_key = self.parse_expr()?;
+
+                // Check for dict comprehension: {key: value for item in iterable if cond}
+                if self.peek_ident("for") {
+                    // Need to have parsed key:value already
+                    if !self.match_sym(":") {
+                        return Err("Expected ':' in dict comprehension".to_string());
+                    }
+                    let first_val = self.parse_expr()?;
+                    if !self.match_ident("for") {
+                        return Err("Expected 'for' after key:value in dict comprehension".to_string());
+                    }
+                    let item_name = match self.next() {
+                        Some(Token::Ident(name)) => name,
+                        tok => return Err(format!("Expected item variable in comprehension, got {:?}", tok)),
+                    };
+                    if !self.match_ident("in") {
+                        return Err("Expected 'in' in dict comprehension".to_string());
+                    }
+                    let iterable = self.parse_expr()?;
+                    let condition = if self.match_ident("if") {
+                        Some(self.parse_expr()?)
+                    } else {
+                        None
+                    };
+                    self.expect_sym("}")?;
+                    return Ok(Expr::Comprehension {
+                        kind: "dict".to_string(),
+                        result_expr: Box::new(first_val),
+                        key_expr: Some(Box::new(first_key)),
+                        item_name,
+                        iterable: Box::new(iterable),
+                        condition: condition.map(Box::new),
+                    });
+                }
+
+                // Normal dict
+                self.expect_sym(":")?;
+                let first_val = self.parse_expr()?;
+                let mut items = vec![(first_key, first_val)];
                 loop {
-                    let key = self.parse_expr()?;
-                    self.expect_sym(":")?;
-                    let value = self.parse_expr()?;
-                    items.push((key, value));
                     if self.match_sym(",") {
+                        let key = self.parse_expr()?;
+                        self.expect_sym(":")?;
+                        let value = self.parse_expr()?;
+                        items.push((key, value));
                         continue;
                     }
                     self.expect_sym("}")?;
@@ -6193,6 +7105,24 @@ impl ExprParser {
             }
             _ => Err(format!("Unexpected {} in expression", describe_token(&tok))),
         }
+    }
+
+    fn parse_param_list(&mut self) -> Result<Vec<String>, String> {
+        let mut params = Vec::new();
+        if self.peek_sym(")") {
+            return Ok(params);
+        }
+        loop {
+            match self.next() {
+                Some(Token::Ident(name)) => params.push(name),
+                tok => return Err(format!("Expected parameter name, got {:?}", tok)),
+            }
+            if self.match_sym(",") {
+                continue;
+            }
+            break;
+        }
+        Ok(params)
     }
 
     fn match_sym(&mut self, expected: &str) -> bool {
@@ -6408,17 +7338,10 @@ impl Parser {
             });
         }
 
-        // Backward compat: also support say: (Indent-1 style)
-        if let Some(rest) = text.strip_prefix("say:") {
-            return Ok(Stmt::Say {
-                line: line.line_no,
-                expr: rest.trim().to_string(),
-            });
-        }
+        // Backward compat: Indent-1 say: removed in 1.2
 
         if let Some(rest) = text
             .strip_prefix("give ")
-            .or_else(|| text.strip_prefix("Give "))
         {
             let expr = rest.trim().to_string();
             // If it looks like a call with space-separated args, convert to parenthesized form
@@ -6450,19 +7373,9 @@ impl Parser {
             });
         }
 
-        // Backward compat: also support Give: (Indent-1 style)
-        if let Some(rest) = text.strip_prefix("Give:") {
-            return Ok(Stmt::Give {
-                line: line.line_no,
-                expr: rest.trim().to_string(),
-            });
-        }
-
         if let Some(rest) = text
             .strip_prefix("return ")
-            .or_else(|| text.strip_prefix("Return "))
             .or_else(|| text.strip_prefix("return:"))
-            .or_else(|| text.strip_prefix("Return:"))
         {
             return Ok(Stmt::Give {
                 line: line.line_no,
@@ -6614,114 +7527,12 @@ impl Parser {
             });
         }
 
-        // Backward compat: Indent-1 def.var: syntax
-        if let Some(rest) = text.strip_prefix("def.var:") {
-            let name = rest.trim().to_string();
-            if name.is_empty() {
-                return Err(format!("Variable name missing at line {}", line.line_no));
-            }
-            let t_line = self
-                .peek()
-                .ok_or_else(|| format!("Expected a type after line {}. Valid types: string, int, float, boolean, list, dict, dynamic, color", line.line_no))?
-                .clone();
-            if t_line.indent <= line.indent {
-                return Err(format!("Expected a type after line {}. Valid types: string, int, float, boolean, list, dict, dynamic, color", line.line_no));
-            }
-            let _ = self.consume()?;
-            let v_line = self
-                .peek()
-                .ok_or_else(|| format!("Expected variable value after line {}", t_line.line_no))?
-                .clone();
-            if v_line.indent != t_line.indent {
-                return Err(format!("Expected variable value after line {}", t_line.line_no));
-            }
-            let _ = self.consume()?;
-
-            let mut ty = t_line.text;
-            let mut value = if v_line.text.ends_with(';') {
-                match self.parse_call_with_args(v_line.clone(), t_line.indent)? {
-                    Stmt::Call { callee, args, .. } => ValueSource::Call { callee, args },
-                    _ => unreachable!("parse_call_with_args returned non-call statement"),
-                }
-            } else {
-                ValueSource::Expr(v_line.text)
-            };
-
-            let ask_subtype = ty
-                .strip_prefix("ask:")
-                .or_else(|| ty.strip_prefix("ask;"))
-                .map(|raw| raw.trim().to_string());
-
-            if let Some(subtype) = ask_subtype {
-                if subtype.is_empty() {
-                    return Err(format!(
-                        "ask requires a subtype at line {} (for example: ask: string)",
-                        t_line.line_no
-                    ));
-                }
-                ty = subtype.clone();
-                match &mut value {
-                    ValueSource::Expr(expr) => {
-                        let prompt_expr = expr.clone();
-                        *expr = format!(
-                            "ask(\"{}\", {})",
-                            subtype.to_ascii_lowercase(),
-                            prompt_expr
-                        );
-                    }
-                    ValueSource::Call { .. } => {
-                        return Err(format!(
-                            "ask declarations require an expression prompt at line {}",
-                            v_line.line_no
-                        ));
-                    }
-                }
-            }
-
-            // v2 alias: type declaration means "store type name as string".
-            if ty.eq_ignore_ascii_case("type") {
-                ty = "string".to_string();
-                match &mut value {
-                    ValueSource::Expr(expr) => {
-                        let original = expr.clone();
-                        *expr = format!("typeOf({})", original);
-                    }
-                    ValueSource::Call { .. } => {
-                        return Err(format!(
-                            "type declarations require an expression value at line {}",
-                            v_line.line_no
-                        ));
-                    }
-                }
-            }
-
-            // v2 alias: length declaration maps to len(...).
-            if ty.eq_ignore_ascii_case("length") {
-                ty = "int".to_string();
-                match &mut value {
-                    ValueSource::Expr(expr) => {
-                        let original = expr.clone();
-                        *expr = format!("len({})", original);
-                    }
-                    ValueSource::Call { .. } => {
-                        return Err(format!(
-                            "length declarations require an expression value at line {}",
-                            v_line.line_no
-                        ));
-                    }
-                }
-            }
-
-            return Ok(Stmt::DefVar {
-                line: line.line_no,
-                name,
-                ty,
-                value,
-            });
-        }
+        // Backward compat: Indent-1 def.var: — REMOVED in 1.2
 
         // Indent-2: fun name param1 param2 ...  (inline params)
         // Also: fun name  (with indented param lines)
+        // Also: fun name param1 param2 as returnType
+        // Also: fun name param = default_value (default params)
         if let Some(rest) = text.strip_prefix("fun ") {
             let rest = rest.trim();
             if rest.is_empty() {
@@ -6729,21 +7540,55 @@ impl Parser {
             }
             let parts: Vec<&str> = rest.split_whitespace().collect();
             let name = parts[0].to_string();
-            let inline_params: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+            let mut tail: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+
+            // Collapse `=` default values: "param", "=", "value" → param with default
+            let mut i = 0;
+            while i + 1 < tail.len() {
+                if tail[i + 1] == "=" {
+                    // Next token after = is the default value
+                    let param_name = tail[i].clone();
+                    let default_val = if i + 2 < tail.len() { tail[i + 2].clone() } else { "empty".to_string() };
+                    tail[i] = format!("{}={}", param_name, default_val);
+                    tail.remove(i + 1); // remove =
+                    if i + 1 < tail.len() { tail.remove(i + 1); } // remove value
+                }
+                i += 1;
+            }
+
+            // Detect "as type" suffix for return type
+            let (inline_params, return_type) = if let Some(as_pos) = tail.iter().position(|s| s == "as") {
+                if as_pos + 1 < tail.len() {
+                    let params = tail[..as_pos].to_vec();
+                    let ret_ty = tail[as_pos + 1..].join(" ");
+                    (params, Some(ret_ty))
+                } else {
+                    return Err(format!("Expected return type after 'as' at line {}", line.line_no));
+                }
+            } else {
+                (tail, None)
+            };
 
             // If there are inline params, body follows immediately
             if !inline_params.is_empty() {
                 let params: Vec<FunctionParam> = inline_params
                     .into_iter()
-                    .map(|n| FunctionParam { name: n, ty: None })
+                    .map(|n| {
+                        if let Some((pname, default)) = n.split_once('=') {
+                            FunctionParam { name: pname.to_string(), ty: None, default_value: Some(default.to_string()) }
+                        } else {
+                            FunctionParam { name: n, ty: None, default_value: None }
+                        }
+                    })
                     .collect();
                 let body = self.parse_nested_block(line.indent)?;
                 return Ok(Stmt::DefFun {
                     line: line.line_no,
                     name,
                     params,
-                    return_type: None,
+                    return_type,
                     body,
+                    is_generator: false,
                 });
             }
 
@@ -6756,8 +7601,9 @@ impl Parser {
                         line: line.line_no,
                         name,
                         params: vec![],
-                        return_type: None,
+                        return_type,
                         body: vec![],
+                        is_generator: false,
                     });
                 }
             };
@@ -6780,6 +7626,7 @@ impl Parser {
                 params.push(FunctionParam {
                     name: param_line.text.clone(),
                     ty: None,
+                    default_value: None,
                 });
             }
 
@@ -6802,8 +7649,9 @@ impl Parser {
                 line: line.line_no,
                 name,
                 params,
-                return_type: None,
+                return_type,
                 body,
+                is_generator: false,
             });
         }
 
@@ -6856,7 +7704,7 @@ impl Parser {
                     if let Stmt::DefVar { name: vname, ty, .. } = &stmt {
                         fields.push(ClassField {
                             name: vname.clone(),
-                            ty: ty.clone(),
+                            _ty: ty.clone(),
                         });
                     } else {
                         return Err(format!(
@@ -6883,47 +7731,7 @@ impl Parser {
             });
         }
 
-        // Backward compat: Indent-1 def.fun: syntax
-        if let Some(rest) = text.strip_prefix("def.fun:") {
-            let sig = rest.trim();
-            let (name, params) = parse_function_signature(sig)
-                .map_err(|e| format!("{} at line {}", e, line.line_no))?;
-            if name.is_empty() {
-                return Err(format!("Function name missing at line {}", line.line_no));
-            }
-            let body = self.parse_nested_block(line.indent)?;
-            return Ok(Stmt::DefFun {
-                line: line.line_no,
-                name,
-                params,
-                return_type: parse_return_type(sig),
-                body,
-            });
-        }
-
-        if let Some(rest) = text.strip_prefix("makeType:")
-            .or_else(|| text.strip_prefix("maketype:"))
-            .or_else(|| text.strip_prefix("MakeType:")) {
-            let Some((target_type, name)) = rest.trim().split_once(" of ") else {
-                return Err(format!(
-                    "makeType requires 'type of variable' at line {}",
-                    line.line_no
-                ));
-            };
-            let target_type = target_type.trim().to_string();
-            let name = name.trim().to_string();
-            if target_type.is_empty() || name.is_empty() {
-                return Err(format!(
-                    "makeType requires 'type of variable' at line {}",
-                    line.line_no
-                ));
-            }
-            return Ok(Stmt::MakeType {
-                line: line.line_no,
-                target_type,
-                name,
-            });
-        }
+        // Indent-1 def.fun: — REMOVED in 1.2
 
         // Indent-2: if condition (no colon)
         if text.starts_with("if ") && !text.ends_with(':') {
@@ -6955,15 +7763,69 @@ impl Parser {
             return self.parse_do_chain(line);
         }
 
-        // Indent-2: repeat keyword
+        // Indent-2: open "file" as handle:  or  open "file" for read as handle:
+        if text.starts_with("open ") || text.starts_with("Open ") {
+            return self.parse_open(line);
+        }
+
+        // Indent-2: repeat keyword + for alias
         if text.starts_with("repeat") || text.starts_with("Repeat") {
             return self.parse_repeat(line);
+        }
+
+        // Indent-2: for x in list:  (alias for repeat for x in list)
+        if text.starts_with("for ") {
+            let for_rest = &text[4..]; // strip "for "
+            // Build a synthetic "repeat for ..." line and parse it
+            let synth_line = SourceLine {
+                line_no: line.line_no,
+                indent: line.indent,
+                text: format!("repeat for {}", for_rest),
+            };
+            return self.parse_repeat(synth_line);
         }
 
         if let Some(rest) = text.strip_prefix("flag:").or_else(|| text.strip_prefix("Flag:")) {
             return Ok(Stmt::Flag {
                 line: line.line_no,
                 expr: rest.trim().to_string(),
+            });
+        }
+
+        // Indent-2: yield expression
+        if let Some(rest) = text.strip_prefix("yield ").or_else(|| text.strip_prefix("Yield ")) {
+            return Ok(Stmt::Yield {
+                line: line.line_no,
+                expr: rest.trim().to_string(),
+            });
+        }
+        if text == "yield" || text == "Yield" {
+            return Ok(Stmt::Yield {
+                line: line.line_no,
+                expr: "empty".to_string(),
+            });
+        }
+
+        // Decorator: @name or @name(args) before fun/class
+        if text.starts_with("@") && text.len() > 1 {
+            let decorator_text = text[1..].to_string();
+            // Parse the decorator name and optional args
+            let (dec_name, dec_args) = if let Some((n, a)) = decorator_text.split_once("(") {
+                let args_text = a.trim_end_matches(")");
+                let args = if args_text.is_empty() { vec![] } else {
+                    parse_inline_args(args_text)
+                };
+                (n.to_string(), args)
+            } else {
+                (decorator_text, vec![])
+            };
+            // Parse the next statement as the decorated target
+            let target = self.parse_stmt(expected_indent)?;
+            return Ok(Stmt::Decorator {
+                line: line.line_no,
+                name: dec_name,
+                args: dec_args,
+                target: Box::new(target),
             });
         }
 
@@ -6987,9 +7849,19 @@ impl Parser {
             return Ok(Stmt::Reset { line: line.line_no });
         }
 
-        // Indent-2: get keyword for imports
+        // Indent-2: get/import keyword for imports
         if text.starts_with("get ") || text.starts_with("Get ") || text.starts_with("get:") || text.starts_with("Get:") {
             return parse_import(&line);
+        }
+        // import alias for get
+        if text.starts_with("import ") {
+            let import_rest = &text[7..]; // strip "import "
+            let synth_line = SourceLine {
+                line_no: line.line_no,
+                indent: line.indent,
+                text: format!("get {}", import_rest),
+            };
+            return parse_import(&synth_line);
         }
 
         if let Some((target, expr)) =
@@ -7304,6 +8176,48 @@ impl Parser {
         })
     }
 
+    fn parse_open(&mut self, line: SourceLine) -> Result<Stmt, String> {
+        // Syntax: open "file.txt" as handle:
+        //         open "file.txt" for read as handle:
+        //         open "file.txt" for write as handle:
+        //         open "file.txt" for append as handle:
+        let text = &line.text;
+        let rest = text
+            .strip_prefix("open ")
+            .or_else(|| text.strip_prefix("Open "))
+            .ok_or_else(|| format!("Invalid open syntax at line {}", line.line_no))?
+            .trim();
+
+        // Parse: [for mode] as binding
+        let (path_expr, mode, binding) = if let Some((before_as, after_as)) = rest.split_once(" as ") {
+            let binding = after_as.trim().trim_end_matches(':').trim();
+            let binding = if binding.is_empty() { None } else { Some(binding.to_string()) };
+            // Check if there's a "for mode" in the path expression
+            if let Some((path, mode_str)) = before_as.split_once(" for ") {
+                let mode = match mode_str.trim().to_lowercase().as_str() {
+                    "read" | "r" => "read".to_string(),
+                    "write" | "w" => "write".to_string(),
+                    "append" | "a" => "append".to_string(),
+                    other => return Err(format!("Unknown open mode '{}' at line {}. Use read, write, or append.", other, line.line_no)),
+                };
+                (path.trim().to_string(), mode, binding)
+            } else {
+                (before_as.trim().to_string(), "read".to_string(), binding)
+            }
+        } else {
+            return Err(format!("Expected 'as' binding in open statement at line {}. Example: open \"file.txt\" as f:", line.line_no));
+        };
+
+        let body = self.parse_nested_block(line.indent)?;
+        Ok(Stmt::Open {
+            line: line.line_no,
+            mode,
+            path_expr,
+            binding,
+            body,
+        })
+    }
+
     fn parse_repeat(&mut self, line: SourceLine) -> Result<Stmt, String> {
         let body = self.parse_nested_block(line.indent)?;
         let text = &line.text;
@@ -7543,8 +8457,10 @@ fn is_keyword(s: &str) -> bool {
             | "if" | "If"
             | "or" | "Or"
             | "otherwise" | "Otherwise"
-            | "repeat" | "Repeat"
+            | "repeat" | "Repeat" | "for" | "For"
             | "stop" | "STOP" | "break"
+            | "next" | "NEXT" | "continue"
+            | "get" | "Get" | "import" | "Import"
             | "next" | "NEXT" | "continue"
             | "reset" | "RESET" | "restart"
             | "match" | "Match"
@@ -7553,6 +8469,8 @@ fn is_keyword(s: &str) -> bool {
             | "lastly" | "Lastly"
             | "makeType" | "maketype"
             | "flag" | "Flag"
+            | "yield" | "Yield"
+            | "open" | "Open"
             | "is"
             | "ask"
             | "and" | "not" | "in"
@@ -7744,7 +8662,7 @@ fn find_word_end(s: &str) -> usize {
 fn is_literal(s: &str) -> bool {
     // Check if string is a literal value (number, string, bool, list, dict)
     if s.is_empty() { return true; }
-    if s == "empty" || s == "TRUE" || s == "FALSE" || s == "YES" || s == "NO" || s == "true" || s == "false" { return true; }
+    if s == "empty" || s == "null" || s == "TRUE" || s == "FALSE" || s == "YES" || s == "NO" || s == "true" || s == "false" { return true; }
     if s.starts_with('"') || s.starts_with('\'') { return true; }
     if s.starts_with('[') || s.starts_with('{') { return true; }
     // Check if it's a number
@@ -7941,6 +8859,7 @@ fn parse_function_signature(raw: &str) -> Result<(String, Vec<FunctionParam>), S
     let trimmed = raw
         .split_once("->")
         .map(|(left, _)| left.trim())
+        .or_else(|| raw.split_once(" as ").map(|(left, _)| left.trim()))
         .unwrap_or_else(|| raw.trim());
 
     if trimmed.is_empty() {
@@ -7996,19 +8915,22 @@ fn parse_function_signature(raw: &str) -> Result<(String, Vec<FunctionParam>), S
         if params.iter().any(|x| x.name == name) {
             return Err(format!("Duplicate parameter '{}'", name));
         }
-        params.push(FunctionParam { name, ty });
+        params.push(FunctionParam { name, ty, default_value: None });
     }
 
     Ok((name.to_string(), params))
 }
 
 fn parse_return_type(raw: &str) -> Option<String> {
-    let (_, right) = raw.split_once("->")?;
-    let ty = right.trim();
-    if ty.is_empty() {
-        None
+    // Support both -> type and as type
+    if let Some((_, right)) = raw.split_once("->") {
+        let ty = right.trim();
+        if ty.is_empty() { None } else { Some(ty.to_string()) }
+    } else if let Some((_, right)) = raw.split_once(" as ") {
+        let ty = right.trim();
+        if ty.is_empty() { None } else { Some(ty.to_string()) }
     } else {
-        Some(ty.to_string())
+        None
     }
 }
 
@@ -8549,7 +9471,10 @@ fn touch_lines(stmt: &Stmt) {
         | Stmt::Import { line, .. }
         | Stmt::Call { line, .. }
         | Stmt::BareExpr { line, .. }
-        | Stmt::Flag { line, .. } => {
+        | Stmt::Flag { line, .. }
+        | Stmt::Yield { line, .. }
+        | Stmt::Decorator { line, .. }
+        | Stmt::Open { line, .. } => {
             let _ = *line;
         }
     }

@@ -1,6 +1,34 @@
-# Your Journey with Indent
+# Your Journey with Indent 1.2
+
+> Indent 1.2 adds **default parameters, `for` loops, `import` keyword, `null`, string interpolation, comprehensions, lambdas, regex, and 20+ new builtins** — all with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
+
+---
+
+## What's New in 1.2.0
+
+- **Default parameters**: `fun greet name = "World"` — call with or without args
+- **String interpolation**: `say "Hello %name%"` — variables right in strings
+- **Comprehensions**: `[x * 2 for x in list]`, `{k: v for k, v in pairs}`
+- **Lambda expressions**: `fn(x): x * 2`
+- **Ternary expressions**: `"big" if n > 10 else "small"`
+- **Bitwise operators**: `&`, `|`, `^`, `~`, `<<`, `>>`
+- **Chained comparisons**: `0 < x < 10`
+- **`for` loop alias**: `for item in list` (same as `repeat for item in list`)
+- **`import` keyword**: `import math` (alias for `get math`)
+- **`null` keyword**: alias for `empty`
+- **`open` file context**: `open "file.txt" for read as f:`
+- **`is`/`is not` operators**: `x is null`, `x is not y`
+- **Return type annotation**: `fun add a b as int`
+- **Regex**: `regex_match`, `regex_search`, `regex_findall`, `regex_replace`, `regex_split`
+- **Datetime**: `time_utc()`, `time_format()`, `time_parse()`
+- **UUID**: `uuid()`
+- **Base64**: `base64_encode()`, `base64_decode()`
+- **Hash**: `hash_sha256()`
+- **Path helpers**: `glob()`, `path_join()`, `path_basename()`, `path_dirname()`
+- **Functional**: `map()`, `filter()`
+- **String extras**: `pad_left()`, `pad_right()`, `repeat_str()`
 
 ---
 
