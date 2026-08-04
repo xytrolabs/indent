@@ -9,6 +9,10 @@ DEFAULT_REGISTRY_REF="main"
 DEFAULT_REGISTRY_INDEX_PATH="packages/index.txt"
 DEFAULT_REGISTRY_URL="https://raw.githubusercontent.com/${DEFAULT_REGISTRY_REPO}/${DEFAULT_REGISTRY_REF}/${DEFAULT_REGISTRY_INDEX_PATH}"
 LEGACY_REGISTRY_URL_1="https://raw.githubusercontent.com/xytrolabs/indent/main/aether-release/packages/index.txt"
+# keep the rest safe under `set -u` (they're matched by name only)
+LEGACY_REGISTRY_URL_2="${LEGACY_REGISTRY_URL_2:-}"
+LEGACY_REGISTRY_URL_3="${LEGACY_REGISTRY_URL_3:-}"
+LEGACY_REGISTRY_URL_4="${LEGACY_REGISTRY_URL_4:-}"
 
 AETHERPKG_INDEX="${AETHERPKG_INDEX:-}"
 AIR_REGISTRY_REPO=""
@@ -454,18 +458,22 @@ cmd_publish() {
     printf "# name|source|sha256|description\n" > "$index_file"
   fi
 
-  local dest_pkg="$index_dir/${name}.ath"
+  # preserve the source basename (e.g. discord.ind) so the published
+  # artifact keeps the correct Indent/Aether extension
+  local pkg_base
+  pkg_base="$(basename "$package_file")"
+  local dest_pkg="$index_dir/$pkg_base"
   cp "$package_file" "$dest_pkg"
 
   # Compute SHA256 for package safety
   local pkg_sha256
-  pkg_sha256="$(sha256sum "$package_file" | awk '{print $1}')"
+  pkg_sha256="$(sha256sum "$package_file" | awk '{print $1}') "
 
-  update_index_entry "$index_file" "$name" "./${name}.ath" "$pkg_sha256" "$description"
+  update_index_entry "$index_file" "$name" "./$pkg_base" "$pkg_sha256" "$description"
 
   (
     cd "$registry_dir"
-    git add "$index_path" "$index_rel_dir/${name}.ath"
+    git add "$index_path" "$index_rel_dir/$pkg_base"
     if git diff --cached --quiet; then
       echo "No publish changes detected for package '$name'."
       exit 0

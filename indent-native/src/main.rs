@@ -1497,63 +1497,57 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Rc<Module
     Ok(module)
 }
 
-fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
-    let module_rel = module_name.replace('.', "/");
-    let module_file = format!("{module_rel}.ind");
-    let module_glo = format!("{module_rel}.glo");  // .glo = global/env files
-
-    let mut cursor = Some(current_dir);
-    while let Some(dir) = cursor {
-        // Check file: name.ind
-        let candidate = dir.join(&module_file);
+/// Check a single directory for a module file:
+/// name.ind, name.ath (legacy), name.glo (env/global), name/__init__.ind.
+fn module_in_dir(dir: &Path, module_rel: &str) -> Option<PathBuf> {
+    for ext in [".ind", ".ath", ".glo"] {
+        let candidate = dir.join(format!("{module_rel}{ext}"));
         if candidate.exists() {
             return Some(candidate);
         }
-        // Check file: name.glo (global/environment files)
-        let glo_candidate = dir.join(&module_glo);
-        if glo_candidate.exists() {
-            return Some(glo_candidate);
+    }
+    let init_candidate = dir.join(module_rel).join("__init__.ind");
+    if init_candidate.exists() {
+        return Some(init_candidate);
+    }
+    None
+}
+
+fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
+    let module_rel = module_name.replace('.', "/");
+
+    // Walk up from the script dir: check each dir, then its aether_packages/
+    // (where `air install --local` / `aetherpkg install` place packages).
+    let mut cursor = Some(current_dir);
+    while let Some(dir) = cursor {
+        if let Some(found) = module_in_dir(dir, &module_rel) {
+            return Some(found);
         }
-        // Check package dir: name/__init__.ind (like Python packages)
-        let init_candidate = dir.join(&module_rel).join("__init__.ind");
-        if init_candidate.exists() {
-            return Some(init_candidate);
+        let pkg_dir = dir.join("aether_packages");
+        if let Some(found) = module_in_dir(&pkg_dir, &module_rel) {
+            return Some(found);
         }
         cursor = dir.parent();
     }
 
     if let Ok(raw_paths) = env::var("INDENT_PATH") {
         for base in raw_paths.split(':').map(str::trim).filter(|s| !s.is_empty()) {
-            let candidate = Path::new(base).join(&module_file);
-            if candidate.exists() {
-                return Some(candidate);
-            }
-            let glo_candidate = Path::new(base).join(&module_glo);
-            if glo_candidate.exists() {
-                return Some(glo_candidate);
-            }
-            let init_candidate = Path::new(base).join(&module_rel).join("__init__.ind");
-            if init_candidate.exists() {
-                return Some(init_candidate);
+            if let Some(found) = module_in_dir(Path::new(base), &module_rel) {
+                return Some(found);
             }
         }
     }
 
     // Default site-packages (like Python's ~/.local/lib/python*/site-packages)
     if let Ok(home) = env::var("HOME") {
-        let site_pkg = Path::new(&home)
-            .join(".local/share/indent/site-packages");
-        let candidate = site_pkg.join(&module_file);
-        if candidate.exists() {
-            return Some(candidate);
+        let site_pkg = Path::new(&home).join(".local/share/indent/site-packages");
+        if let Some(found) = module_in_dir(&site_pkg, &module_rel) {
+            return Some(found);
         }
-        let glo_candidate = site_pkg.join(&module_glo);
-        if glo_candidate.exists() {
-            return Some(glo_candidate);
-        }
-        let init_candidate = site_pkg.join(&module_rel).join("__init__.ind");
-        if init_candidate.exists() {
-            return Some(init_candidate);
+        // Legacy Aether global installs (aetherpkg --global) also resolve.
+        let legacy_pkg = Path::new(&home).join(".local/share/aether/site-packages");
+        if let Some(found) = module_in_dir(&legacy_pkg, &module_rel) {
+            return Some(found);
         }
     }
 

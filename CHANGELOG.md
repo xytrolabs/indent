@@ -1,5 +1,67 @@
 # Indent Changelog
 
+## discord.ind 3.0 — 2026-08-03
+
+### 🛰️ Message Monitoring (new gateway events)
+The `discord` package now listens to the full non-privileged event set and
+dispatches them through the `On` event system (handlers receive `bot data ""`):
+
+| Event name | Fired on |
+|---|---|
+| `message_edit` | a message is edited (`MESSAGE_UPDATE`) |
+| `message_delete` | a message is deleted (with cached content if known) |
+| `message_bulk_delete` | bulk message delete |
+| `pin_update` | a message is pinned/unpinned (`CHANNEL_PIN_UPDATE`) |
+| `reaction_add` / `reaction_remove` | emoji reactions added/removed |
+| `reaction_remove_all` / `reaction_remove_emoji` | reactions cleared |
+| `ban_add` / `ban_remove` | member banned/unbanned |
+| `member_update` | member profile/roles changed |
+| `voice_state_update` | member joins/leaves/moves voice |
+| `guild_update` | server settings changed |
+| `channel_create` / `channel_update` / `channel_delete` | channels created/edited/deleted |
+
+```indent
+get On from discord
+fun onEdit bot data ""
+    say "someone edited a message!"
+bot is On bot "message_edit" "onEdit"
+```
+
+### 📋 One-call Audit Log
+`SetupAudit bot channelId` registers every monitoring event and posts a
+coloured embed summary to the given channel. Perfect for moderation oversight.
+
+```indent
+get QuickBot, SetupAudit from discord
+var bot dynamic = QuickBot "TOKEN" "!"
+bot is SetupAudit bot "123456789012345678"
+Run bot
+```
+
+### 💾 Message Cache
+- `CacheMessage msg` — store a message by id (called automatically on create/update)
+- `LookupMessage id` — get the last-known message (used so `message_delete` can
+  report content that would otherwise be gone)
+- `ClearMessageCache` — reset the in-memory cache
+
+### 🎛️ Configurable Intents
+- Default intents expanded to the broad **non-privileged** set (`130797`);
+  privileged `GUILD_MEMBERS` / `GUILD_PRESENCES` are intentionally excluded so
+  bots without portal whitelisting don't get disconnected (4014).
+- Override per-bot: `bot.intents is 33281` (minimal) before `Run bot`.
+
+### 📦 Version + Publishing
+- New `DiscordVersion` constant (`3.0.0`) and `get DiscordVersion from discord`.
+- `air publish` / `aetherpkg` now preserve the source extension (`.ind`) instead
+  of forcing `.ath`; `aetherpkg uninstall` removes both.
+- Runtime module resolution now also searches `aether_packages/` (local installs)
+  and legacy `~/.local/share/aether/site-packages` (global installs), plus a
+  `.ath` fallback for old registry packages. `air install discord` now "just
+  works" with no `INDENT_PATH` required.
+- Fixed `air registry show` crash caused by unbound `LEGACY_REGISTRY_URL_*`.
+
+---
+
 ## 1.2.1 — 2026-08-03 (Urgent Patch)
 
 ### 🐛 Bug Fixes

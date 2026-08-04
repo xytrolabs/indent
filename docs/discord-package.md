@@ -1,8 +1,9 @@
-# discord.ind — The Discord Bot Library for Indent
+# discord.ind 3.0 — The Discord Bot Library for Indent
 
 A standalone Discord library (like discord.py) providing REST API, WebSocket
 Gateway, command routing, event system, puzzle/cog loader, a discord.py-style
-`ctx` system, and clean block-style helpers.  Import it and write your bot.
+`ctx` system, clean block-style helpers, **message monitoring, and a built-in
+audit log** (since 3.0).  Import it and write your bot.
 
 > **Note**: Aether `.ath` files are the same language as Indent `.ind` — you can
 > just rename them.  `discord` is a single package available as `discord.ind`.
@@ -76,6 +77,7 @@ see the Ctx System in section 4b — handlers are just `fun name ctx args`.
 | Register slash command | `AddSlash` / `SlashWithUser` ★ | `bot, name, desc, handler, opts` |
 | Sync slash commands | `SyncSlash` | `bot` |
 | Register event | `on` | `bot, event, handler` |
+| Monitor all → audit log | `SetupAudit` ★ | `bot, channelId → bot` |
 | Send message reply | `sendMsg` ★ | `bot, message` |
 | Kick user | `kick` | `bot, user, reason` |
 | Ban user | `ban` | `bot, user, reason` |
@@ -219,7 +221,7 @@ bot is on bot "message" onMessage
 ```
 
 **Supported events**: `ready`, `message`, `guild_join`, `member_join`,
-`member_leave`
+`member_leave`, and — since **discord 3.0** — the full monitoring set below.
 
 ### Event handler signatures
 
@@ -230,6 +232,70 @@ bot is on bot "message" onMessage
 | `guild_join` | `fun handler bot data` — data is the guild object |
 | `member_join` | `fun handler bot data` — data is the member object |
 | `member_leave` | `fun handler bot data` — data is the member object |
+| `message_edit` | `fun handler bot data` — data is the updated message |
+| `message_delete` | `fun handler bot data` — data is the cached message (content intact) |
+| `message_bulk_delete` | `fun handler bot data` — data has `ids` + `channel_id` |
+| `pin_update` | `fun handler bot data` — data has `channel_id` + `last_pin_timestamp` |
+| `reaction_add` | `fun handler bot data` — data is the reaction object |
+| `reaction_remove` | `fun handler bot data` — data is the reaction object |
+| `reaction_remove_all` / `reaction_remove_emoji` | `fun handler bot data` |
+| `ban_add` / `ban_remove` | `fun handler bot data` — data has `user` + `guild_id` |
+| `member_update` | `fun handler bot data` — data is the updated member |
+| `voice_state_update` | `fun handler bot data` — data is the voice state |
+| `guild_update` | `fun handler bot data` — data is the updated guild |
+| `channel_create` / `channel_update` / `channel_delete` | `fun handler bot data` |
+
+Every handler takes **3 params** (`bot`, `data`, and an unused 3rd slot that the
+dispatcher fills with `""`).
+
+---
+
+## 3b. Monitoring & Audit Log (discord 3.0)
+
+### One-call audit logging — `SetupAudit(bot, channelId) → bot`
+
+Registers **all** monitoring events and posts a colour-coded embed summary to
+the given channel whenever a message is edited/deleted, a pin changes, a
+reaction is added/removed, a user is banned/unbanned, a member joins/leaves,
+voice state changes, or channels are created/edited/deleted.
+
+```indent
+get QuickBot from discord
+get SetupAudit from discord
+
+var bot dynamic = QuickBot "TOKEN" "!"
+bot is SetupAudit bot "123456789012345678"   # ← channel to log into
+Run bot
+```
+
+### Message cache
+
+The package keeps a lightweight in-memory cache of messages it has seen so
+`message_delete` handlers still see the deleted message's content.
+
+| Helper | Purpose |
+|---|---|
+| `CacheMessage msg` | store a message by `id` (auto-called on create/update) |
+| `LookupMessage id` | last-known message object, or `empty` |
+| `ClearMessageCache` | reset the cache |
+
+### Monitoring events
+
+Each of these dispatches through `On`/`on` — register a handler with
+`bot is On bot "eventName" "yourHandler"` and it fires with `(bot, data, "")`.
+See the table above for what `data` contains per event.
+
+### Configurable intents
+
+- Default intents are the broad **non-privileged** set (`130797`). Privileged
+  intents (`GUILD_MEMBERS`, `GUILD_PRESENCES`) are excluded so bots without
+  Developer-Portal whitelisting are **not** disconnected (error 4014).
+- Override per bot before `Run`:
+  ```indent
+  var bot dynamic = QuickBot "TOKEN" "!"
+  bot.intents is 33281     # minimal: GUILDS + GUILD_MESSAGES + MESSAGE_CONTENT
+  Run bot
+  ```
 
 ---
 

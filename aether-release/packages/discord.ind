@@ -1,10 +1,16 @@
 #! =============================================================================
-#! discord.ind — The Indent Discord bot library
+#! discord.ind 3.0 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
 #! command routing, event system, puzzle/cog loader, a discord.py-style `ctx`
-#! system, and clean block-style helpers. Import it and write your bot.
+#! system, clean block-style helpers, and a built-in audit/monitoring suite.
+#! Import it and write your bot.
+#!
+#! v3.0 adds: message monitoring (edits, deletes, bulk-deletes, pins,
+#! reactions), moderation events (bans/unbans, member/voice/channel changes),
+#! a message cache, and one-call SetupAudit logging. Gateway intents now
+#! default to a broad non-privileged set — override with bot.intents.
 #!
 #! NOTE: the native Indent runtime passes function arguments by value, so every
 #! function that modifies the bot RETURNS the modified bot. Always reassign:
@@ -23,6 +29,12 @@
 #!   On bot "ready" readyHandler
 #!   Run bot
 #!
+#! 📋 Audit log (new in 3.0):
+#!   get QuickBot, SetupAudit from discord
+#!   var bot dynamic = QuickBot "TOKEN" "!"
+#!   bot is SetupAudit bot "123456789012345678"   # <- channel id for logs
+#!   Run bot
+#!
 #! 🧭 discord.py-style ctx:
 #!   get CtxSend from discord
 #!   fun greet ctx args
@@ -36,6 +48,9 @@
 var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
+#! discord package version
+var DiscordVersion string = "3.0.0"
+
 #! Current source/context for the clean block API (module-level, shared).
 #! The native runtime passes args by value, so we stash the "current source"
 #! here so sendMsg/kick/ban/etc. can reply without needing bot._ctx to mutate.
@@ -43,6 +58,25 @@ var _CTX dynamic = {}
 
 #! Current gateway socket id (module-level, shared) — used by presence helpers.
 var _SOCKET int = 0
+
+#! Lightweight in-memory message cache (keyed by message id) so MESSAGE_DELETE
+#! / MESSAGE_UPDATE handlers can see the last-known message content.
+var _MSG_CACHE dynamic = {}
+
+fun CacheMessage
+    msg
+    if has_key msg "id"
+        var mid string = msg.id
+        _MSG_CACHE[mid] is msg
+
+fun LookupMessage
+    mid
+    if has_key _MSG_CACHE mid
+        give _MSG_CACHE[mid]
+    give empty
+
+fun ClearMessageCache
+    _MSG_CACHE is {}
 
 #! ==============================
 #! 🔌  REST API (low level)
@@ -239,10 +273,16 @@ fun WsClose
 #! 🤖  BOT ENGINE (mid level)
 #! ==============================
 
+#! Default gateway intents: broad but NON-privileged (avoids 4014 on bots
+#! without GUILD_MEMBERS/GUILD_PRESENCES whitelisted in the Developer Portal).
+#! Set bot.intents to override, e.g. bot.intents is 33281 for a minimal bot.
+var DEFAULT_INTENTS int = 130797
+
 fun Identify
     token
     socketId
-    var payload dynamic = {"op": 2, "d": {"token": token, "intents": 33281, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}}
+    intents
+    var payload dynamic = {"op": 2, "d": {"token": token, "intents": intents, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}}
     var payloadStr string = json_dumps payload
     WsSend socketId payloadStr
 
@@ -269,7 +309,61 @@ fun HandleDispatch
         CallEvent bot "ready" d
 
     or t == "MESSAGE_CREATE"
+        CacheMessage d
         HandleMessage bot token d
+
+    or t == "MESSAGE_UPDATE"
+        CacheMessage d
+        CallEvent bot "message_edit" d
+
+    or t == "MESSAGE_DELETE"
+        var delMsg dynamic = LookupMessage d.id
+        if delMsg != empty
+            CallEvent bot "message_delete" delMsg
+        otherwise
+            CallEvent bot "message_delete" d
+
+    or t == "MESSAGE_DELETE_BULK"
+        CallEvent bot "message_bulk_delete" d
+
+    or t == "CHANNEL_PIN_UPDATE"
+        CallEvent bot "pin_update" d
+
+    or t == "MESSAGE_REACTION_ADD"
+        CallEvent bot "reaction_add" d
+
+    or t == "MESSAGE_REACTION_REMOVE"
+        CallEvent bot "reaction_remove" d
+
+    or t == "MESSAGE_REACTION_REMOVE_ALL"
+        CallEvent bot "reaction_remove_all" d
+
+    or t == "MESSAGE_REACTION_REMOVE_EMOJI"
+        CallEvent bot "reaction_remove_emoji" d
+
+    or t == "GUILD_BAN_ADD"
+        CallEvent bot "ban_add" d
+
+    or t == "GUILD_BAN_REMOVE"
+        CallEvent bot "ban_remove" d
+
+    or t == "GUILD_MEMBER_UPDATE"
+        CallEvent bot "member_update" d
+
+    or t == "VOICE_STATE_UPDATE"
+        CallEvent bot "voice_state_update" d
+
+    or t == "GUILD_UPDATE"
+        CallEvent bot "guild_update" d
+
+    or t == "CHANNEL_CREATE"
+        CallEvent bot "channel_create" d
+
+    or t == "CHANNEL_UPDATE"
+        CallEvent bot "channel_update" d
+
+    or t == "CHANNEL_DELETE"
+        CallEvent bot "channel_delete" d
 
     or t == "INTERACTION_CREATE"
         HandleInteraction bot token d
@@ -580,6 +674,242 @@ fun On
     bot.handlers is _handlers2
     give bot
 
+#! ==============================
+#! 📋  AUDIT / MONITORING (3.0)
+#! ==============================
+#! SetupAudit registers handlers for every monitoring event and posts a
+#! summary embed to the given channel. Call once during setup:
+#!   bot is SetupAudit bot "123456789012345678"
+var _AUDIT_CHANNEL string = ""
+var _AUDIT_ENABLED int = 0
+
+fun AuditPost
+    bot
+    title
+    desc
+    color
+    if _AUDIT_ENABLED == 0
+        give empty
+    var emb dynamic = BuildEmbed title desc color
+    give SendEmbed bot.token _AUDIT_CHANNEL emb
+
+fun AuditAuthor
+    data
+    var author string = "?"
+    if has_key data "author"
+        if has_key data.author "username"
+            author is data.author.username
+    give author
+
+fun AuditChannelId
+    data
+    var chan string = "?"
+    if has_key data "channel_id"
+        chan is data.channel_id
+    give chan
+
+fun AuditContent
+    data
+    var content string = ""
+    if has_key data "content"
+        content is data.content
+    give content
+
+fun AuditUserName
+    data
+    var user string = "?"
+    if has_key data "user"
+        if has_key data.user "username"
+            user is data.user.username
+    give user
+
+fun AuditMessageEdit
+    bot
+    data
+    _x
+    var author string = AuditAuthor data
+    var chan string = AuditChannelId data
+    var content string = AuditContent data
+    var title string = "✏️ Message edited"
+    var desc string = "Channel: " + chan + "\nAuthor: " + author + "\nContent: " + content
+    AuditPost bot title desc "FFA500"
+
+fun AuditMessageDelete
+    bot
+    data
+    _x
+    var author string = AuditAuthor data
+    var chan string = AuditChannelId data
+    var content string = AuditContent data
+    var title string = "🗑️ Message deleted"
+    var desc string = "Channel: " + chan + "\nAuthor: " + author + "\nContent: " + content
+    AuditPost bot title desc "FF0000"
+
+fun AuditMessageBulkDelete
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "🧹 Bulk message delete"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF0000"
+
+fun AuditPin
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "📌 Pin update"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "00BFFF"
+
+fun AuditReactionAdd
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "➕ Reaction added"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "00FF7F"
+
+fun AuditReactionRemove
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "➖ Reaction removed"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF7F50"
+
+fun AuditReactionRemoveAll
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "🧽 All reactions removed"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF7F50"
+
+fun AuditBan
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔨 User banned"
+    var desc string = "User: " + user
+    AuditPost bot title desc "FF0000"
+
+fun AuditUnban
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔓 User unbanned"
+    var desc string = "User: " + user
+    AuditPost bot title desc "00FF00"
+
+fun AuditMemberJoin
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🟢 Member joined"
+    var desc string = "User: " + user
+    AuditPost bot title desc "00FF00"
+
+fun AuditMemberLeave
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔴 Member left"
+    var desc string = "User: " + user
+    AuditPost bot title desc "FF0000"
+
+fun AuditMemberUpdate
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔄 Member updated"
+    var desc string = "User: " + user
+    AuditPost bot title desc "FFA500"
+
+fun AuditVoice
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "channel_id"
+        if data.channel_id != empty
+            chan is data.channel_id
+    var user string = "?"
+    if has_key data "member"
+        if has_key data.member "user"
+            if has_key data.member.user "username"
+                user is data.member.user.username
+    var title string = "🔊 Voice state update"
+    var desc string = "Channel: " + chan + "\nUser: " + user
+    AuditPost bot title desc "9400D3"
+
+fun AuditChannelCreate
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "name"
+        chan is data.name
+    var title string = "🆕 Channel created"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "00FF00"
+
+fun AuditChannelUpdate
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "name"
+        chan is data.name
+    var title string = "🛠️ Channel updated"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FFA500"
+
+fun AuditChannelDelete
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "name"
+        chan is data.name
+    var title string = "❌ Channel deleted"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF0000"
+
+#! Register all monitoring handlers → audit-log embeds to channelId.
+#! Returns bot — reassign:  bot is SetupAudit bot "channelId"
+fun SetupAudit
+    bot
+    channelId
+    _AUDIT_ENABLED is 1
+    _AUDIT_CHANNEL is channelId
+    bot is On bot "message_edit" "AuditMessageEdit"
+    bot is On bot "message_delete" "AuditMessageDelete"
+    bot is On bot "message_bulk_delete" "AuditMessageBulkDelete"
+    bot is On bot "pin_update" "AuditPin"
+    bot is On bot "reaction_add" "AuditReactionAdd"
+    bot is On bot "reaction_remove" "AuditReactionRemove"
+    bot is On bot "reaction_remove_all" "AuditReactionRemoveAll"
+    bot is On bot "ban_add" "AuditBan"
+    bot is On bot "ban_remove" "AuditUnban"
+    bot is On bot "member_join" "AuditMemberJoin"
+    bot is On bot "member_leave" "AuditMemberLeave"
+    bot is On bot "member_update" "AuditMemberUpdate"
+    bot is On bot "voice_state_update" "AuditVoice"
+    bot is On bot "channel_create" "AuditChannelCreate"
+    bot is On bot "channel_update" "AuditChannelUpdate"
+    bot is On bot "channel_delete" "AuditChannelDelete"
+    give bot
+
 #! One full connect + event-loop cycle. Returns "reconnect" or "fatal".
 fun connectOnce
     bot
@@ -598,8 +928,10 @@ fun connectOnce
         if has_key info.d "heartbeat_interval"
             heartbeatInterval is info.d.heartbeat_interval / 1000.0
 
-    #! identify
-    var intents int = 33281
+    #! identify — broad non-privileged intents, overridable via bot.intents
+    var intents int = DEFAULT_INTENTS
+    if has_key bot "intents"
+        intents is bot.intents
     var identify dynamic = {"op": 2, "d": {"token": bot.token, "intents": intents, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}}
     var identifyStr string = json_dumps identify
     WsSend socketId identifyStr
@@ -652,7 +984,61 @@ fun connectOnce
                     CallEvent bot "ready" d
 
                 or t == "MESSAGE_CREATE"
+                    CacheMessage d
                     HandleMessage bot bot.token d
+
+                or t == "MESSAGE_UPDATE"
+                    CacheMessage d
+                    CallEvent bot "message_edit" d
+
+                or t == "MESSAGE_DELETE"
+                    var delMsg dynamic = LookupMessage d.id
+                    if delMsg != empty
+                        CallEvent bot "message_delete" delMsg
+                    otherwise
+                        CallEvent bot "message_delete" d
+
+                or t == "MESSAGE_DELETE_BULK"
+                    CallEvent bot "message_bulk_delete" d
+
+                or t == "CHANNEL_PIN_UPDATE"
+                    CallEvent bot "pin_update" d
+
+                or t == "MESSAGE_REACTION_ADD"
+                    CallEvent bot "reaction_add" d
+
+                or t == "MESSAGE_REACTION_REMOVE"
+                    CallEvent bot "reaction_remove" d
+
+                or t == "MESSAGE_REACTION_REMOVE_ALL"
+                    CallEvent bot "reaction_remove_all" d
+
+                or t == "MESSAGE_REACTION_REMOVE_EMOJI"
+                    CallEvent bot "reaction_remove_emoji" d
+
+                or t == "GUILD_BAN_ADD"
+                    CallEvent bot "ban_add" d
+
+                or t == "GUILD_BAN_REMOVE"
+                    CallEvent bot "ban_remove" d
+
+                or t == "GUILD_MEMBER_UPDATE"
+                    CallEvent bot "member_update" d
+
+                or t == "VOICE_STATE_UPDATE"
+                    CallEvent bot "voice_state_update" d
+
+                or t == "GUILD_UPDATE"
+                    CallEvent bot "guild_update" d
+
+                or t == "CHANNEL_CREATE"
+                    CallEvent bot "channel_create" d
+
+                or t == "CHANNEL_UPDATE"
+                    CallEvent bot "channel_update" d
+
+                or t == "CHANNEL_DELETE"
+                    CallEvent bot "channel_delete" d
 
                 or t == "INTERACTION_CREATE"
                     HandleInteraction bot bot.token d
