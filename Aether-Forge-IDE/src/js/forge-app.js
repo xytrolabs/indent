@@ -127,8 +127,10 @@ Functions:  fun name param1 param2   (NO "def", NO "function", NO "fn", NO colon
             indented body
 Return:     give value               (NEVER "return", NEVER "yield")
 Print:      say expression           (NEVER "print", "echo", "console.log", "puts")
-Vars:       var name type = value    (types: string int float boolean dynamic empty list dict)
+Vars:       var name = value         (type INFERRED from value — PREFERRED style!)
+            var name type = value    (explicit type — use when inference can't help)
 Reassign:   name is value            (NOT "=", NOT ":=", NOT "let")
+Compound:   x += 5  /  x -= 2  /  x *= 10  /  x /= 3  /  x %= 7   (v1.3 shorthand!)
 If:         if condition             (NO "elif", NO "else:", NO "endif", NEVER "else if")
                 body
             otherwise
@@ -147,7 +149,8 @@ return x + 1         → give x + 1
 print("Hello")       → say "Hello"
 echo "hi"            → say "hi"
 x = 42               → x is 42
-var x = 42           → var x int = 42
+var x = 42           → var x = 42          (type INFERRED as int!)
+x = x + 5            → x += 5              (COMPOUND assignment!)
 for i in range(5):   → repeat 5
 for item in list:    → repeat item in list
 if x > 0:\n  ...     → if x > 0\n    ...
@@ -172,22 +175,22 @@ Correct response:
 fun double n
     give n * 2
 
-var result int = double(5)
-say "5 doubled is " + result
+var result = double(5)         # type inferred as int
+say "5 doubled is " + string(result)
 \`\`\`
 
 === COMPLETE EXAMPLES ===
 
-List summing:
+List summing (with type inference and compound assignment):
 \`\`\`indent
 #! Sum all numbers in a list
 fun sum_list numbers
-    var total int = 0
+    var total = 0              # inferred int
     repeat n in numbers
-        total is total + n
+        total += n             # compound assignment!
     give total
 
-var nums list = [1, 2, 3, 4, 5]
+var nums = [1, 2, 3, 4, 5]    # inferred list
 say sum_list(nums)
 \`\`\`
 
@@ -195,7 +198,7 @@ FizzBuzz:
 \`\`\`indent
 #! FizzBuzz from 1 to n
 fun fizzbuzz n
-    var i int = 1
+    var i = 1                  # inferred int
     repeat n
         if i % 15 == 0
             say "FizzBuzz"
@@ -205,18 +208,18 @@ fun fizzbuzz n
             say "Buzz"
         otherwise
             say i
-        i is i + 1
+        i += 1                    # compound assignment!
 
 fizzbuzz(20)
 \`\`\`
 
 Dictionary usage:
 \`\`\`indent
-var person dict = {"name": "Ada", "age": 28}
+var person = {"name": "Ada", "age": 28}   # inferred dict
 say person["name"]
 say person.name        # dot notation works too
-person["age"] is 29
-var keys list = keys(person)
+person["age"] += 1     # compound assignment! 28 → 29
+var person_keys = keys(person)
 var has_name boolean = has_key(person, "name")
 \`\`\`
 

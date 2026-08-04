@@ -1,8 +1,10 @@
 # ⚒ Indent Forge IDE
 
-**Indent Forge** is the official native desktop IDE for the [Indent](https://github.com/XytroLabs-Indent/source) programming language. Built with **Tauri 2.0 + Rust** for maximum performance, featuring a custom dark theme and the **Scrible AI agent** preinstalled — powered by **StarCoder2-3B**, heavily modified and trained for coding in Indent.
+**Indent Forge** is the official native desktop IDE for the [Indent](https://github.com/xytrolabs/indent) programming language. Built with **Tauri 2.0 + Rust** for maximum performance, featuring a custom dark theme and the **Scrible AI agent** preinstalled.
 
-> **Architecture**: Tauri 2.0 (Rust backend) + CodeMirror 6 (editor) + Tree-sitter (syntax) + Tower-LSP (intelligence)
+> **Architecture**: Tauri 2.0 (Rust backend) + Text Editor + Indent CLI + Scrible AI (Ollama)
+
+> **Version**: 2.1.0 — Indent v1.3.0 compatible
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -29,11 +31,11 @@
 ## Features
 
 - **Beautiful Dark Theme** — Custom Catppuccin-inspired palette, sleek and modern
-- **Monaco Editor** — Same editor that powers VS Code, with full Indent syntax highlighting
-- **Scrible AI Agent** — StarCoder2-3B fine-tuned for Indent, with:
+- **Editor** — Full Indent syntax support with indentation guides
+- **Scrible AI Agent** — Ollama-powered AI with:
   - **Inline code completions** (Fill-In-the-Middle)
   - **Chat interface** for code generation, explanation, and fixes
-  - **Preinstalled pretrained model** + any Ollama model support
+  - **Preinstalled model** + any Ollama model support
 - **File Explorer** — Tree view with directory expansion
 - **Tab System** — Multi-file editing with dirty-state indicators
 - **Integrated Terminal** — Run, debug, and test Indent code directly
@@ -72,48 +74,43 @@ cargo tauri build --target x86_64-unknown-linux-gnu
 ## Architecture
 
 ```
-Indent-Forge-IDE/
+Aether-Forge-IDE/
 ├── src-tauri/
 │   ├── Cargo.toml              # Tauri 2.0 + Rust dependencies
 │   ├── tauri.conf.json         # Window config, CSP, bundling
-│   └── src/main.rs             # Rust backend (files, LSP, Scrible AI)
-│   ├── preload.js            # Secure context bridge
-│   ├── indent-runtime/       # Bundled Indent interpreter (Python)
-│   └── renderer/
-│       ├── index.html        # IDE shell layout
-│       ├── css/
-│       │   └── forge-dark.css    # Complete dark theme
-│       ├── js/
-│       │   ├── forge-core.js     # State management, tabs, IPC
-│       │   ├── forge-editor.js   # Monaco editor + Indent language support
-│       │   ├── forge-files.js    # File explorer panel
-│       │   ├── forge-scrible.js  # Scrible AI chat panel
-│       │   ├── forge-status.js   # Status center + terminal output
-│       │   └── forge-app.js      # Bootstrap
-│       └── icons/
-│           └── forge.png
+│   └── src/main.rs             # Rust backend (files, runtime, Scrible AI)
+├── src/
+│   ├── index.html              # IDE shell layout
+│   ├── css/
+│   │   └── forge-dark.css      # Complete dark theme
+│   ├── js/
+│   │   ├── forge-app.js        # State management, tabs, IPC, scrible
+│   │   └── lib/                # Third-party libraries
+│   └── assets/                 # Icons (SVG, Seti font)
+├── build-appimage.sh           # AppImage packaging
+├── install-models.sh           # Pulls Scrible AI models from HF
+└── run.sh                      # Quick dev launch
 ```
 
 ## Scrible AI Agent
 
-Scrible is powered by **StarCoder2-3B**, heavily modified and trained for coding in Indent:
+Scrible connects to Ollama for AI-powered code assistance:
 
 | Model | Size | Description |
 |---|---|---|
-| `indent-scrible:3b-q4` | ~2 GB | **Recommended** — Trained on Indent code (preinstalled) |
-| `starcoder2:3b` | ~2 GB | Base StarCoder2 model |
-| Any Ollama model | varies | Custom model support |
+| `scrible-chat` | ~500 MB | **Recommended** — Fine-tuned for Indent chat (HF) |
+| `scrible-inline` | varies | Fill-In-the-Middle completions (HF) |
+| Any Ollama model | varies | Custom model support via the model selector |
 
-### Training Scrible
-
-The Scrible agent is trained using the pipeline in `../scripts/train-starcoder/`:
+### Installing Models
 
 ```bash
-cd ../scripts/train-starcoder
-python prepare_data.py    # Collects all .ind files
-python finetune.py        # Fine-tunes StarCoder2-3B with QLoRA
-python convert_to_ollama.py  # Converts to Ollama format
-ollama pull indent-scrible:3b-q4
+# Pull pre-configured Indent models
+./install-models.sh
+
+# Or manually via Ollama
+ollama pull scrible-chat
+ollama pull scrible-inline
 ```
 
 ## Keyboard Shortcuts
