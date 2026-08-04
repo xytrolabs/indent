@@ -1,8 +1,0 @@
-#! sys.ath
-#! System module for Aether-2
-
-var argv dynamic = sys_argv
-var version string = sys_version
-
-fun Platform
-    give sys_platform

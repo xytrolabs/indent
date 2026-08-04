@@ -1,40 +1,20 @@
-# Rust build artifacts
+# Python
+__pycache__/
+.venv/
+*.pyc
+
+# Rust
 indent-native/target/
 
-# Deferred / not for main repo
-indent/
-indent-language/
-indent-file-icons/
-indent-scrible/
-tree-sitter-indent/
-Aether-Forge-IDE/
-std/
-scripts/train-starcoder/
+# IDE
+.idea/
 
-# Test/example files at root
-*.ind
-puzzles/
+# OS
+.DS_Store
+Thumbs.db
 
-# Root non-essentials
-.vscode/
-.github/
-PUBLISHING_EXTENSIONS.md
-RELEASING.md
-bot.py
-ath.txt
-watch_*
-*.tar.gz
-*.png
+# Secrets
 *.glo
 
-# Non-install scripts (keep out of public repo)
-scripts/aur-submit.sh
-scripts/new-angela.sh
-scripts/package-for-friend.sh
-scripts/package-linux-system-packages.sh
-scripts/publish.sh
-scripts/validate-registry.sh
-scripts/ci/
-
-# But keep the indent logo
-!indent.svg
+# Build artifacts
+indent-native/indent
