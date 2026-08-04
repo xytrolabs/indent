@@ -1,0 +1,220 @@
+{
+  "name": "indent-scrible",
+  "displayName": "Scrible — AI Copilot for Indent",
+  "description": "Copilot-like AI code completion and chat for Indent. Powered by Phi-3 v3 via HuggingFace + Ollama.",
+  "version": "2.0.0",
+  "publisher": "xytro-labs",
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onLanguage:indent",
+    "onView:indent-scrible.chatPanel"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Chat"
+  ],
+  "icon": "icon.png",
+  "contributes": {
+    "keybindings": [
+      {
+        "command": "indent-scrible.acceptCompletion",
+        "key": "tab",
+        "when": "inlineCompletionHasIndentationLessThanTabSize && inlineSuggestionHasIndentationLessThanTabSize && inlineSuggestionVisible && !editorTabMovesFocus"
+      },
+      {
+        "command": "editor.action.inlineSuggest.trigger",
+        "key": "alt+\\",
+        "when": "editorTextFocus && !editorHasSelection"
+      },
+      {
+        "command": "indent-scrible.startChat",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i"
+      }
+    ],
+    "configuration": {
+      "title": "Scrible",
+      "properties": {
+        "indent-scrible.inlineModel": {
+          "type": "string",
+          "default": "scrible-inline",
+          "description": "Ollama model for inline completions (HF: xytrolabs/scrible-inline)"
+        },
+        "indent-scrible.chatModel": {
+          "type": "string",
+          "default": "scrible-chat",
+          "description": "Ollama model for chat (HF: xytrolabs/scrible-chat)"
+        },
+        "indent-scrible.ollamaEndpoint": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API endpoint"
+        },
+        "indent-scrible.autocompleteEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline ghost-text completions (like Copilot)"
+        },
+        "indent-scrible.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "description": "Model temperature (0-1)"
+        },
+        "indent-scrible.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "description": "Maximum tokens for inline completions"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "indent-scrible-sidebar",
+          "title": "Scrible AI",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "indent-scrible-sidebar": [
+        {
+          "type": "webview",
+          "id": "indent-scrible.chatPanel",
+          "name": "AI Coding Agent (Scrible)",
+          "contextualTitle": "Scrible"
+        }
+      ],
+      "indent-scrible-status": [
+        {
+          "type": "webview",
+          "id": "indent-scrible.statusCenter",
+          "name": "Status Center"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "indent-scrible.startChat",
+        "title": "Scrible: Start Chat",
+        "category": "Indent",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "indent-scrible.explainCode",
+        "title": "Scrible: Explain This Code",
+        "category": "Indent"
+      },
+      {
+        "command": "indent-scrible.fixCode",
+        "title": "Scrible: Fix This Code",
+        "category": "Indent"
+      },
+      {
+        "command": "indent-scrible.generateDocstring",
+        "title": "Scrible: Generate Docstring",
+        "category": "Indent"
+      },
+      {
+        "command": "indent-scrible.switchModel",
+        "title": "Scrible: Switch Model",
+        "category": "Indent"
+      },
+      {
+        "command": "indent-scrible.toggleAutocomplete",
+        "title": "Scrible: Toggle Autocomplete",
+        "category": "Indent"
+      },
+      {
+        "command": "indent-scrible.openStatusCenter",
+        "title": "Scrible: Open Status Center",
+        "category": "Indent",
+        "icon": "$(pulse)"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "indent-scrible.explainCode",
+          "when": "editorLangId == indent",
+          "group": "indent-scrible@1"
+        },
+        {
+          "command": "indent-scrible.fixCode",
+          "when": "editorLangId == indent",
+          "group": "indent-scrible@2"
+        },
+        {
+          "command": "indent-scrible.generateDocstring",
+          "when": "editorLangId == indent",
+          "group": "indent-scrible@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "indent-scrible.startChat",
+          "when": "editorLangId == indent",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Scrible — Indent AI Agent",
+      "properties": {
+        "indent-scrible.model": {
+          "type": "string",
+          "default": "indent-scrible:3b-q4",
+          "enum": [
+            "indent-scrible:3b-q4",
+            "starcoder2:3b",
+            "deepseek-coder:1.3b",
+            "codellama:7b",
+            "custom"
+          ],
+          "description": "Model to use for completions and chat. 'indent-scrible:3b-q4' is the preinstalled pretrained model. You can also use any Ollama model."
+        },
+        "indent-scrible.customModel": {
+          "type": "string",
+          "default": "",
+          "description": "Custom Ollama model name (used when model is set to 'custom')"
+        },
+        "indent-scrible.ollamaEndpoint": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API endpoint"
+        },
+        "indent-scrible.autocompleteEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline code completions"
+        },
+        "indent-scrible.autocompleteDelay": {
+          "type": "number",
+          "default": 300,
+          "description": "Delay in ms before requesting autocomplete after typing stops"
+        },
+        "indent-scrible.maxTokens": {
+          "type": "number",
+          "default": 256,
+          "description": "Maximum tokens to generate per completion"
+        },
+        "indent-scrible.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "description": "Model temperature (0-1). Lower = more deterministic"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "echo Ready",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.22.0"
+  }
+}

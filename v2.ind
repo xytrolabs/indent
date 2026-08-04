@@ -1,0 +1,39 @@
+#! Aether-2 syntax demonstration
+var name string = "Aether-2"
+var count int = 42
+var price float = 99.99
+var enabled boolean = true
+
+say "Name: " + name
+say "Count: " + count
+say "Price: " + price
+say "Enabled: " + enabled
+
+#! Inline params
+fun greet person
+    say "Hello " + person + "!"
+
+greet name
+
+#! Multi-line params (Aether-2 spec style)
+fun add
+    a
+    b
+    give a + b
+
+var result int = add 10 20
+say "10 + 20 = " + result
+
+if count > 40
+    say "Count is high"
+or count > 20
+    say "Count is medium"
+otherwise
+    say "Count is low"
+
+repeat 3
+    say "Loop iteration " + (Reps + 1)
+
+var colors dynamic = ["red", "green", "blue"]
+repeat item in colors
+    say "Color: " + item

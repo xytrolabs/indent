@@ -1,0 +1,41 @@
+// fs.zor — File system operations for Zor
+// Provides: exists, read, write, delete, size, list_dir (stub)
+
+fun exists(path string) int {
+    give: file_exists(path)
+}
+
+fun read(path string) string {
+    give: read_file(path)
+}
+
+fun write(path string, content string) {
+    write_file(path, content)
+}
+
+fun delete(path string) {
+    file_delete(path)
+}
+
+fun size(path string) int {
+    give: file_size(path)
+}
+
+fun append(path string, content string) {
+    var existing string = ""
+    if file_exists(path) == 1 {
+        existing is read_file(path)
+    }
+    write_file(path, existing + content)
+}
+
+fun copy(src string, dst string) {
+    var content string = read_file(src)
+    write_file(dst, content)
+}
+
+fun rename(old_path string, new_path string) {
+    var content string = read_file(old_path)
+    write_file(new_path, content)
+    file_delete(old_path)
+}

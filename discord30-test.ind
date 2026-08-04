@@ -1,0 +1,48 @@
+#! temp test for discord.ind 3.0 additions
+get DiscordVersion from discord
+get CacheMessage from discord
+get LookupMessage from discord
+get ClearMessageCache from discord
+get QuickBot from discord
+get SetupAudit from discord
+get On from discord
+
+say "version = " + DiscordVersion
+
+#! --- message cache test ---
+var m dynamic = {"id": "111", "content": "hello", "channel_id": "555"}
+CacheMessage m
+var found dynamic = LookupMessage "111"
+if found != empty
+    say "cache hit content = " + found.content
+otherwise
+    say "cache MISS"
+ClearMessageCache
+var gone dynamic = LookupMessage "111"
+if gone == empty
+    say "cache cleared OK"
+otherwise
+    say "cache clear FAILED"
+
+#! --- SetupAudit test ---
+var bot dynamic = QuickBot "TOKEN" "!"
+bot is SetupAudit bot "1234"
+var handlers dynamic = bot.handlers
+var hasEdit int = 0
+var hasDelete int = 0
+if has_key handlers "message_edit"
+    hasEdit is 1
+if has_key handlers "message_delete"
+    hasDelete is 1
+if hasEdit == 1
+    say "message_edit handler registered OK"
+otherwise
+    say "message_edit MISSING"
+if hasDelete == 1
+    say "message_delete handler registered OK"
+otherwise
+    say "message_delete MISSING"
+
+#! --- On still works ---
+bot is On bot "ready" "onReady"
+say "all discord 3.0 checks done"

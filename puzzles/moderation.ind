@@ -1,0 +1,17 @@
+get kick from discord
+get ban from discord
+get sendMsg from discord
+get add from discord
+
+fun warnCmd args
+    var user string = args["1"]
+    var reason string = args["2"]
+    sendMsg bot "⚠️ " + user + " warned: " + reason
+
+add bot "warn" "warnCmd"
+
+fun muteCmd args
+    var user string = args["1"]
+    sendMsg bot "🔇 Muted " + user
+
+add bot "mute" "muteCmd"

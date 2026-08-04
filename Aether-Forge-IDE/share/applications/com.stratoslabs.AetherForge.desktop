@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Aether Forge
+Comment=Native Rust-powered IDE for the Aether programming language
+Exec=aether-forge
+Icon=com.stratoslabs.AetherForge
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=Aether Forge
+Keywords=aether;ide;programming;rust;ai;

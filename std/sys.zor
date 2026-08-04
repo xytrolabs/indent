@@ -1,0 +1,34 @@
+// sys.zor — System-level utilities for Zor
+// OS dev ready: raw syscalls, memory access, port I/O
+
+fun exit(code int) {
+    // exit syscall (60)
+    syscall(60, code, 0, 0, 0, 0, 0)
+}
+
+fun write(fd int, buf string, count int) int {
+    // write syscall (1)
+    give: syscall(1, fd, buf, count, 0, 0, 0)
+}
+
+fun read(fd int, buf string, count int) int {
+    // read syscall (0)
+    give: syscall(0, fd, buf, count, 0, 0, 0)
+}
+
+fun sleep_ms(ms int) {
+    // nanosleep via syscall
+    var sec int = ms / 1000
+    var nsec int = (ms % 1000) * 1000000
+    // stub: busy-wait for now
+    var i int = 0
+    repeat while i < ms * 10000 {
+        i is i + 1
+    }
+}
+
+fun get_pid() int {
+    // getpid syscall (39)
+    give: syscall(39, 0, 0, 0, 0, 0, 0)
+}
+

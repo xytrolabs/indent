@@ -1,0 +1,49 @@
+// os.zor — OS utilities for Zor
+// Provides: args, env, exit, exec, sleep
+
+fun args() int {
+    give: argc()
+}
+
+fun arg(n int) string {
+    give: arg(n)
+}
+
+fun get_env(name string) string {
+    // Stub: environment variables not yet supported
+    give: ""
+}
+
+fun exit(code int) {
+    // Exit via syscall
+    syscall(60, code, 0, 0, 0, 0, 0)
+}
+
+fun exec(cmd string) string {
+    // Execute command, return output
+    run_cmd(cmd)
+    give: ""
+}
+
+fun sleep_ms(ms int) {
+    var i int = 0
+    repeat while i < ms * 10000 {
+        i is i + 1
+    }
+}
+
+fun platform() string {
+    give: "linux"
+}
+
+fun home_dir() string {
+    give: get_env("HOME")
+}
+
+fun current_dir() string {
+    give: "."
+}
+
+fun temp_dir() string {
+    give: "/tmp"
+}

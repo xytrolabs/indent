@@ -1,0 +1,380 @@
+/* ── Scrible Chat Panel — Dark Theme ────────────────────────────── */
+
+:root {
+    --scrible-bg: #0f0f1a;
+    --scrible-surface: #181825;
+    --scrible-surface2: #1e1e2e;
+    --scrible-border: #313244;
+    --scrible-text: #cdd6f4;
+    --scrible-text-muted: #6c7086;
+    --scrible-accent: #89b4fa;
+    --scrible-accent2: #a6e3a1;
+    --scrible-warn: #f9e2af;
+    --scrible-error: #f38ba8;
+    --scrible-user-bubble: #1e3a5f;
+    --scrible-bot-bubble: #1e1e2e;
+    --scrible-code-bg: #11111b;
+    --scrible-radius: 8px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: var(--scrible-bg);
+    color: var(--scrible-text);
+    font-family: var(--vscode-font-family, 'Segoe UI', system-ui, sans-serif);
+    font-size: 13px;
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ── Container ─────────────────────────────────────────────────── */
+
+.scrible-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* ── Header ────────────────────────────────────────────────────── */
+
+.scrible-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--scrible-surface);
+    border-bottom: 1px solid var(--scrible-border);
+    flex-shrink: 0;
+}
+
+.scrible-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.scrible-icon {
+    font-size: 20px;
+}
+
+.scrible-title {
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--scrible-accent);
+    letter-spacing: 0.3px;
+}
+
+.scrible-model-badge {
+    font-size: 10px;
+    padding: 3px 8px;
+    background: var(--scrible-surface2);
+    border: 1px solid var(--scrible-border);
+    border-radius: 12px;
+    color: var(--scrible-text-muted);
+    font-family: var(--vscode-editor-font-family, 'Cascadia Code', monospace);
+}
+
+/* ── Messages ──────────────────────────────────────────────────── */
+
+.scrible-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.scrible-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+.scrible-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.scrible-messages::-webkit-scrollbar-thumb {
+    background: var(--scrible-border);
+    border-radius: 3px;
+}
+
+/* ── Welcome ───────────────────────────────────────────────────── */
+
+.scrible-welcome {
+    text-align: center;
+    padding: 24px 16px;
+    color: var(--scrible-text-muted);
+}
+
+.welcome-icon {
+    font-size: 40px;
+    margin-bottom: 8px;
+    opacity: 0.6;
+}
+
+.scrible-welcome h3 {
+    color: var(--scrible-accent);
+    font-size: 18px;
+    margin-bottom: 6px;
+}
+
+.scrible-welcome p {
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.welcome-hint {
+    font-style: italic;
+    color: var(--scrible-warn);
+    margin-bottom: 14px !important;
+}
+
+/* ── Quick Action Buttons ──────────────────────────────────────── */
+
+.quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 4px;
+}
+
+.quick-btn {
+    padding: 7px 12px;
+    background: var(--scrible-surface2);
+    border: 1px solid var(--scrible-border);
+    border-radius: var(--scrible-radius);
+    color: var(--scrible-text);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.quick-btn:hover {
+    background: var(--scrible-user-bubble);
+    border-color: var(--scrible-accent);
+    color: var(--scrible-accent);
+}
+
+/* ── Chat Bubbles ──────────────────────────────────────────────── */
+
+.chat-message {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 100%;
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.chat-message.user {
+    align-items: flex-end;
+}
+
+.chat-message.bot {
+    align-items: flex-start;
+}
+
+.chat-bubble {
+    padding: 10px 14px;
+    border-radius: var(--scrible-radius);
+    max-width: 92%;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.chat-message.user .chat-bubble {
+    background: var(--scrible-user-bubble);
+    border-bottom-right-radius: 2px;
+}
+
+.chat-message.bot .chat-bubble {
+    background: var(--scrible-bot-bubble);
+    border: 1px solid var(--scrible-border);
+    border-bottom-left-radius: 2px;
+}
+
+.chat-label {
+    font-size: 10px;
+    color: var(--scrible-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 4px;
+}
+
+/* ── Code blocks in messages ───────────────────────────────────── */
+
+.chat-bubble pre {
+    background: var(--scrible-code-bg);
+    border: 1px solid var(--scrible-border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    overflow-x: auto;
+    font-family: var(--vscode-editor-font-family, 'Cascadia Code', 'Fira Code', monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    position: relative;
+}
+
+.chat-bubble code {
+    font-family: var(--vscode-editor-font-family, 'Cascadia Code', 'Fira Code', monospace);
+    font-size: 12px;
+}
+
+.chat-bubble p code {
+    background: var(--scrible-code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+/* ── Code action buttons ───────────────────────────────────────── */
+
+.code-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.code-action-btn {
+    padding: 4px 10px;
+    background: var(--scrible-surface2);
+    border: 1px solid var(--scrible-border);
+    border-radius: 4px;
+    color: var(--scrible-accent);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+
+.code-action-btn:hover {
+    background: var(--scrible-accent);
+    color: var(--scrible-bg);
+    border-color: var(--scrible-accent);
+}
+
+/* ── Typing indicator ──────────────────────────────────────────── */
+
+.scrible-typing {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    color: var(--scrible-text-muted);
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.typing-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--scrible-accent);
+    border-radius: 50%;
+    animation: typingBounce 1.4s infinite ease-in-out both;
+}
+
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
+.typing-dot:nth-child(3) { animation-delay: 0s; }
+
+@keyframes typingBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+/* ── Input area ────────────────────────────────────────────────── */
+
+.scrible-input-area {
+    border-top: 1px solid var(--scrible-border);
+    background: var(--scrible-surface);
+    padding: 10px 12px;
+    flex-shrink: 0;
+}
+
+.scrible-input-wrapper {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.scrible-input {
+    flex: 1;
+    background: var(--scrible-surface2);
+    border: 1px solid var(--scrible-border);
+    border-radius: var(--scrible-radius);
+    color: var(--scrible-text);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 12px;
+    resize: none;
+    outline: none;
+    transition: border-color 0.15s ease;
+    min-height: 38px;
+    max-height: 120px;
+}
+
+.scrible-input:focus {
+    border-color: var(--scrible-accent);
+}
+
+.scrible-input::placeholder {
+    color: var(--scrible-text-muted);
+}
+
+.scrible-send-btn {
+    width: 38px;
+    height: 38px;
+    background: var(--scrible-accent);
+    border: none;
+    border-radius: var(--scrible-radius);
+    color: var(--scrible-bg);
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+}
+
+.scrible-send-btn:hover {
+    background: #b4d0fb;
+    transform: scale(1.05);
+}
+
+.scrible-send-btn:active {
+    transform: scale(0.95);
+}
+
+.scrible-input-hint {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--scrible-text-muted);
+    margin-top: 6px;
+}
+
+/* ── Responsive ────────────────────────────────────────────────── */
+
+@media (max-width: 300px) {
+    .quick-actions {
+        flex-direction: column;
+    }
+    .quick-btn {
+        width: 100%;
+    }
+}

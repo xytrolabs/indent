@@ -1,0 +1,57 @@
+// strings.zor — String utilities for Zor
+// Provides: len, concat, contains, starts_with, ends_with, trim
+
+fun length(s string) int {
+    give: len(s)
+}
+
+fun concat(a string, b string) string {
+    give: a + b
+}
+
+fun contains(s string, sub string) int {
+    var i int = 0
+    repeat while i + len(sub) <= len(s) {
+        var match int = 1
+        var j int = 0
+        repeat while j < len(sub) {
+            if s[i + j] != sub[j] { match is 0 stop }
+            j is j + 1
+        }
+        if match == 1 { give: 1 }
+        i is i + 1
+    }
+    give: 0
+}
+
+fun starts_with(s string, prefix string) int {
+    if len(s) < len(prefix) { give: 0 }
+    var i int = 0
+    repeat while i < len(prefix) {
+        if s[i] != prefix[i] { give: 0 }
+        i is i + 1
+    }
+    give: 1
+}
+
+fun ends_with(s string, suffix string) int {
+    var sl int = len(s)
+    var pl int = len(suffix)
+    if sl < pl { give: 0 }
+    var i int = 0
+    repeat while i < pl {
+        if s[sl - pl + i] != suffix[i] { give: 0 }
+        i is i + 1
+    }
+    give: 1
+}
+
+fun repeat_str(s string, count int) string {
+    var result string = ""
+    var i int = 0
+    repeat while i < count {
+        result is result + s
+        i is i + 1
+    }
+    give: result
+}

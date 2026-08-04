@@ -1,0 +1,18 @@
+def.var: sqrtValue
+	dynamic
+	py.math.sqrt;
+		81
+
+say: sqrtValue
+
+py.print;
+	"hello from py prefix"
+
+def.var: listLength
+	dynamic
+	py.len;
+		[1, 2, 3, 4]
+
+say: listLength
+
+

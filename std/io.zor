@@ -1,0 +1,22 @@
+// io.zor — Input/Output utilities for Zor
+// Provides: println, read_line, read_file, write_file
+
+fun println(msg string) {
+    say: msg
+}
+
+fun print(msg string) {
+    say: msg
+}
+
+fun read_line() string {
+    give: ask()
+}
+
+fun read_all(path string) string {
+    give: read_file(path)
+}
+
+fun write_all(path string, content string) {
+    write_file(path, content)
+}

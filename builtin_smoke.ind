@@ -1,0 +1,15 @@
+#! Aether-2 builtin smoke test
+var cwd dynamic = os_getcwd
+say cwd
+
+var powValue dynamic = math_pow 2.0 8.0
+say powValue
+
+var randomValue dynamic = random_int 1 10
+say randomValue
+
+var shuffled dynamic = random_shuffle [1, 2, 3, 4]
+say shuffled
+
+var payload dynamic = json_loads "{\"a\":1,\"b\":true}"
+say payload["a"]

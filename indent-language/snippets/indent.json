@@ -1,0 +1,152 @@
+{
+  "Print": {
+    "prefix": "say",
+    "body": "say ${1:expression}",
+    "description": "Print output with say"
+  },
+  "Variable": {
+    "prefix": "var",
+    "body": "var ${1:name} ${2:type} = ${3:value}",
+    "description": "Define a variable with var"
+  },
+  "Function": {
+    "prefix": "fun",
+    "body": "fun ${1:name} ${2:params}\n    ${3:body}",
+    "description": "Define a function with fun"
+  },
+  "FunctionWithReturn": {
+    "prefix": "fun",
+    "body": "fun ${1:name} ${2:params}\n    ${3:body}\n    give ${4:value}",
+    "description": "Define a function with return value"
+  },
+  "If": {
+    "prefix": "if",
+    "body": "if ${1:condition}\n    ${2:body}",
+    "description": "If statement"
+  },
+  "IfElse": {
+    "prefix": "ifelse",
+    "body": "if ${1:condition}\n    ${2:body}\notherwise\n    ${3:body}",
+    "description": "If-otherwise statement"
+  },
+  "IfOrOtherwise": {
+    "prefix": "ifor",
+    "body": "if ${1:condition}\n    ${2:body}\nor ${3:condition}\n    ${4:body}\notherwise\n    ${5:body}",
+    "description": "If-or-otherwise chain"
+  },
+  "Repeat": {
+    "prefix": "repeat",
+    "body": "repeat ${1:count}\n    ${2:body}",
+    "description": "Repeat loop"
+  },
+  "RepeatForIn": {
+    "prefix": "for",
+    "body": "repeat ${1:item} in ${2:list}\n    ${3:body}",
+    "description": "Repeat for each item in list"
+  },
+  "Import": {
+    "prefix": "get",
+    "body": "get ${1:module}",
+    "description": "Import module"
+  },
+  "ImportFrom": {
+    "prefix": "getfrom",
+    "body": "get ${1:symbol} from ${2:module}",
+    "description": "Import symbol from module"
+  },
+  "ImportAlias": {
+    "prefix": "getas",
+    "body": "get ${1:module} as ${2:alias}",
+    "description": "Import module with alias"
+  },
+  "Give": {
+    "prefix": "give",
+    "body": "give ${1:value}",
+    "description": "Return value from function"
+  },
+  "Comment": {
+    "prefix": "comment",
+    "body": "#! ${1:comment}",
+    "description": "Single-line comment"
+  },
+  "MultiComment": {
+    "prefix": "multicomment",
+    "body": "#!*\n${1:comment}\n#!*",
+    "description": "Multi-line comment"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": "match ${1:subject}:\n    case ${2:value}:\n        ${3:body}",
+    "description": "Match statement"
+  },
+  "Do": {
+    "prefix": "do",
+    "body": "do:\n    ${1:body}",
+    "description": "Do block"
+  },
+  "DoCatch": {
+    "prefix": "docatch",
+    "body": "do:\n    ${1:body}\ncatch as ${2:err}:\n    ${3:handler}",
+    "description": "Do-catch error handling"
+  },
+  "AssertEq": {
+    "prefix": "asserteq",
+    "body": "assert_eq(${1:left}, ${2:right}, \"${3:message}\")",
+    "description": "Assert equality test"
+  },
+  "Assert": {
+    "prefix": "assert",
+    "body": "assert(${1:condition}, \"${2:message}\")",
+    "description": "Assert condition is true"
+  },
+  "VarString": {
+    "prefix": "varstr",
+    "body": "var ${1:name} string = \"${2:value}\"",
+    "description": "Define a string variable"
+  },
+  "VarInt": {
+    "prefix": "varint",
+    "body": "var ${1:name} int = ${2:0}",
+    "description": "Define an integer variable"
+  },
+  "VarFloat": {
+    "prefix": "varfloat",
+    "body": "var ${1:name} float = ${2:0.0}",
+    "description": "Define a float variable"
+  },
+  "VarBool": {
+    "prefix": "varbool",
+    "body": "var ${1:name} boolean = ${2:true}",
+    "description": "Define a boolean variable"
+  },
+  "TypeAnnotation": {
+    "prefix": "is",
+    "body": "${1:variable} is ${2:value}",
+    "description": "Assignment with is"
+  },
+  "ForIn": {
+    "prefix": "forin",
+    "body": "repeat ${1:item} in ${2:list}\n    ${3:body}",
+    "description": "For-each loop over a list"
+  },
+  "While": {
+    "prefix": "while",
+    "body": "while ${1:condition}\n    ${2:body}",
+    "description": "While loop"
+  },
+  "RepeatUntil": {
+    "prefix": "repeatuntil",
+    "body": "repeat\n    ${1:body}\nuntil ${2:condition}",
+    "description": "Repeat-until loop"
+  },
+  "MatchDefault": {
+    "prefix": "matchcase",
+    "body": "match ${1:subject}:\n    case ${2:value1}:\n        ${3:body1}\n    case ${2:value2}:\n        ${4:body2}\n    otherwise:\n        ${5:defaultBody}",
+    "description": "Match with multiple cases and default"
+  },
+  "ScribleDoc": {
+    "prefix": "scrible",
+    "body": "#!*\n${1:Description}\n\nParams:\n    ${2:param} — ${3:description}\n\nReturns:\n    ${4:returnType} — ${5:returnDescription}\n#!*",
+    "description": "Scrible AI-generated docstring template"
+  }
+}

@@ -1,0 +1,26 @@
+// testing.zor — Simple test framework for Zor
+// Provides: assert, assert_eq, run_tests
+
+fun assert(condition int, msg string) {
+    if condition == 0 {
+        say: "FAIL: " + msg
+    } or {
+        say: "  OK: " + msg
+    }
+}
+
+fun assert_eq(actual int, expected int, msg string) {
+    if actual != expected {
+        say: "FAIL: %msg% (got %actual%, expected %expected%)"
+    } or {
+        say: "  OK: %msg%"
+    }
+}
+
+fun assert_str_eq(actual string, expected string, msg string) {
+    if actual != expected {
+        say: "FAIL: " + msg + " (got " + actual + ", expected " + expected + ")"
+    } or {
+        say: "  OK: " + msg
+    }
+}

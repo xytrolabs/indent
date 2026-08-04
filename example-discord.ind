@@ -1,0 +1,25 @@
+var prefix char = "%"
+var token string ="discord-bot-token"
+
+bot.login: token
+
+bot.command-prefix #! Makes a prefix command
+    kick #! name
+    user #! args
+    reason #! args
+        #! Command Actions
+        bot.kicks: user, "reason"
+
+bot.command-slash #! Makes a slash command
+    kick #! name
+    user #! args
+    reason #! args
+        #! Command Actions
+        bot.kicks: user, "reason"
+
+bot.command-hybrid #! Makes a hybrid command (prefix and slash command)
+    kick #! name
+    user #! args
+    reason #! args
+        #! Command Actions
+        bot.kicks: user, "reason"

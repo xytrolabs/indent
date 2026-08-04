@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.stratoslabs.AetherForge</id>
+  <name>Aether Forge</name>
+  <summary>Native Rust-powered IDE for the Aether programming language</summary>
+  <developer_name>Stratos Labs</developer_name>
+  <description>
+    <p>Aether Forge is a fast, lightweight IDE built with Tauri 2.0 and Rust.
+       It includes the Scrible AI agent powered by StarCoder2-3B for intelligent
+       code completions, explanations, and fixes.</p>
+    <p>Features: syntax highlighting, file explorer, integrated terminal,
+       AI chat assistant, and Flatpak sandboxing.</p>
+  </description>
+  <url type="homepage">https://github.com/StratosLabs-Aether/source</url>
+  <url type="bugtracker">https://github.com/StratosLabs-Aether/source/issues</url>
+  <launchable type="desktop-id">com.stratoslabs.AetherForge.desktop</launchable>
+  <categories>
+    <category>Development</category>
+    <category>IDE</category>
+  </categories>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.0.0" date="2026-07-03">
+      <description>
+        <p>Initial release of Aether Forge IDE.</p>
+        <ul>
+          <li>Tauri 2.0 + Rust native performance</li>
+          <li>Scrible AI agent (StarCoder2-3B)</li>
+          <li>File explorer with tree view</li>
+          <li>Integrated output panel</li>
+          <li>VS Code-inspired dark theme</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

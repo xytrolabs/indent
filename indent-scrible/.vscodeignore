@@ -1,0 +1,5 @@
+node_modules/
+*.vsix
+.vscode-test/
+scripts/train-starcoder/data/
+scripts/train-starcoder/models/

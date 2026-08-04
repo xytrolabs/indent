@@ -1,0 +1,26 @@
+{
+  "name": "tree-sitter-indent",
+  "version": "1.0.0",
+  "description": "Tree-sitter grammar for the Indent programming language",
+  "main": "bindings/node",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  },
+  "author": "Xytro Labs",
+  "license": "MIT",
+  "dependencies": {
+    "nan": "^2.18.0"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.22.0"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.indent",
+      "file-types": ["ath", "glo"],
+      "injection-regex": "^indent$"
+    }
+  ]
+}

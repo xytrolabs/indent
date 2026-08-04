@@ -1,0 +1,38 @@
+// math.zor — Math utilities for Zor
+// Provides: abs, clamp, min, max, pow, sqrt
+
+fun abs(x int) int {
+    if x < 0 { give: -x } or { give: x }
+}
+
+fun clamp(value int, min_val int, max_val int) int {
+    if value < min_val { give: min_val }
+    or if value > max_val { give: max_val }
+    or { give: value }
+}
+
+fun max(a int, b int) int {
+    if a > b { give: a } or { give: b }
+}
+
+fun min(a int, b int) int {
+    if a < b { give: a } or { give: b }
+}
+
+fun pow(base int, exp int) int {
+    var result int = 1
+    var i int = 0
+    repeat while i < exp {
+        result is result * base
+        i is i + 1
+    }
+    give: result
+}
+
+fun is_even(n int) int {
+    if n % 2 == 0 { give: 1 } or { give: 0 }
+}
+
+fun is_odd(n int) int {
+    if n % 2 != 0 { give: 1 } or { give: 0 }
+}

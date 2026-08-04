@@ -5,6 +5,11 @@ __pycache__/
 
 # Rust
 indent-native/target/
+Aether-Forge-IDE/src-tauri/target/
+
+# JS/node
+node_modules/
+Aether-Forge-IDE/dist/
 
 # IDE
 .idea/
@@ -18,3 +23,6 @@ Thumbs.db
 
 # Build artifacts
 indent-native/indent
+
+# ML training data (huge)
+scripts/train-starcoder/

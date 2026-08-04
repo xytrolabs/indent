@@ -1,0 +1,15 @@
+#! Test class definition
+class Person
+    var name string
+    var age int
+
+    fun greet
+        say "Hello, my name is " + name + " and I am " + string(age) + " years old."
+
+#! Natural language — no () needed!
+var p dynamic = Person "Ada" 28
+p.greet()
+
+#! Also works with () if you prefer
+var q dynamic = Person("Bob", 25)
+q.greet()

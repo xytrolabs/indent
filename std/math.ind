@@ -1,0 +1,22 @@
+#! math.ath
+#! Math utilities for Aether-2
+
+fun Add a b
+    give a + b
+
+fun Sub a b
+    give a - b
+
+fun Mul a b
+    give a * b
+
+fun Div a b
+    give a / b
+
+fun Clamp value minValue maxValue
+    if value < minValue
+        give minValue
+    or value > maxValue
+        give maxValue
+    otherwise
+        give value

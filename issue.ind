@@ -1,0 +1,15 @@
+var age int = ask "How old are you? "
+if age >= 50
+    say "At " + age + " you are a senior"
+or age >= 18
+    say "At " + age + " you are an adult"
+or age >= 13
+    say "At " + age + " you are a teenager"
+otherwise
+    say "At " + age + " you are a child"  
+
+#! This is an Indent EXAMPLE! It's a tiny script 
+#! that tests several features of the Indent programming 
+#! language. It is not intended to be a complete program,
+#! but rather a demonstration of how to use indentation 
+#! and conditional statements in Indent.
