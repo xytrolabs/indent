@@ -1,5 +1,49 @@
 # Indent Changelog
 
+## 1.2.1 — 2026-08-03 (Urgent Patch)
+
+### 🐛 Bug Fixes
+
+#### Module functions can now call their own imports
+Previously a function defined in a module (`get X from other`) could NOT call
+the functions it imported itself — only imports made in the main script were
+visible at call time. This silently broke any modular library (e.g. a Discord
+bot split across puzzle/handler files). The runtime now preserves a module's
+imported callables and makes them visible to the module's own functions.
+
+#### Fixed frame leak in `exec_call`
+Failed function calls (e.g. a variable name parsed as a zero-arg call) left an
+argument-evaluation frame behind, which leaked memory and — worse — redirected
+top-level variables into a dead scope so they never appeared in the program's
+variables. `exec_call` now always pops its frame, even on error.
+
+#### Fixed/updated stale tests
+The Rust unit suite was failing 11 tests that still used the removed Aether1
+syntax (`def.var:`, `def.fun:`, `Give:`, `say:`, `Get: ... From:`). All have
+been rewritten to current Indent syntax. **`cargo test` is now fully green
+(12 passed, 0 failed).**
+
+### 🧱 Standard Library
+
+- **`discord` package massively expanded** (173 functions):
+  - Zero-config quickstart: `QuickStart` (2-line bot), `MakeBot`
+  - Slash commands: `AddSlash`, `SyncSlash`, `SlashWithUser/String/Int/Channel/Role`
+  - Presence: `SetStatus`, `SetPlaying`, `SetWatching`, `SetListening`, `SetCompeting`
+  - Embeds: `BuildEmbed`, `HexColor`, `AddEmbedField`, `SetEmbedFooter/Image/Thumbnail/Author`
+  - Components: buttons, select menus, action rows, `SendWithComponents`, `CtxComponents`
+  - Channels/messages/members/roles/guilds/reactions REST helpers (~50 new functions)
+- New `Ctx` system (discord.py-style) and `BotHandler` for handler-based commands
+
+### 🚀 Angela bot
+
+- Full moderation suite (16 commands): ban, kick, timeout, mute, unban, purge,
+  warn/warnings/delwarn (persistent JSON warning store), slowmode, nick, role,
+  userinfo, avatar, serverinfo, modhelp
+- Auto-moderation word filter (deletes + warns on bad words)
+- Welcome messages on member join
+
+---
+
 ## 1.2.0 — 2026-08-03
 
 ### 🎉 Major Language Features

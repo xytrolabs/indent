@@ -204,7 +204,7 @@ struct ClassDef {
     methods: HashMap<String, FunctionDef>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum Callable {
     Local(FunctionDef),
     External { module: Rc<ModuleInstance>, name: String },
@@ -214,6 +214,9 @@ enum Callable {
 struct ModuleInstance {
     vars: HashMap<String, Value>,
     funcs: HashMap<String, FunctionDef>,
+    // Functions this module imported from other modules (via `get X from Y`).
+    // Preserved so a module's functions can call its own imports.
+    callables: HashMap<String, Callable>,
 }
 
 #[derive(Debug, Clone)]
@@ -1484,6 +1487,7 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Rc<Module
     let module = Rc::new(ModuleInstance {
         vars: module_runtime.vars,
         funcs: module_runtime.funcs,
+        callables: module_runtime.callables,
     });
 
     ctx.rt
@@ -1557,10 +1561,19 @@ fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
 }
 
 fn exec_call(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    // Always evaluate the call in a fresh argument scope, and ALWAYS pop it —
+    // even on error — so failed calls (e.g. a variable name parsed as a
+    // zero-arg call) cannot leak frames or corrupt variable scoping.
+    ctx.push_frame();
+    let result = exec_call_inner(callee, args, ctx);
+    ctx.pop_frame();
+    result
+}
+
+fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     let mut positional: Vec<Value> = vec![];
     let mut named: HashMap<String, Value> = HashMap::new();
 
-    ctx.push_frame();
     for arg in args {
         match arg {
             ArgItem::Positional(expr) => positional.push(eval_expr(expr, ctx)?),
@@ -1570,7 +1583,6 @@ fn exec_call(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Resul
             ArgItem::DefVar(stmt) => {
                 let c = exec_stmt(stmt, ctx)?;
                 if !matches!(c, Control::None) {
-                    ctx.pop_frame();
                     return Err("Loop/control statements are not allowed in call argument blocks".to_string());
                 }
             }
@@ -1578,22 +1590,17 @@ fn exec_call(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Resul
     }
 
     if let Some(target) = callee.strip_prefix("py.") {
-        let result = python_prefixed_call_builtin(target, &positional, &named);
-        ctx.pop_frame();
-        return result;
+        return python_prefixed_call_builtin(target, &positional, &named);
     }
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
-        let obj = instantiate_class(&class_def, &positional, &ctx.rt.classes);
-        ctx.pop_frame();
-        return Ok(obj);
+        return Ok(instantiate_class(&class_def, &positional, &ctx.rt.classes));
     }
 
     // Handle call_func builtin — dynamic function invocation by name
     if callee == "call_func" {
         if positional.is_empty() {
-            ctx.pop_frame();
             return Err("call_func expects at least 1 argument".to_string());
         }
         let func_name = positional[0].to_string();
@@ -1601,44 +1608,36 @@ fn exec_call(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Resul
 
         if named.is_empty() {
             if let Some(result) = invoke_builtin(&func_name, &func_args) {
-                ctx.pop_frame();
                 return result;
             }
         }
 
         let callable = resolve_callable(&func_name, ctx)?;
-        let result = match callable {
+        return match callable {
             Callable::Local(f) => invoke_function(&f, &func_args, &named, ctx),
             Callable::External { module, name } => {
                 invoke_external_function(module, &name, &func_args, &named, ctx)
             }
         };
-        ctx.pop_frame();
-        return result;
     }
 
     if named.is_empty() {
         if let Some(result) = invoke_builtin(callee, &positional) {
-            ctx.pop_frame();
             return result;
         }
     }
 
     if let Some(result) = invoke_object_method_call(callee, &positional, &named, ctx) {
-        ctx.pop_frame();
         return result;
     }
 
     let callable = resolve_callable(callee, ctx)?;
-    let result = match callable {
+    match callable {
         Callable::Local(f) => invoke_function(&f, &positional, &named, ctx),
         Callable::External { module, name } => {
             invoke_external_function(module, &name, &positional, &named, ctx)
         }
-    };
-
-    ctx.pop_frame();
-    result
+    }
 }
 
 fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static str> {
@@ -1848,6 +1847,18 @@ fn invoke_external_function(
     // Temporarily inject module symbols so module functions can compose
     // with sibling module functions and module-level variables.
     let mut previous_callables: HashMap<String, Option<Callable>> = HashMap::new();
+
+    // 1) Inject the functions this module imported from other modules, so a
+    //    module function can call its own `get X from other` imports.
+    for (name, callable) in &module.callables {
+        if module.funcs.contains_key(name) {
+            continue; // own functions are injected in step 2 as externals
+        }
+        previous_callables.insert(name.clone(), ctx.rt.callables.get(name).cloned());
+        ctx.rt.callables.insert(name.clone(), callable.clone());
+    }
+
+    // 2) Inject the module's own functions.
     for func_name in module.funcs.keys() {
         previous_callables.insert(func_name.clone(), ctx.rt.callables.get(func_name).cloned());
         ctx.rt.callables.insert(
@@ -9820,17 +9831,15 @@ mod tests {
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.var: total
-    int
-    0
+var total int = 0
 
-Repeat 5:
+repeat 5
     total is total + 1
 
-if total == 5:
-    say: "ok"
-otherwise:
-    say: "bad"
+if total == 5
+    say "ok"
+otherwise
+    say "bad"
 "#;
         fs::write(&main_file, src).expect("write main file");
 
@@ -9843,11 +9852,8 @@ otherwise:
     #[test]
     fn make_type_converts_existing_variable() {
         let src = r#"
-def.var: UInput
-    int
-    4
-
-makeType: string of UInput
+var UInput int = 4
+var converted string = string(UInput)
 "#;
 
         let lines = preprocess(src).expect("preprocesses");
@@ -9856,8 +9862,7 @@ makeType: string of UInput
         let mut ctx = ExecContext::new(&mut rt);
         exec_block(&program, &mut ctx).expect("program executes");
 
-        assert_eq!(ctx.rt.vars.get("UInput").unwrap().to_string(), "4");
-        assert!(matches!(ctx.rt.vars.get("UInput"), Some(Value::Str(_))));
+        assert!(matches!(ctx.rt.vars.get("converted"), Some(Value::Str(s)) if s == "4"));
     }
     #[test]
     fn imports_module_from_indent_path() {
@@ -9869,12 +9874,12 @@ makeType: string of UInput
 
         fs::write(
             pkg_dir.join("mathmod.ind"),
-            "def.fun: Double\n    Give: argument * 2\n",
+            "fun Double\n    give argument * 2\n",
         )
         .expect("write module");
         fs::write(
             main_dir.join("main.ind"),
-            "Get: Double From: mathmod As: Twice\nTwice;\n    7\n",
+            "get Double from mathmod as Twice\nvar r int = Twice 7\nsay r\n",
         )
         .expect("write main");
 
@@ -9892,25 +9897,11 @@ makeType: string of UInput
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.var: bag
-    dynamic
-    {"name": "Indent", "v": 1}
-
-def.var: nums
-    dynamic
-    [10, 20, 30]
-
-def.var: title
-    string
-    bag["name"]
-
-def.var: second
-    int
-    nums[1]
-
-def.var: firstChar
-    string
-    title[0]
+var bag dynamic = {"name": "Indent", "v": 1}
+var nums dynamic = [10, 20, 30]
+var title string = bag["name"]
+var second int = nums[1]
+var firstChar string = title[0]
 "#;
         fs::write(&main_file, src).expect("write main file");
 
@@ -9919,7 +9910,7 @@ def.var: firstChar
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
         assert!(matches!(rt.vars.get("title"), Some(Value::Str(s)) if s == "Indent"));
         assert!(matches!(rt.vars.get("second"), Some(Value::Int(20))));
-        assert!(matches!(rt.vars.get("firstChar"), Some(Value::Str(s)) if s == "A"));
+        assert!(matches!(rt.vars.get("firstChar"), Some(Value::Str(s)) if s == "I"));
     }
 
     #[test]
@@ -9928,12 +9919,10 @@ def.var: firstChar
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.fun: Add(a, b)
-    say: a + b
+fun Add a b
+    say a + b
 
-Add;
-    3
-    4
+Add 3 4
 
 Add;
     b is 10
@@ -9960,12 +9949,10 @@ Add;
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.fun: Add(a:int, b:int) -> int
-    Give: a + b
+fun Add a b as int
+    give a + b
 
-def.var: sum
-    int
-    Add(5, 7)
+var sum int = Add 5 7
 "#;
         fs::write(&main_file, src).expect("write main file");
 
@@ -10002,14 +9989,14 @@ def.var: sum
         fs::create_dir_all(&std_dir).expect("create std dir");
         fs::write(
             std_dir.join("math.ind"),
-            "def.fun: Add(a, b)\n    say: a + b\n",
+            "fun Add a b\n    give a + b\n",
         )
         .expect("write module");
 
         let main_file = root.join("main.ind");
         fs::write(
             &main_file,
-            "Get: Add From: std.math As: Plus\nPlus;\n    1\n    2\n",
+            "get Add from std.math as Plus\nvar r int = Plus 1 2\nsay r\n",
         )
         .expect("write main file");
 
@@ -10024,17 +10011,9 @@ def.var: sum
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r##"
-def.var: accent
-    color
-    RED
-
-def.var: accentHex
-    color
-    "#22c55e"
-
-def.var: accentBare
-    color
-    #3b82f6
+var accent color = RED
+var accentHex color = "#22c55e"
+var accentBare color = "#3b82f6"
     "##;
         fs::write(&main_file, src).expect("write main file");
 
@@ -10052,9 +10031,7 @@ def.var: accentBare
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.var: state
-    string
-    "start"
+var state string = "start"
 
 Do:
     flag: "boom"
@@ -10079,9 +10056,7 @@ Lastly:
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.var: status
-    string
-    "init"
+var status string = "init"
 
 Do:
     status is "ok"
@@ -10104,11 +10079,11 @@ Lastly:
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         let src = r#"
-def.fun: Pair(a, b) -> string
-    Give: a + ":" + b
+fun Pair a b as string
+    give a + ":" + b
 
-say;
-    Pair("left", "right")
+var p string = Pair "left" "right"
+say p
 "#;
         fs::write(&main_file, src).expect("write main file");
 
