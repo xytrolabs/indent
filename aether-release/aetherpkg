@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_INDEX_DEFAULT="${SCRIPT_DIR}/packages/index.txt"
-INDEX_FALLBACK_URL="https://raw.githubusercontent.com/StratosLabs-Aether/air/main/packages/index.txt"
-INDEX_FALLBACK_URL_LEGACY="https://raw.githubusercontent.com/rafih110610/aether-air/master/index.txt"
+INDEX_FALLBACK_URL="https://raw.githubusercontent.com/xytrolabs/air/main/packages/index.txt"
+INDEX_FALLBACK_URL_LEGACY="https://raw.githubusercontent.com/StratosLabs-Aether/air/main/packages/index.txt"
 USER_AETHER_HOME="${HOME}/.local/share/aether"
 USER_SITE_PACKAGES="${USER_AETHER_HOME}/site-packages"
 USER_LOCKFILE="${USER_AETHER_HOME}/packages.lock"
@@ -14,7 +14,7 @@ LOCK_FILE="aether.lock"
 UPDATE_DEPENDENCIES="1"
 
 # ---- SemVer resolution using GitHub tags ----
-STATIC_SEMVER_REGISTRY="${AETHER_SEMVER_REGISTRY:-https://raw.githubusercontent.com/StratosLabs-Aether/air}"
+STATIC_SEMVER_REGISTRY="${AETHER_SEMVER_REGISTRY:-https://raw.githubusercontent.com/xytrolabs/air}"
 SEMVER_TAGS_CACHE=""
 
 # parse_package_spec "math@^1.2.0" → NAME_PART="math" VERSION_SPEC="^1.2.0"
@@ -87,7 +87,7 @@ fetch_semver_tags() {
     printf "%s" "$SEMVER_TAGS_CACHE"
     return
   fi
-  local api_url="https://api.github.com/repos/StratosLabs-Aether/air/tags?per_page=100"
+  local api_url="https://api.github.com/repos/xytrolabs/air/tags?per_page=100"
   local tags_json
   tags_json="$(curl -fsSL --connect-timeout 5 --max-time 15 "$api_url" 2>/dev/null || true)"
   if [[ -z "$tags_json" ]]; then
@@ -322,7 +322,7 @@ resolve_index_to_file() {
           --retry 2 \
           --retry-delay 1 \
           "$INDEX_FALLBACK_URL_LEGACY" -o "$tmp"; then
-          echo "Warning: using legacy registry; run 'air registry github StratosLabs-Aether/air' to upgrade" >&2
+          echo "Warning: using legacy registry; run 'air registry github xytrolabs/air' to upgrade" >&2
           echo "$tmp"
           return
         fi
