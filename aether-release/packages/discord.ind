@@ -738,7 +738,7 @@ fun Run
 #!   command "greet" "Say hello"
 #!   reply "Hello there! 👋"
 
-#! Load all puzzles from a directory (.ath or .ind files).
+#! Load all puzzles from a directory (.ind files — legacy .ath also accepted).
 #! Returns bot — reassign:  bot is LoadPuzzles bot "puzzles"
 fun LoadPuzzles
     bot
@@ -1294,7 +1294,12 @@ fun load bot dir
         give bot
     var files dynamic = os_list_dir(dir)
     repeat file in files
-        if ends_with(file, ".ath")
+        var isPuzzle int = 0
+        if ends_with(file, ".ind")
+            isPuzzle is 1
+        or ends_with(file, ".ath")
+            isPuzzle is 1
+        if isPuzzle
             var path string = dir + "/" + file
             file_read_text(path)
             say "📦 Loaded puzzle: " + file

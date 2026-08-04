@@ -9002,17 +9002,33 @@ fn self_update() {
     // Copy the binary over the current one
     let current = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("indent"));
     let new_bin = tmp.join("indent-native/target/release/indent");
-    
+
     if new_bin.exists() {
         let backup = format!("{}.bak", current.display());
         std::fs::copy(&current, &backup).ok();
-        
-        match std::fs::copy(&new_bin, &current) {
+
+        // Overwriting a running executable in place fails on Linux with
+        // "Text file busy". Stage the new binary in the same directory and
+        // rename it over the current one — rename works while it is running.
+        let current_dir = current.parent().unwrap_or(Path::new("."));
+        let staged = current_dir.join(format!(".indent.new.{}", std::process::id()));
+        if let Err(e) = std::fs::copy(&new_bin, &staged) {
+            eprintln!("Indent: cannot stage new binary — try running with sudo.\n  {}", e);
+            std::process::exit(1);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+        }
+
+        match std::fs::rename(&staged, &current) {
             Ok(_) => {
                 println!("  ✓ Updated to the latest Indent!");
                 println!("  (Backup saved to {})", backup);
             },
             Err(e) => {
+                let _ = std::fs::remove_file(&staged);
                 eprintln!("Indent: cannot replace binary — try running with sudo.\n  {}", e);
                 eprintln!("  New binary at: {}", new_bin.display());
                 std::process::exit(1);
