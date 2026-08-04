@@ -648,3 +648,48 @@ DangerButton label customId` · `LinkButton label url` · `ActionRow components`
 
 `InteractionFollowup token interaction content` · `CtxFollowup ctx content` —
 send a follow-up message after an interaction reply.
+
+### 🔉 Voice
+
+`MoveMember token guild user channel` · `DisconnectMember token guild user`.
+
+### 😀 Emoji & stickers
+
+`CreateEmoji token guild name imageB64 roles` · `GetEmojis` · `GetStickers` ·
+`CreateSticker token guild name desc tags imageDataUri`.
+
+### 🔗 Webhooks
+
+`ExecuteWebhook webhookId webhookToken content` — send through a webhook
+(no bot token needed).
+
+### ⚙️ Slash command management
+
+`GetSlashCommands token` · `EditSlash token commandId payload` ·
+`DeleteSlash token commandId`.
+
+### 🤖 Bot info & invite
+
+`GetBotInfo token` · `BotInvite token permissions` — builds a bot invite link.
+
+### 🧭 More ctx helpers
+
+`CtxReplyEmbed ctx embed` · `CtxAuthorMention ctx` · `CtxChannelMention ctx`.
+
+### ⏱️ Timestamp & duration
+
+`DiscordTimestamp ts fmt` — `<t:...:R>` markup (`fmt`: R/t/T/d/D/f/F) ·
+`ParseDuration "2h30m"` — human duration → seconds.
+
+### 📊 Polls
+
+`CreatePoll token channel question options hours` — build a poll.
+
+### 🔐 Permissions & threads
+
+`SetChannelPermissions token channel overwrite allow deny type` ·
+`AddThreadMember` · `RemoveThreadMember`.
+
+### 📅 Scheduled events
+
+`CreateEvent token guild name desc channel startIso` — schedule a voice event.

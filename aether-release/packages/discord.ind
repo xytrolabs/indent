@@ -1788,3 +1788,191 @@ fun InteractionFollowup token interaction content
 
 fun CtxFollowup ctx content
     give InteractionFollowup ctx.token ctx.source content
+
+#! ==============================================================
+#! 🔉  VOICE
+#! ==============================================================
+
+fun MoveMember token guildId userId channelId
+    var path string = "/guilds/" + guildId + "/members/" + userId
+    give Patch path token {"channel_id": channelId}
+
+fun DisconnectMember token guildId userId
+    var path string = "/guilds/" + guildId + "/members/" + userId
+    give Patch path token {"channel_id": empty}
+
+#! ==============================================================
+#! 😀  EMOJI & STICKERS
+#! ==============================================================
+
+fun CreateEmoji token guildId name imageB64 roles
+    var path string = "/guilds/" + guildId + "/emojis"
+    give Post path token {"name": name, "image": imageB64, "roles": roles}
+
+fun GetEmojis token guildId
+    var path string = "/guilds/" + guildId + "/emojis"
+    give Get path token
+
+fun GetStickers token guildId
+    var path string = "/guilds/" + guildId + "/stickers"
+    give Get path token
+
+fun CreateSticker token guildId name desc tags imageDataUri
+    var path string = "/guilds/" + guildId + "/stickers"
+    give Post path token {"name": name, "description": desc, "tags": tags, "image": imageDataUri}
+
+#! ==============================================================
+#! 🔗  WEBHOOKS
+#! ==============================================================
+
+#! Send a message through a webhook (no bot token needed).
+fun ExecuteWebhook webhookId webhookToken content
+    var url string = API + "/webhooks/" + webhookId + "/" + webhookToken
+    give http_post_json url {"content": content} ""
+
+#! ==============================================================
+#! ⚙️  SLASH COMMAND MANAGEMENT
+#! ==============================================================
+
+fun GetSlashCommands token
+    var path string = "/applications/@me/commands"
+    give Get path token
+
+fun EditSlash token commandId payload
+    var path string = "/applications/@me/commands/" + commandId
+    give Patch path token payload
+
+fun DeleteSlash token commandId
+    var path string = "/applications/@me/commands/" + commandId
+    give Delete path token {}
+
+#! ==============================================================
+#! 🤖  BOT / APP INFO & INVITE
+#! ==============================================================
+
+fun GetBotInfo token
+    var path string = "/oauth2/applications/@me"
+    give Get path token
+
+#! Build a bot invite link with the given permission integer.
+fun BotInvite token permissions
+    var url string = ""
+    Do:
+        var resp dynamic = Get "/oauth2/applications/@me" token
+        var app dynamic = json_loads resp.body
+        var cid string = app.id
+        var permStr string = string(permissions)
+        url is "https://discord.com/api/oauth2/authorize?client_id=" + cid + "&permissions=" + permStr + "&scope=bot"
+    Catch as err:
+        url is ""
+    give url
+
+#! ==============================================================
+#! 🧭  MORE CTX HELPERS
+#! ==============================================================
+
+#! Reply with an embed (message channel or interaction callback)
+fun CtxReplyEmbed ctx embed
+    var isInt int = 0
+    if CtxIsInteraction ctx
+        isInt is 1
+    if isInt
+        give InteractionEmbed ctx.token ctx.source embed
+    var path string = "/channels/" + ctx.channel_id + "/messages"
+    give Post path ctx.token {"embeds": [embed]}
+
+fun CtxAuthorMention ctx
+    give "<@" + ctx.author.id + ">"
+
+fun CtxChannelMention ctx
+    if ctx.channel_id == "" or ctx.channel_id == empty
+        give ""
+    give "<#" + ctx.channel_id + ">"
+
+#! ==============================================================
+#! ⏱️  TIMESTAMP & DURATION HELPERS
+#! ==============================================================
+
+#! Discord timestamp markup: fmt = R (relative, default), t, T, d, D, f, F
+fun DiscordTimestamp ts fmt
+    if fmt == "" or fmt == empty
+        fmt is "R"
+    var tsStr string = string(ts)
+    give "<t:" + tsStr + ":" + fmt + ">"
+
+#! Parse a human duration like "90s", "5m", "2h", "1d" into seconds.
+fun ParseDuration text
+    var total int = 0
+    var i int = 0
+    var n int = len(text)
+    var num string = ""
+    repeat
+        if i >= n
+            break
+        var ch string = text[i]
+        var isDigit int = 0
+        if contains "0123456789" ch
+            isDigit is 1
+        if isDigit
+            num is num + ch
+        otherwise
+            var unit string = ch
+            var mult int = 0
+            if unit == "s"
+                mult is 1
+            or unit == "m"
+                mult is 60
+            or unit == "h"
+                mult is 3600
+            or unit == "d"
+                mult is 86400
+            or unit == "w"
+                mult is 604800
+            if num != ""
+                var val int = int(num)
+                total is total + val * mult
+                num is ""
+        i is i + 1
+    give total
+
+#! ==============================================================
+#! 📊  POLLS
+#! ==============================================================
+
+fun CreatePoll token channelId question options hours
+    var answers dynamic = []
+    repeat opt in options
+        var entry dynamic = {"poll_media": {"text": opt}}
+        answers is append answers entry
+    var path string = "/channels/" + channelId + "/polls"
+    var payload dynamic = {"question": {"text": question}, "answers": answers, "duration": hours}
+    give Post path token payload
+
+#! ==============================================================
+#! 🔐  CHANNEL PERMISSIONS
+#! ==============================================================
+
+fun SetChannelPermissions token channelId overwriteId allow deny type
+    var path string = "/channels/" + channelId + "/permissions/" + overwriteId
+    give Put path token {"allow": allow, "deny": deny, "type": type}
+
+#! ==============================================================
+#! 🧵  THREAD MEMBERS
+#! ==============================================================
+
+fun AddThreadMember token threadId userId
+    var path string = "/channels/" + threadId + "/thread-members/" + userId
+    give Put path token {}
+
+fun RemoveThreadMember token threadId userId
+    var path string = "/channels/" + threadId + "/thread-members/" + userId
+    give Delete path token {}
+
+#! ==============================================================
+#! 📅  SCHEDULED EVENTS
+#! ==============================================================
+
+fun CreateEvent token guildId name desc channelId startIso
+    var path string = "/guilds/" + guildId + "/scheduled-events"
+    var payload dynamic = {"name": name, "description": desc, "privacy_level": 2, "scheduled_start_time": startIso, "entity_type": 3, "channel_id": channelId}
+    give Post path token payload
