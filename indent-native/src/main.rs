@@ -48,6 +48,12 @@ enum Stmt {
         name: String,
         value: ValueSource,
     },
+    AssignOp {
+        line: usize,
+        name: String,
+        op: String,  // "+=", "-=", "*=", "/=", "%="
+        value: ValueSource,
+    },
     AssignIndex {
         line: usize,
         name: String,
@@ -890,6 +896,15 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             assign_var_chain(name, v, ctx);
             Ok(Control::None)
         }
+        Stmt::AssignOp { line, name, op, value } => {
+            let rhs = eval_value_source(value, ctx)?;
+            let lhs = ctx.get_var(name)
+                .ok_or_else(|| format!("Line {}: variable '{}' is not defined", line, name))?;
+            let result = eval_binary(&op[..op.len()-1], lhs, rhs)
+                .map_err(|e| format!("Line {}: {}", line, e))?;
+            assign_var_chain(name, result, ctx);
+            Ok(Control::None)
+        }
         Stmt::AssignIndex {
             line,
             name,
@@ -1156,6 +1171,7 @@ fn stmt_line(stmt: &Stmt) -> usize {
         | Stmt::MakeType { line, .. }
         | Stmt::DefClass { line, .. }
         | Stmt::Assign { line, .. }
+        | Stmt::AssignOp { line, .. }
         | Stmt::AssignIndex { line, .. }
         | Stmt::AssignSlice { line, .. }
         | Stmt::DefFun { line, .. }
@@ -7407,7 +7423,8 @@ impl Parser {
                 let ty = if parts.len() >= 2 {
                     parts[1..].join(" ")
                 } else {
-                    "dynamic".to_string()
+                    // No explicit type — infer from value expression
+                    infer_type_from_expr(value_expr).to_string()
                 };
 
                 // Check for ask expression
@@ -7906,6 +7923,28 @@ impl Parser {
                     step_expr,
                     value,
                 },
+            });
+        }
+
+        // Compound assignment: x += expr, x -= expr, etc.
+        if let Some((name, op, expr)) = parse_compound_assignment(text) {
+            let value = if let Some((callee, args_text)) = expr.split_once(' ') {
+                if looks_like_callee(callee) && !is_keyword(callee)
+                    && !contains_expr_operators(args_text)
+                {
+                    let args = parse_inline_args(args_text);
+                    ValueSource::Call { callee: callee.to_string(), args }
+                } else {
+                    ValueSource::Expr(expr)
+                }
+            } else {
+                ValueSource::Expr(expr)
+            };
+            return Ok(Stmt::AssignOp {
+                line: line.line_no,
+                name,
+                op,
+                value,
             });
         }
 
@@ -8713,6 +8752,45 @@ fn parse_assignment(text: &str) -> Option<(String, String)> {
     Some((name.to_string(), right.trim().to_string()))
 }
 
+fn parse_compound_assignment(text: &str) -> Option<(String, String, String)> {
+    // Try each compound operator
+    for op in &["+=", "-=", "*=", "/=", "%="] {
+        if let Some((left, right)) = text.split_once(*op) {
+            let name = left.trim().to_string();
+            if looks_like_callee(&name) && !name.is_empty() && !right.trim().is_empty() {
+                return Some((name, op.to_string(), right.trim().to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Infer a type string from a value expression at var declaration time
+fn infer_type_from_expr(expr: &str) -> &str {
+    let s = expr.trim();
+    // Literal inference
+    if s == "empty" || s == "null" { return "empty"; }
+    if s == "TRUE" || s == "FALSE" || s == "YES" || s == "NO" || s == "true" || s == "false" { return "boolean"; }
+    if s.starts_with('"') || s.starts_with('\'') { return "string"; }
+    if s.starts_with('#') { return "color"; }
+    if s.starts_with('[') { return "list"; }
+    if s.starts_with('{') { return "dict"; }
+    // Number inference
+    if s.parse::<i64>().is_ok() { return "int"; }
+    if let Ok(_) = s.parse::<f64>() { return "float"; }
+    // Function call inference heuristics
+    if s.starts_with("ask(") { return "string"; }
+    if s.starts_with("int(") { return "int"; }
+    if s.starts_with("float(") { return "float"; }
+    if s.starts_with("bool(") { return "boolean"; }
+    if s.starts_with("string(") || s.starts_with("str(") { return "string"; }
+    if s.starts_with("range(") { return "list"; }
+    if s.starts_with("time_now") || s.starts_with("time_utc") { return "float"; }
+    if s.starts_with("uuid") { return "string"; }
+    // Default
+    "dynamic"
+}
+
 fn parse_subscript_assignment(text: &str) -> Result<Option<(SubscriptAssignTarget, String)>, String> {
     let Some((left_raw, right_raw)) = text.split_once(" is ") else {
         return Ok(None);
@@ -9478,6 +9556,7 @@ fn touch_lines(stmt: &Stmt) {
         | Stmt::MakeType { line, .. }
         | Stmt::DefClass { line, .. }
         | Stmt::Assign { line, .. }
+        | Stmt::AssignOp { line, .. }
         | Stmt::AssignIndex { line, .. }
         | Stmt::AssignSlice { line, .. }
         | Stmt::DefFun { line, .. }
