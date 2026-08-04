@@ -1,7 +1,7 @@
-# Indent Learning Course (v1.2)
+# Indent Learning Course (v1.3)
 
 > A step-by-step curriculum to go from zero to proficient in Indent.
-> **🆕 Updated for Indent 1.2** — default params, string interpolation, comprehensions, lambdas, and more!
+> **🆕 Updated for Indent 1.3** — type inference, compound assignment, and all 1.2 features!
 
 ---
 
@@ -9,8 +9,8 @@
 
 | # | Lesson | Time | Topics |
 |---|---|---|---|
-| 01 | [Quickstart](01-quickstart.md) | 15 min | Install, Hello World, Variables, `%name%` interpolation |
-| 02 | [Functions & Types](02-functions-and-types.md) | 25 min | Functions, Default params, Types, Return values (`as int`) |
+| 01 | [Quickstart](01-quickstart.md) | 15 min | Install, Hello World, Variables, Type inference, `%name%` interpolation |
+| 02 | [Functions & Types](02-functions-and-types.md) | 25 min | Functions, Default params, Types, Type inference, Return values (`as int`) |
 | 03 | [Control Flow](03-control-flow.md) | 25 min | If/Or/Otherwise, Match, Ternary, Chained comparisons |
 | 04 | [Lists & Dictionaries](04-lists-and-dictionaries.md) | 30 min | Lists, Dicts, Comprehensions, Loops (`for`/`repeat`) |
 | 05 | [Strings & Builtins](05-strings-and-builtins.md) | 25 min | String methods, Regex, Built-in functions, `null` |

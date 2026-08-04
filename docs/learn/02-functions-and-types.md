@@ -99,6 +99,25 @@ say len colors        #! 3
 | `dynamic` | anything | Any type, can change |
 | `empty` | `empty` | No value (null) |
 
+### Type Inference (v1.3)
+
+When the value makes the type obvious, you can skip the type annotation:
+
+```indent
+var name = "Ada"       # → string
+var age = 28           # → int
+var pi = 3.14          # → float
+var flag = true        # → boolean
+var nums = [1, 2, 3]   # → list
+```
+
+Explicit types still work — use them when you want to be clear or when inference can't determine the type:
+
+```indent
+var x int = 42              # explicit — always fine
+var data dynamic = getData  # inference can't help here
+```
+
 ### The `dynamic` Type
 
 Use `dynamic` when you don't know the type ahead of time, or need mixed content:

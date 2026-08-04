@@ -9,6 +9,17 @@ Make Indent a complete standalone language with a native-first runtime and ecosy
 - Native exception flow:
   - `Do / Catch / Otherwise / Lastly`
   - `flag:` for raising errors.
+- **Python-style type inference**: `var x = 42` infers `int`, `var name = "Ada"` infers `string`.
+- **Compound assignment operators**: `+=`, `-=`, `*=`, `/=`, `%=`.
+- **Default parameters**: `fun greet name = "World"`.
+- **String interpolation**: `"Hello %name%"`.
+- **Comprehensions**: list and dict comprehensions with optional filters.
+- **Lambda expressions**: `fn(x): x * 2`.
+- **Ternary expressions**: `"adult" if age >= 18 else "child"`.
+- **Bitwise operators**: `&`, `|`, `^`, `~`, `<<`, `>>`.
+- **Regex, Datetime, Crypto, Path, Functional builtins**.
+- **Classes with single inheritance**.
+- **Match/case pattern matching**.
 
 ## Remaining Native Milestones
 1. Language capability

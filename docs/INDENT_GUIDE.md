@@ -1,10 +1,17 @@
-# Your Journey with Indent 1.2
+# Your Journey with Indent 1.3
 
-> Indent 1.2 adds **default parameters, `for` loops, `import` keyword, `null`, string interpolation, comprehensions, lambdas, regex, and 20+ new builtins** — all with the same simple, lovable syntax.
+> Indent 1.3 adds **Python-style type inference** and **compound assignment operators** — write less, do more.
+
+> Indent 1.2 added **default parameters, `for` loops, `import` keyword, `null`, string interpolation, comprehensions, lambdas, regex, and 20+ new builtins** — all with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
 ---
+
+## What's New in 1.3.0
+
+- **Type inference**: `var x = 42` — Indent infers `int` from the value. No need to type `var x int = 42` when the value makes the type obvious.
+- **Compound assignment**: `x += 8`, `x -= 10`, `x *= 2`, `x /= 3`, `x %= 5` — shorthand for `x is x + N`
 
 ## What's New in 1.2.0
 

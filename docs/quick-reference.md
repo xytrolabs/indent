@@ -1,12 +1,26 @@
-# Indent Quick Reference (v1.2.0)
+# Indent Quick Reference (v1.3.0)
 
 ## Basics
 ```indent
 #! Comment                  say "Hello"                 # Output
-var x int = 42              # Variable (string/int/float/boolean/dynamic/empty/list/dict)
+var x = 42                  # Variable — type inferred from value!
+var x int = 42              # Variable with explicit type
+var name = "Ada"            # string (inferred)
+var flag = true             # boolean (inferred)
+var nums = [1,2,3]          # list (inferred)
 x is 43                     # Reassign
 null                        # Null/none value (alias for empty)
 ```
+
+## Compound Assignment (v1.3)
+```indent
+x += 8     # x = x + 8
+x -= 10    # x = x - 10
+x *= 2     # x = x * 2
+x /= 3     # x = x / 3
+x %= 5     # x = x % 5
+```
+Works with any numeric variable. list/dict merge with +=.
 
 ## String Interpolation
 ```indent
@@ -221,23 +235,10 @@ catch as err:
     say err
 lastly:
     say "cleanup"
-```
 
-## Error Codes
-| Code | Meaning |
 time_now() / time_sleep(seconds)
 random_int(min, max) / random_choice(list) / random_shuffle(list) / random_float()
 math_pow(base, exp) / math_sqrt(n) / math_sin(n) / math_abs(n) / math_floor(n) / math_ceil(n)
-```
-
-## Error Handling
-```indent
-do:
-    flag "message"
-catch as err:
-    say err
-lastly:
-    say "cleanup"
 ```
 
 ## Error Codes
@@ -262,4 +263,6 @@ lastly:
 3. Lists/dicts are immutable — use `is` + `+` to accumulate
 4. Bare identifiers in `var` are treated as function calls — use `string(param)` instead
 5. Imports resolve: same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
-6. `indent --update` keeps you on the latest version — run it anytime!
+6. Type inference: `var x = 42` is `var x int = 42` — let the compiler do the work!
+7. Compound assignment: `x += 5` instead of `x is x + 5`
+8. `indent --update` keeps you on the latest version — run it anytime!

@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v1.2.0)
+# Indent Built-in Functions — API Reference (v1.3.0)
 
-> Complete reference for every built-in function available in Indent 1.2.0.
+> Complete reference for every built-in function available in Indent 1.3.0.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`
+> **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
 
 ---
 

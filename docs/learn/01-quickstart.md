@@ -30,7 +30,7 @@ irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 
 ### Verify
 ```bash
 indent --version
-# → indent 1.2.0
+# → indent 1.3.0
 ```
 
 ---
@@ -55,9 +55,10 @@ indent run hello.ind
 
 ## 2. Variables
 
-Indent has six types. Every variable must declare its type:
+Indent has six types. You can declare them explicitly — or let Indent infer the type:
 
 ```indent
+# Explicit types (always works)
 var name string = "Ada"           # string
 var age int = 28                   # int
 var pi float = 3.14                # float
@@ -66,6 +67,13 @@ var anything dynamic = [1, "two"]  # dynamic (any type)
 var nothing empty                  # empty (null, no value)
 var scores list = [95, 87, 92]    # list (typed list)
 var config dict = {"key": "val"}  # dict (typed dictionary)
+
+# Type inference (v1.3) — Indent figures out the type from the value!
+var name = "Ada"       # → string
+var age = 28            # → int
+var pi = 3.14           # → float
+var active = true       # → boolean
+var nums = [1, 2, 3]    # → list
 ```
 
 Reassign with `is`:
@@ -74,7 +82,14 @@ age is 29
 name is "Grace"
 ```
 
-💡 **Tip**: Use `list` for typed lists, `dict` for typed dictionaries, and `dynamic` when you're unsure of the type or need mixed content. Use `empty` for "no value" (like `null`/`None` in other languages).
+Compound assignment (v1.3):
+```indent
+age += 5     # age is age + 5
+age -= 2     # age is age - 2
+age *= 10    # age is age * 10
+```
+
+💡 **Tip**: Use `list` for typed lists, `dict` for typed dictionaries, and `dynamic` when you're unsure of the type or need mixed content. Use `empty` for "no value" (like `null`/`None` in other languages). When the value makes the type obvious, skip the type and let Indent infer it!
 
 > **`=` vs `is`**: Use `=` when **declaring** a variable (`var x int = 10`). Use `is` when **reassigning** (`x is 20`). Think of `=` as "define" and `is` as "becomes."
 
