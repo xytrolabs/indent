@@ -1,0 +1,2376 @@
+#! =============================================================================
+#! discord.ind 3.0 — The Indent Discord bot library
+#! =============================================================================
+#!
+#! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
+#! command routing, event system, puzzle/cog loader, a discord.py-style `ctx`
+#! system, clean block-style helpers, and a built-in audit/monitoring suite.
+#! Import it and write your bot.
+#!
+#! v3.0 adds: message monitoring (edits, deletes, bulk-deletes, pins,
+#! reactions), moderation events (bans/unbans, member/voice/channel changes),
+#! a message cache, and one-call SetupAudit logging. Gateway intents now
+#! default to a broad non-privileged set — override with bot.intents.
+#!
+#! NOTE: the native Indent runtime passes function arguments by value, so every
+#! function that modifies the bot RETURNS the modified bot. Always reassign:
+#!   bot is addCmd bot "kick" kickCmd ["user"]
+#!   bot is LoadPuzzles bot "puzzles"
+#!
+#! 🚀 3-line bot:
+#!   get QuickBot from discord
+#!   var bot dynamic = QuickBot "TOKEN" "!"
+#!   Run bot
+#!
+#! ⚡ With commands:
+#!   get QuickBot from discord
+#!   var bot dynamic = QuickBot "TOKEN" "!"
+#!   AddCommand bot "ping" "Check latency" handler
+#!   On bot "ready" readyHandler
+#!   Run bot
+#!
+#! 📋 Audit log (new in 3.0):
+#!   get QuickBot, SetupAudit from discord
+#!   var bot dynamic = QuickBot "TOKEN" "!"
+#!   bot is SetupAudit bot "123456789012345678"   # <- channel id for logs
+#!   Run bot
+#!
+#! 🧭 discord.py-style ctx:
+#!   get CtxSend from discord
+#!   fun greet ctx args
+#!       CtxSend ctx "Hello!"
+#!   bot is BotHandler bot "greet" "Greet people" "greet"
+#!
+#! 📖 Full reference: docs/discord-package.md
+#! =============================================================================
+
+#! ---- constants ----
+var API string = "https://discord.com/api/v10"
+var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
+
+#! discord package version
+var DiscordVersion string = "3.0.0"
+
+#! Current source/context for the clean block API (module-level, shared).
+#! The native runtime passes args by value, so we stash the "current source"
+#! here so sendMsg/kick/ban/etc. can reply without needing bot._ctx to mutate.
+var _CTX dynamic = {}
+
+#! Current gateway socket id (module-level, shared) — used by presence helpers.
+var _SOCKET int = 0
+
+#! Lightweight in-memory message cache (keyed by message id) so MESSAGE_DELETE
+#! / MESSAGE_UPDATE handlers can see the last-known message content.
+var _MSG_CACHE dynamic = {}
+
+fun CacheMessage
+    msg
+    if has_key msg "id"
+        var mid string = msg.id
+        _MSG_CACHE[mid] is msg
+
+fun LookupMessage
+    mid
+    if has_key _MSG_CACHE mid
+        give _MSG_CACHE[mid]
+    give empty
+
+fun ClearMessageCache
+    _MSG_CACHE is {}
+
+#! ==============================
+#! 🔌  REST API (low level)
+#! ==============================
+
+fun Get
+    path
+    token
+    var url string = API + path
+    var auth string = "Bot " + token
+    give http_get url auth
+
+fun Post
+    path
+    token
+    body
+    var url string = API + path
+    var auth string = "Bot " + token
+    give http_post_json url body auth
+
+fun Put
+    path
+    token
+    body
+    var url string = API + path
+    var auth string = "Bot " + token
+    give http_put_json url body auth
+
+fun Patch
+    path
+    token
+    body
+    var url string = API + path
+    var auth string = "Bot " + token
+    give http_patch_json url body auth
+
+fun Delete
+    path
+    token
+    var url string = API + path
+    var auth string = "Bot " + token
+    give http_delete url auth
+
+#! ---- message actions ----
+fun Send
+    token
+    channelId
+    content
+    var path string = "/channels/" + channelId + "/messages"
+    give Post path token {"content": content}
+
+fun Reply
+    token
+    channelId
+    messageId
+    content
+    var path string = "/channels/" + channelId + "/messages"
+    give Post path token {"content": content, "message_reference": {"message_id": messageId}}
+
+fun SendEmbed
+    token
+    channelId
+    embed
+    var path string = "/channels/" + channelId + "/messages"
+    give Post path token {"embeds": [embed]}
+
+fun MakeEmbed
+    title
+    description
+    color
+    give {"title": title, "description": description, "color": color}
+
+fun Edit
+    token
+    channelId
+    messageId
+    content
+    var path string = "/channels/" + channelId + "/messages/" + messageId
+    give Patch path token {"content": content}
+
+fun DeleteMsg
+    token
+    channelId
+    messageId
+    var path string = "/channels/" + channelId + "/messages/" + messageId
+    give Delete path token
+
+fun React
+    token
+    channelId
+    messageId
+    emoji
+    var path string = "/channels/" + channelId + "/messages/" + messageId + "/reactions/" + emoji + "/@me"
+    give Put path token {}
+
+fun SendDM
+    token
+    userId
+    content
+    var ch dynamic = Post "/users/@me/channels" token {"recipient_id": userId}
+    give Send token ch.id content
+
+#! ---- moderation ----
+fun Kick
+    token
+    guildId
+    userId
+    reason
+    var url string = "/guilds/" + guildId + "/members/" + userId
+    give Delete url token {"reason": reason}
+
+fun Ban
+    token
+    guildId
+    userId
+    reason
+    var url string = "/guilds/" + guildId + "/bans/" + userId
+    give Put url token {"reason": reason}
+
+fun Unban
+    token
+    guildId
+    userId
+    var url string = "/guilds/" + guildId + "/bans/" + userId
+    give Delete url token {}
+
+fun Timeout
+    token
+    guildId
+    userId
+    seconds
+    var url string = "/guilds/" + guildId + "/members/" + userId
+    var until float = time_now + seconds
+    give Patch url token {"communication_disabled_until": until}
+
+fun AddRole
+    token
+    guildId
+    userId
+    roleId
+    var url string = "/guilds/" + guildId + "/members/" + userId + "/roles/" + roleId
+    give Put url token {}
+
+fun RemoveRole
+    token
+    guildId
+    userId
+    roleId
+    var url string = "/guilds/" + guildId + "/members/" + userId + "/roles/" + roleId
+    give Delete url token {}
+
+#! ---- guild & user info ----
+fun GetUser
+    token
+    userId
+    var url string = "/users/" + userId
+    give Get url token
+
+fun GetGuild
+    token
+    guildId
+    var url string = "/guilds/" + guildId
+    give Get url token
+
+fun GetChannel
+    token
+    channelId
+    var url string = "/channels/" + channelId
+    give Get url token
+
+#! ---- gateway ----
+fun WsConnect
+    give ws_connect GatewayURL
+
+fun WsSend
+    socketId
+    payload
+    give ws_send_text socketId payload
+
+fun WsRecv
+    socketId
+    give ws_recv_text socketId
+
+fun WsRecvTimeout
+    socketId
+    secs
+    give ws_recv_text_timeout socketId secs
+
+fun WsClose
+    socketId
+    give ws_close socketId
+
+#! ==============================
+#! 🤖  BOT ENGINE (mid level)
+#! ==============================
+
+#! Default gateway intents: broad but NON-privileged (avoids 4014 on bots
+#! without GUILD_MEMBERS/GUILD_PRESENCES whitelisted in the Developer Portal).
+#! Set bot.intents to override, e.g. bot.intents is 33281 for a minimal bot.
+#! 1+4+8+16+32+64+512+1024+2048+4096+8192+32768+65536 = 114301
+var DEFAULT_INTENTS int = 114301
+
+fun Identify
+    token
+    socketId
+    intents
+    var payload dynamic = {"op": 2, "d": {"token": token, "intents": intents, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}}
+    var payloadStr string = json_dumps payload
+    WsSend socketId payloadStr
+
+fun SetPresence
+    token
+    status
+    activityName
+    activityType
+    var act dynamic = empty
+    if activityName != empty
+        act is {"name": activityName, "type": activityType}
+    var payload dynamic = {"op": 3, "d": {"since": empty, "activities": [act], "status": status, "afk": false}}
+
+fun HandleDispatch
+    bot
+    token
+    event
+    var t string = event.t
+    var d dynamic = event.d
+
+    if t == "READY"
+        bot.user is d.user
+        say "✅ Logged in as: " + d.user.username
+        CallEvent bot "ready" d
+
+    or t == "MESSAGE_CREATE"
+        CacheMessage d
+        HandleMessage bot token d
+
+    or t == "MESSAGE_UPDATE"
+        CacheMessage d
+        CallEvent bot "message_edit" d
+
+    or t == "MESSAGE_DELETE"
+        var delMsg dynamic = LookupMessage d.id
+        if delMsg != empty
+            CallEvent bot "message_delete" delMsg
+        otherwise
+            CallEvent bot "message_delete" d
+
+    or t == "MESSAGE_DELETE_BULK"
+        CallEvent bot "message_bulk_delete" d
+
+    or t == "CHANNEL_PIN_UPDATE"
+        CallEvent bot "pin_update" d
+
+    or t == "MESSAGE_REACTION_ADD"
+        CallEvent bot "reaction_add" d
+
+    or t == "MESSAGE_REACTION_REMOVE"
+        CallEvent bot "reaction_remove" d
+
+    or t == "MESSAGE_REACTION_REMOVE_ALL"
+        CallEvent bot "reaction_remove_all" d
+
+    or t == "MESSAGE_REACTION_REMOVE_EMOJI"
+        CallEvent bot "reaction_remove_emoji" d
+
+    or t == "GUILD_BAN_ADD"
+        CallEvent bot "ban_add" d
+
+    or t == "GUILD_BAN_REMOVE"
+        CallEvent bot "ban_remove" d
+
+    or t == "GUILD_MEMBER_UPDATE"
+        CallEvent bot "member_update" d
+
+    or t == "VOICE_STATE_UPDATE"
+        CallEvent bot "voice_state_update" d
+
+    or t == "GUILD_UPDATE"
+        CallEvent bot "guild_update" d
+
+    or t == "CHANNEL_CREATE"
+        CallEvent bot "channel_create" d
+
+    or t == "CHANNEL_UPDATE"
+        CallEvent bot "channel_update" d
+
+    or t == "CHANNEL_DELETE"
+        CallEvent bot "channel_delete" d
+
+    or t == "INTERACTION_CREATE"
+        HandleInteraction bot token d
+
+    or t == "GUILD_CREATE"
+        CallEvent bot "guild_join" d
+
+    or t == "GUILD_MEMBER_ADD"
+        CallEvent bot "member_join" d
+
+    or t == "GUILD_MEMBER_REMOVE"
+        CallEvent bot "member_leave" d
+
+fun HandleMessage
+    bot
+    token
+    msg
+    #! skip own messages
+    if has_key msg "author"
+        if msg.author != empty
+            if has_key msg.author "id"
+                if has_key bot "user"
+                    if bot.user != empty
+                        if has_key bot.user "id"
+                            if msg.author.id == bot.user.id
+                                give empty
+
+    var content string = ""
+    if has_key msg "content"
+        content is msg.content
+
+    var prefix string = ""
+    if has_key bot "prefix"
+        prefix is bot.prefix
+
+    #! check prefix and dispatch command
+    if prefix != empty and prefix != ""
+        if len(content) >= len(prefix)
+            if content[:len(prefix)] == prefix
+                var rest string = content[len(prefix):]
+                var parts dynamic = split rest " "
+                var cmd string = parts[0]
+                #! args are passed as a list (parts[1:])
+                var args dynamic = []
+                if len(parts) > 1
+                    args is parts[1:]
+                do:
+                    RunCommand bot token msg cmd args
+                catch as err:
+                    var errMsg string = "❌ Error: " + err
+                    ReplyTo token msg errMsg
+                give empty
+
+    #! call user message handler (errors don't crash the bot)
+    do:
+        CallEvent bot "message" msg
+    catch as err:
+        give empty
+
+fun HandleInteraction
+    bot
+    token
+    interaction
+    var cmdData dynamic = empty
+    if has_key interaction "data"
+        cmdData is interaction.data
+    if cmdData == empty
+        Acknowledge token interaction
+        give empty
+
+    var hasName int = 0
+    var hasCustom int = 0
+    if has_key cmdData "name"
+        hasName is 1
+    if has_key cmdData "custom_id"
+        hasCustom is 1
+
+    #! ---- dispatch ALL custom_id interactions (buttons, menus) to user code ----
+    if hasCustom
+        do:
+            CallEvent bot "interaction" interaction
+        catch as err:
+            say "   ⚠️ interaction handler error: " + err
+        give empty
+
+    #! ---- unknown interactions (no name, no custom_id) — just acknowledge ----
+    if not hasName
+        Acknowledge token interaction
+        give empty
+
+    #! ---- slash commands ----
+    var name string = cmdData.name
+    var opts dynamic = {}
+    if has_key cmdData "options"
+        var args dynamic = cmdData.options
+        if args != empty
+            repeat item in args
+                if has_key item "name"
+                    var itemName string = item.name
+                    if has_key item "value"
+                        opts[itemName] is item.value
+    Acknowledge token interaction
+    RunCommand bot token interaction name opts
+
+fun Acknowledge
+    token
+    interaction
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    Post path token {"type": 5}
+
+fun InteractionReply
+    token
+    interaction
+    content
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    Post path token {"type": 4, "data": {"content": content}}
+
+#! Send an ephemeral (user-only) reply to an interaction
+fun InteractionEphemeral
+    token
+    interaction
+    content
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    Post path token {"type": 4, "data": {"content": content, "flags": 64}}
+
+#! Defer an interaction (show loading, then send followup later)
+fun InteractionDefer
+    token
+    interaction
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    Post path token {"type": 5}
+
+#! Edit the original interaction response (followup via webhook)
+fun InteractionEdit
+    token
+    interaction
+    content
+    var path string = "/webhooks/" + interaction.application_id + "/" + interaction.token + "/messages/@original"
+    Patch path token {"content": content}
+
+fun InteractionEmbed
+    token
+    interaction
+    embed
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    Post path token {"type": 4, "data": {"embeds": [embed]}}
+
+fun RunCommand
+    bot
+    token
+    source
+    cmd
+    args
+    #! remember the current source so clean-block helpers can reply
+    _CTX is source
+
+    #! built-in: ping (measures REST latency)
+    if cmd == "ping"
+        var start float = time_perf_counter
+        var pingUrl string = API + "/users/@me"
+        var pingAuth string = "Bot " + token
+        http_get pingUrl pingAuth
+        var end float = time_perf_counter
+        var ms float = (end - start) * 1000.0
+        var pingMsg string = "Pong! (" + string(ms) + "ms)"
+        ReplyTo token source pingMsg
+        give empty
+
+    #! built-in: help (lists commands)
+    or cmd == "help"
+        var cmds string = ""
+        var cmdKeys dynamic = keys bot.commands
+        repeat k in cmdKeys
+            if cmds != empty
+                cmds is cmds + ", "
+            cmds is cmds + "`" + k + "`"
+        var helpMsg string = "Commands: " + cmds
+        ReplyTo token source helpMsg
+        give empty
+
+    #! unknown command
+    var knownCmd int = 0
+    if has_key bot.commands cmd
+        knownCmd is 1
+    if not knownCmd
+        var unknownMsg string = "Unknown: `" + cmd + "`"
+        ReplyTo token source unknownMsg
+        give empty
+
+    var command dynamic = bot.commands[cmd]
+
+    #! 1) simple reply command (from puzzles or SimpleCommand)
+    if has_key command "reply"
+        var reply dynamic = command.reply
+        if reply != empty
+            ReplyTo token source reply
+            give empty
+
+    #! 2) handler_name command (ctx API / BotHandler) — dispatch via "command" event
+    if has_key command "handler_name"
+        var handlerName dynamic = command.handler_name
+        if handlerName != empty
+            CallEvent bot "command" {"cmd": cmd, "token": token, "source": source, "args": args, "handler_name": handlerName}
+            give empty
+
+    #! 3) handler command (function reference, from add/addCmd) — dict-style args
+    if has_key command "handler"
+        var handlerFunc dynamic = command.handler
+
+        #! build dict args {"1": ..., "2": ...} from the raw list
+        var dictArgs dynamic = {"1": empty, "2": empty, "3": empty, "4": empty, "5": empty, "6": empty, "7": empty, "8": empty, "9": empty}
+        var idx int = 1
+        repeat item in args
+            dictArgs[string(idx)] is item
+            idx is idx + 1
+
+        #! auto-validate required args if registered with addCmd
+        if has_key command "args"
+            var argNames dynamic = command.args
+            var j int = 1
+            repeat expected in argNames
+                var key string = string(j)
+                var val dynamic = dictArgs[key]
+                if val == empty or val == ""
+                    var errMsg string = "❌ Missing argument " + key + ": " + expected
+                    ReplyTo token source errMsg
+                    give empty
+                j is j + 1
+
+        do:
+            call_func handlerFunc dictArgs
+        catch as err:
+            var cmdErrMsg string = "❌ Command error: " + err
+            ReplyTo token source cmdErrMsg
+        give empty
+
+    ReplyTo token source "Command has no action"
+
+fun ReplyTo
+    token
+    source
+    content
+    if has_key source "author"
+        if source.author != empty
+            Reply token source.channel_id source.id content
+            give empty
+    #! interaction source
+    InteractionReply token source content
+
+fun CallEvent
+    bot
+    event
+    args
+    var handlers dynamic = bot.handlers
+    var keysList dynamic = keys handlers
+    var found string = ""
+    repeat k in keysList
+        if k == event
+            found is handlers[k]
+    if found != empty and found != ""
+        call_func found bot args ""
+
+#! ==============================
+#! 🎯  QUICKBOT API (high level)
+#! ==============================
+
+#! Create a bot — one function call
+fun QuickBot
+    token
+    prefix
+    give {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0}
+
+#! Add a prefix command (handler = function reference — limited support)
+#! Returns bot — reassign:  bot is AddCommand bot "name" "desc" handler
+fun AddCommand
+    bot
+    name
+    description
+    handler
+    var _cmds4 dynamic = bot.commands
+    _cmds4[name] is {"description": description, "handler": handler}
+    bot.commands is _cmds4
+    give bot
+
+#! Add a handler-based command (handler_name = string function name)
+#! The handler is dispatched through the "command" event with a ctx object:
+#!   fun myHandler ctx args
+#!       CtxSend ctx "Hello!"
+#! Returns bot — reassign:  bot is BotHandler bot "name" "desc" "handlerName"
+fun BotHandler
+    bot
+    name
+    desc
+    handlerName
+    var _cmds5 dynamic = bot.commands
+    _cmds5[name] is {"description": desc, "handler_name": handlerName}
+    bot.commands is _cmds5
+    give bot
+
+#! Add an event handler (handler is a string function name or a callable)
+#! Returns bot — reassign:  bot is On bot "ready" "onReady"
+fun On
+    bot
+    event
+    handler
+    var _handlers2 dynamic = bot.handlers
+    _handlers2[event] is handler
+    bot.handlers is _handlers2
+    give bot
+
+#! ==============================
+#! 📋  AUDIT / MONITORING (3.0)
+#! ==============================
+#! SetupAudit registers handlers for every monitoring event and posts a
+#! summary embed to the given channel. Call once during setup:
+#!   bot is SetupAudit bot "123456789012345678"
+var _AUDIT_CHANNEL string = ""
+var _AUDIT_ENABLED int = 0
+
+fun AuditPost
+    bot
+    title
+    desc
+    color
+    if _AUDIT_ENABLED == 0
+        give empty
+    var emb dynamic = BuildEmbed title desc color
+    give SendEmbed bot.token _AUDIT_CHANNEL emb
+
+fun AuditAuthor
+    data
+    var author string = "?"
+    if has_key data "author"
+        if has_key data.author "username"
+            author is data.author.username
+    give author
+
+fun AuditChannelId
+    data
+    var chan string = "?"
+    if has_key data "channel_id"
+        chan is data.channel_id
+    give chan
+
+fun AuditContent
+    data
+    var content string = ""
+    if has_key data "content"
+        content is data.content
+    give content
+
+fun AuditUserName
+    data
+    var user string = "?"
+    if has_key data "user"
+        if has_key data.user "username"
+            user is data.user.username
+    give user
+
+fun AuditMessageEdit
+    bot
+    data
+    _x
+    var author string = AuditAuthor data
+    var chan string = AuditChannelId data
+    var content string = AuditContent data
+    var title string = "✏️ Message edited"
+    var desc string = "Channel: " + chan + "\nAuthor: " + author + "\nContent: " + content
+    AuditPost bot title desc "FFA500"
+
+fun AuditMessageDelete
+    bot
+    data
+    _x
+    var author string = AuditAuthor data
+    var chan string = AuditChannelId data
+    var content string = AuditContent data
+    var title string = "🗑️ Message deleted"
+    var desc string = "Channel: " + chan + "\nAuthor: " + author + "\nContent: " + content
+    AuditPost bot title desc "FF0000"
+
+fun AuditMessageBulkDelete
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "🧹 Bulk message delete"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF0000"
+
+fun AuditPin
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "📌 Pin update"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "00BFFF"
+
+fun AuditReactionAdd
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "➕ Reaction added"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "00FF7F"
+
+fun AuditReactionRemove
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "➖ Reaction removed"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF7F50"
+
+fun AuditReactionRemoveAll
+    bot
+    data
+    _x
+    var chan string = AuditChannelId data
+    var title string = "🧽 All reactions removed"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF7F50"
+
+fun AuditBan
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔨 User banned"
+    var desc string = "User: " + user
+    AuditPost bot title desc "FF0000"
+
+fun AuditUnban
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔓 User unbanned"
+    var desc string = "User: " + user
+    AuditPost bot title desc "00FF00"
+
+fun AuditMemberJoin
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🟢 Member joined"
+    var desc string = "User: " + user
+    AuditPost bot title desc "00FF00"
+
+fun AuditMemberLeave
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔴 Member left"
+    var desc string = "User: " + user
+    AuditPost bot title desc "FF0000"
+
+fun AuditMemberUpdate
+    bot
+    data
+    _x
+    var user string = AuditUserName data
+    var title string = "🔄 Member updated"
+    var desc string = "User: " + user
+    AuditPost bot title desc "FFA500"
+
+fun AuditVoice
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "channel_id"
+        if data.channel_id != empty
+            chan is data.channel_id
+    var user string = "?"
+    if has_key data "member"
+        if has_key data.member "user"
+            if has_key data.member.user "username"
+                user is data.member.user.username
+    var title string = "🔊 Voice state update"
+    var desc string = "Channel: " + chan + "\nUser: " + user
+    AuditPost bot title desc "9400D3"
+
+fun AuditChannelCreate
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "name"
+        chan is data.name
+    var title string = "🆕 Channel created"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "00FF00"
+
+fun AuditChannelUpdate
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "name"
+        chan is data.name
+    var title string = "🛠️ Channel updated"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FFA500"
+
+fun AuditChannelDelete
+    bot
+    data
+    _x
+    var chan string = "?"
+    if has_key data "name"
+        chan is data.name
+    var title string = "❌ Channel deleted"
+    var desc string = "Channel: " + chan
+    AuditPost bot title desc "FF0000"
+
+#! Register all monitoring handlers → audit-log embeds to channelId.
+#! Returns bot — reassign:  bot is SetupAudit bot "channelId"
+fun SetupAudit
+    bot
+    channelId
+    _AUDIT_ENABLED is 1
+    _AUDIT_CHANNEL is channelId
+    bot is On bot "message_edit" "AuditMessageEdit"
+    bot is On bot "message_delete" "AuditMessageDelete"
+    bot is On bot "message_bulk_delete" "AuditMessageBulkDelete"
+    bot is On bot "pin_update" "AuditPin"
+    bot is On bot "reaction_add" "AuditReactionAdd"
+    bot is On bot "reaction_remove" "AuditReactionRemove"
+    bot is On bot "reaction_remove_all" "AuditReactionRemoveAll"
+    bot is On bot "ban_add" "AuditBan"
+    bot is On bot "ban_remove" "AuditUnban"
+    bot is On bot "member_join" "AuditMemberJoin"
+    bot is On bot "member_leave" "AuditMemberLeave"
+    bot is On bot "member_update" "AuditMemberUpdate"
+    bot is On bot "voice_state_update" "AuditVoice"
+    bot is On bot "channel_create" "AuditChannelCreate"
+    bot is On bot "channel_update" "AuditChannelUpdate"
+    bot is On bot "channel_delete" "AuditChannelDelete"
+    give bot
+
+#! One full connect + event-loop cycle. Returns "reconnect" or "fatal".
+fun connectOnce
+    bot
+    var conn dynamic = ws_connect GatewayURL
+    var socketId int = conn.socket_id
+    var infoResp dynamic = WsRecvTimeout socketId 10
+    if infoResp.ok != true
+        give "reconnect"
+    var infoText string = infoResp.text
+    var info dynamic = json_loads infoText
+    bot._socketId is socketId
+    _SOCKET is socketId
+
+    var heartbeatInterval float = 0
+    if has_key info "d"
+        if has_key info.d "heartbeat_interval"
+            heartbeatInterval is info.d.heartbeat_interval / 1000.0
+
+    #! identify — broad non-privileged intents, overridable via bot.intents
+    var intents int = DEFAULT_INTENTS
+    if has_key bot "intents"
+        intents is bot.intents
+    var identify dynamic = {"op": 2, "d": {"token": bot.token, "intents": intents, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}}
+    var identifyStr string = json_dumps identify
+    WsSend socketId identifyStr
+
+    #! Send an initial heartbeat immediately after Identify so Discord doesn't
+    #! close the socket while we wait for READY (standard gateway practice).
+    var initHb dynamic = {"op": 1, "d": 0}
+    var initHbStr string = json_dumps initHb
+    WsSend socketId initHbStr
+
+    var lastHb float = time_now
+    var seq int = 0
+
+    say "🤖 Bot running — press Ctrl+C to stop"
+    repeat
+        #! short receive timeout so we can check heartbeat timing frequently
+        var resp dynamic = WsRecvTimeout socketId 5
+
+        #! send heartbeat if due (checked after every wakeup)
+        if heartbeatInterval > 0
+            var now float = time_now
+            if now - lastHb >= heartbeatInterval
+                var hb dynamic = {"op": 1, "d": seq}
+                var hbStr string = json_dumps hb
+                WsSend socketId hbStr
+                lastHb is now
+
+        #! gateway closed the connection
+        if has_key resp "closed"
+            say "📡 Gateway closed connection"
+            WsClose socketId
+            give "reconnect"
+
+        #! timeout — heartbeat check above already handled timing
+        if has_key resp "timeout"
+            next
+        if resp.ok != true
+            next
+
+        var raw string = resp.text
+        if raw == empty
+            next
+        var event dynamic = json_loads raw
+        var op int = event.op
+        if has_key event "s"
+            seq is event.s
+
+        if op == 0
+            do:
+                var t string = event.t
+                var d dynamic = event.d
+
+                if t == "READY"
+                    bot.user is d.user
+                    say "✅ Logged in: " + d.user.username
+                    CallEvent bot "ready" d
+
+                or t == "MESSAGE_CREATE"
+                    CacheMessage d
+                    HandleMessage bot bot.token d
+
+                or t == "MESSAGE_UPDATE"
+                    CacheMessage d
+                    CallEvent bot "message_edit" d
+
+                or t == "MESSAGE_DELETE"
+                    var delMsg dynamic = LookupMessage d.id
+                    if delMsg != empty
+                        CallEvent bot "message_delete" delMsg
+                    otherwise
+                        CallEvent bot "message_delete" d
+
+                or t == "MESSAGE_DELETE_BULK"
+                    CallEvent bot "message_bulk_delete" d
+
+                or t == "CHANNEL_PIN_UPDATE"
+                    CallEvent bot "pin_update" d
+
+                or t == "MESSAGE_REACTION_ADD"
+                    CallEvent bot "reaction_add" d
+
+                or t == "MESSAGE_REACTION_REMOVE"
+                    CallEvent bot "reaction_remove" d
+
+                or t == "MESSAGE_REACTION_REMOVE_ALL"
+                    CallEvent bot "reaction_remove_all" d
+
+                or t == "MESSAGE_REACTION_REMOVE_EMOJI"
+                    CallEvent bot "reaction_remove_emoji" d
+
+                or t == "GUILD_BAN_ADD"
+                    CallEvent bot "ban_add" d
+
+                or t == "GUILD_BAN_REMOVE"
+                    CallEvent bot "ban_remove" d
+
+                or t == "GUILD_MEMBER_UPDATE"
+                    CallEvent bot "member_update" d
+
+                or t == "VOICE_STATE_UPDATE"
+                    CallEvent bot "voice_state_update" d
+
+                or t == "GUILD_UPDATE"
+                    CallEvent bot "guild_update" d
+
+                or t == "CHANNEL_CREATE"
+                    CallEvent bot "channel_create" d
+
+                or t == "CHANNEL_UPDATE"
+                    CallEvent bot "channel_update" d
+
+                or t == "CHANNEL_DELETE"
+                    CallEvent bot "channel_delete" d
+
+                or t == "INTERACTION_CREATE"
+                    HandleInteraction bot bot.token d
+
+                or t == "GUILD_CREATE"
+                    CallEvent bot "guild_join" d
+
+                or t == "GUILD_MEMBER_ADD"
+                    CallEvent bot "member_join" d
+
+                or t == "GUILD_MEMBER_REMOVE"
+                    CallEvent bot "member_leave" d
+
+            catch as err:
+                say "   ⚠️ Event error (non-fatal): " + err
+
+        or op == 1
+            #! Discord requested a heartbeat — reply and reset the timer
+            var hb dynamic = {"op": 1, "d": seq}
+            var hbStr string = json_dumps hb
+            WsSend socketId hbStr
+            lastHb is time_now
+
+        or op == 7
+            say "🔄 Gateway requested reconnect"
+            WsClose socketId
+            give "reconnect"
+
+        or op == 9
+            #! d=true: session invalid but resumable; d=false: fatal (bad token)
+            var resumable int = 0
+            if has_key event "d"
+                if event.d == true
+                    resumable is 1
+            if not resumable
+                say "❌ Invalid session — check DISCORD_TOKEN"
+                WsClose socketId
+                give "fatal"
+            say "🔄 Reconnecting session..."
+            WsClose socketId
+            give "reconnect"
+
+        or op == 10
+            #! hello — set heartbeat interval and send initial heartbeat
+            if has_key event "d"
+                if has_key event.d "heartbeat_interval"
+                    heartbeatInterval is event.d.heartbeat_interval / 1000.0
+            var initHb dynamic = {"op": 1, "d": seq}
+            var initHbStr string = json_dumps initHb
+            WsSend socketId initHbStr
+            lastHb is time_now
+
+#! Start the bot — connects, and reconnects automatically if dropped
+fun Run
+    bot
+    say "🤖 Connecting to Discord..."
+    var attempts int = 0
+    repeat
+        attempts is attempts + 1
+        var status string = "reconnect"
+        do:
+            status is connectOnce bot
+        catch as err:
+            say "   ⚠️ Connection error: " + err
+            status is "reconnect"
+        if status == "fatal"
+            say "❌ Fatal error — stopping. Fix DISCORD_TOKEN and re-run."
+            stop
+        say "🔄 Reconnecting in 5s... (attempt " + string(attempts) + ")"
+        time_sleep 5
+
+#! ==============================
+#! 🧩  PUZZLE SYSTEM (cog-like command groups)
+#! ==============================
+#!
+#! Puzzles are like Discord.py cogs — each file in puzzles/ is a
+#! self-contained module with its own commands and handlers.
+#!
+#! One-line format (name, desc, reply — all quoted strings):
+#!   command "ping" "Check bot latency" "🏓 Pong!"
+#!
+#! Multi-line format:
+#!   command "greet" "Say hello"
+#!   reply "Hello there! 👋"
+
+#! Load all puzzles from a directory (.ind files — legacy .ath also accepted).
+#! Returns bot — reassign:  bot is LoadPuzzles bot "puzzles"
+fun LoadPuzzles
+    bot
+    dir
+    say "Loading puzzles from " + dir + "..."
+    var files dynamic = os_list_dir dir
+    if files == empty
+        say "   (no puzzle files found)"
+        give bot
+
+    repeat file in files
+        var fileLen int = len(file)
+        if fileLen < 4
+            next
+        var ext string = file[fileLen - 4:fileLen]
+        if ext != ".ath"
+            if ext != ".ind"
+                next
+        var path string = dir + "/" + file
+        var name string = file[0:fileLen - 4]
+        say "   🧩 " + name
+        do:
+            bot is LoadPuzzle bot path name
+        catch as err:
+            say "   ⚠️ puzzle error in " + file + ": " + err
+    give bot
+
+#! Load a single puzzle file. Returns bot.
+fun LoadPuzzle
+    bot
+    path
+    name
+    var source string = file_read_text path
+    var lines dynamic = split source "\n"
+    give ParsePuzzle bot lines name
+
+#! Extract all quoted "..." strings from a line, in order
+fun extract_quoted
+    s
+    var result dynamic = []
+    var i int = 0
+    var n int = len(s)
+    repeat
+        if i >= n
+            break
+        if s[i] == '"'
+            var start int = i + 1
+            var j int = start
+            repeat
+                if j >= n
+                    break
+                if s[j] == '"'
+                    result is append result (s[start:j])
+                    i is j
+                    break
+                j is j + 1
+        i is i + 1
+    give result
+
+#! Parse puzzle DSL. Returns bot.
+fun ParsePuzzle
+    bot
+    lines
+    puzzleName
+    var i int = 0
+    var total int = len(lines)
+    var currentCmd string = ""
+    var currentDesc string = ""
+
+    repeat
+        if i >= total
+            break
+        var line string = lines[i]
+        var trimmed string = trim line
+        i is i + 1
+
+        #! skip comments and blanks
+        if trimmed == ""
+            next
+        if len(trimmed) >= 2
+            if trimmed[:2] == "#!"
+                next
+
+        #! puzzle header
+        if len(trimmed) >= 7
+            if trimmed[:7] == "puzzle "
+                next
+
+        #! end of puzzle
+        if trimmed == "end"
+            break
+
+        #! command declaration — supports two formats:
+        #!   command "name" "desc" "reply"   (one-line, all in one)
+        #!   command "name" "desc"           (multi-line, followed by reply block)
+        #!   name "desc" "reply"             (shorthand, no command keyword)
+        var isCmd int = 0
+        var rawRest string = ""
+        if len(trimmed) >= 8
+            if trimmed[:8] == "command "
+                isCmd is 1
+                rawRest is trim trimmed[8:]
+        if not isCmd
+            if trimmed[:1] == '"'
+                isCmd is 1
+                rawRest is trimmed
+
+        if isCmd
+            var toks dynamic = extract_quoted rawRest
+            if len(toks) >= 1
+                currentCmd is toks[0]
+            currentDesc is ""
+            if len(toks) >= 2
+                currentDesc is toks[1]
+            #! one-liner: third quoted token is the reply text
+            if len(toks) >= 3
+                bot is RegisterPuzzleCommand bot puzzleName currentCmd currentDesc toks[2]
+            next
+
+        #! reply body (multi-line, after command declaration)
+        if len(trimmed) >= 6
+            if trimmed[:6] == "reply "
+                var content string = trim trimmed[6:]
+                bot is RegisterPuzzleCommand bot puzzleName currentCmd currentDesc content
+                next
+
+    give bot
+
+#! Register a puzzle command. Returns bot.
+fun RegisterPuzzleCommand
+    bot
+    puzzle
+    cmd
+    desc
+    replyContent
+    var command dynamic = {"description": desc, "puzzle": puzzle, "reply": replyContent}
+    var _cmds2 dynamic = bot.commands
+    _cmds2[cmd] is command
+    bot.commands is _cmds2
+    give bot
+
+#! ==============================
+#! 🚀  ZERO-BOILERPLATE BOT API
+#! ==============================
+
+#! Create a bot from environment — reads DISCORD_TOKEN / BOT_TOKEN / DISCORD_PREFIX
+fun BotFromEnv
+    var token string = os_getenv "DISCORD_TOKEN" ""
+    if token == empty or token == ""
+        token is os_getenv "BOT_TOKEN" ""
+    if token == empty or token == ""
+        say "❌ Set DISCORD_TOKEN or BOT_TOKEN in .glo or .env"
+        process_exit 1
+    var prefix string = os_getenv "DISCORD_PREFIX" "!"
+    give QuickBot token prefix
+
+#! Run a bot with puzzle auto-loading
+fun RunWithPuzzles
+    bot
+    bot is LoadPuzzles bot "puzzles"
+    bot is LoadPuzzles bot "./puzzles"
+    Run bot
+
+#! ==============================
+#! ✨  CLEANER HELPERS
+#! ==============================
+
+#! Shortcut for replying to a message
+fun MsgReply
+    token
+    msg
+    content
+    Send token msg.channel_id content
+
+#! Get channel from message
+fun MsgChannel
+    msg
+    give msg.channel_id
+
+#! Get author from message
+fun MsgAuthor
+    msg
+    give msg.author
+
+#! Check if message has a prefix
+fun MsgHasPrefix
+    msg
+    prefix
+    var content string = msg.content
+    if len(content) < len(prefix)
+        give false
+    give content[:len(prefix)] == prefix
+
+#! Get command from prefixed message
+fun MsgCommand
+    msg
+    prefix
+    var content string = msg.content
+    var rest string = content[len(prefix):]
+    var parts dynamic = split rest " "
+    if len(parts) == 0
+        give ""
+    give parts[0]
+
+#! ==============================
+#! 📋  COMMAND DEFINITION HELPERS
+#! ==============================
+
+#! Define a command with a simple reply. Returns bot.
+fun SimpleCommand
+    bot
+    name
+    desc
+    reply
+    var cmd dynamic = {"description": desc, "reply": reply}
+    var _cmds3 dynamic = bot.commands
+    _cmds3[name] is cmd
+    bot.commands is _cmds3
+    give bot
+
+#! Register a cog — batch-import a list of command definitions. Returns bot.
+#! Each entry: {"name", "desc", "reply"} or {"name", "desc", "handler"}
+#! or {"name", "desc", "handler_name"}
+fun RegisterCog
+    bot
+    cmds
+    repeat cmd in cmds
+        var name string = cmd.name
+        var desc string = cmd.desc
+        var reply string = cmd.reply
+        if reply != empty
+            bot is SimpleCommand bot name desc reply
+            next
+        var handlerFunc dynamic = cmd.handler
+        if handlerFunc != empty
+            bot is AddCommand bot name desc handlerFunc
+            next
+        var handlerName string = cmd.handler_name
+        if handlerName != empty
+            bot is BotHandler bot name desc handlerName
+    give bot
+
+#! ==============================
+#! 🧭  CONTEXT SYSTEM (discord.py-style)
+#! ==============================
+#!
+#! discord.py's ctx, adapted for Indent.
+#! Handler signature:  fun myHandler  ctx  args
+#!   ctx.author       — the user who ran the command
+#!   ctx.channel_id   — channel ID
+#!   ctx.guild_id     — guild ID (empty in DMs)
+#!   ctx.token        — bot token
+#!   ctx.source       — raw message or interaction
+#!   ctx.cmd          — command name
+#!   ctx.args         — list of arguments
+#!   ctx.bot          — the bot object
+#!
+#! Helpers: CtxSend, CtxReply, CtxEmbed, CtxEphemeral, CtxEdit
+
+#! Build a context dict from command data
+fun Ctx
+    bot
+    token
+    source
+    cmd
+    args
+    var author dynamic = {}
+    var channelId string = ""
+    var guildId string = ""
+    if has_key source "author"
+        if source.author != empty
+            author is source.author
+            channelId is source.channel_id
+            guildId is source.guild_id
+    if author == empty or author == {}
+        if has_key source "member"
+            author is source.member.user
+            channelId is source.channel_id
+            guildId is source.guild_id
+    if author == empty or author == {}
+        author is {"id": "", "username": "unknown"}
+    give {"bot": bot, "token": token, "source": source, "cmd": cmd, "args": args, "author": author, "channel_id": channelId, "guild_id": guildId}
+
+#! Send a message to the context's channel
+fun CtxSend
+    ctx
+    content
+    give Send ctx.token ctx.channel_id content
+
+#! Reply to the context's source (message reply or interaction reply)
+fun CtxReply
+    ctx
+    content
+    give ReplyTo ctx.token ctx.source content
+
+#! Send an embed to the context's channel
+fun CtxEmbed
+    ctx
+    embed
+    give SendEmbed ctx.token ctx.channel_id embed
+
+#! Send an ephemeral (user-only) reply to an interaction
+fun CtxEphemeral
+    ctx
+    content
+    give InteractionEphemeral ctx.token ctx.source content
+
+#! Edit the original interaction response
+fun CtxEdit
+    ctx
+    content
+    give InteractionEdit ctx.token ctx.source content
+
+#! Get the author's user ID from context
+fun CtxUserId
+    ctx
+    give ctx.author.id
+
+#! Get the author's username from context
+fun CtxUserName
+    ctx
+    give ctx.author.username
+
+#! Check if context is from an interaction (vs message)
+fun CtxIsInteraction
+    ctx
+    give has_key ctx.source "author" == false
+
+#! Get the guild ID (empty string in DMs)
+fun CtxGuildId
+    ctx
+    give ctx.guild_id
+
+#! Get the channel ID
+fun CtxChannelId
+    ctx
+    give ctx.channel_id
+
+#! ==============================================================
+#! ✨  CLEAN BLOCK API — no source["guild_id"]. No args["1"]. Just code.
+#! ==============================================================
+#!
+#! Usage:
+#!   var bot dynamic = NewBot "TOKEN" "%"
+#!   fun kickCmd args
+#!       kick bot user reason
+#!       sendMsg bot "Kicked " + user
+#!   bot is addCmd bot "kick" kickCmd ["user"]
+#!
+#! All functions here take `bot` as the first argument. The "current source"
+#! is stashed in the module-level _CTX by RunCommand, so reply/action helpers
+#! work without the caller juggling tokens/sources.
+
+#! ---- Argument helpers ----
+fun arg args n
+    give args[string(n)]
+
+fun reasonArg args
+    give arg args 2
+
+#! ---- Source helpers ----
+fun guild source
+    give source["guild_id"]
+
+fun channel source
+    give source["channel_id"]
+
+fun author source
+    give source["author"]["id"]
+
+#! ---- Action helpers (auto-extract guild from source) ----
+fun kickUser token source user
+    Kick token guild(source) user "Kicked by command"
+
+fun banUser token source user
+    Ban token guild(source) user "Banned by command"
+
+fun addRole token source user role
+    AddRole token guild(source) user role
+
+fun dmUser token user message
+    SendDM token user message
+
+#! ---- Reply helpers ----
+fun reply token source message
+    ReplyTo token source message
+
+fun QuickEmbed
+    title
+    description
+    color
+    give {"title": title, "description": description, "color": color}
+
+#! Send an embed reply from the bot's current context (message or interaction)
+fun ReplyWithEmbed
+    bot
+    embed
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    if source == empty or source == {}
+        give empty
+    if has_key source "author"
+        if source.author != empty
+            var path string = "/channels/" + source.channel_id + "/messages"
+            Post path token {"embeds": [embed]}
+            give empty
+    #! interaction source — reply via interaction callback
+    var iPath string = "/interactions/" + source.id + "/" + source.token + "/callback"
+    Post iPath token {"type": 4, "data": {"embeds": [embed]}}
+
+fun replyEmbed token source title description color
+    var embed dynamic = MakeEmbed title description color
+    if has_key source "author"
+        if source.author != empty
+            var path string = "/channels/" + source.channel_id + "/messages"
+            Post path token {"embeds": [embed]}
+            give empty
+    #! interaction source
+    var iPath string = "/interactions/" + source.id + "/" + source.token + "/callback"
+    Post iPath token {"type": 4, "data": {"embeds": [embed]}}
+
+#! ---- Clean bot creator ----
+fun NewBot token prefix
+    give {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0, "_ctx": {}}
+
+#! ---- Set command context (called internally before running a command) ----
+fun SetCtx
+    bot
+    source
+    _CTX is source
+    give bot
+
+#! ---- Clean action wrappers (no token/source needed!) ----
+fun kick bot user reason
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    var guildId string = source["guild_id"]
+    Kick token guildId user reason
+
+fun ban bot user reason
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    var guildId string = source["guild_id"]
+    Ban token guildId user reason
+
+fun addRole bot user role
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    var guildId string = source["guild_id"]
+    AddRole token guildId user role
+
+fun removeRole bot user role
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    var guildId string = source["guild_id"]
+    RemoveRole token guildId user role
+
+fun sendMsg bot message
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    ReplyTo token source message
+
+#! @deprecated — use sendMsg (say is an Indent keyword, so `say bot msg` won't work)
+fun say bot message
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    ReplyTo token source message
+
+fun dm bot user message
+    var token string = bot["token"]
+    SendDM token user message
+
+#! ---- Register a command (returns bot — reassign with `bot is add bot ...`) ----
+fun add bot name handler
+    var handlerName string = string(handler)
+    var cmds dynamic = bot["commands"]
+    cmds[name] is {"handler": handlerName}
+    bot["commands"] is cmds
+    give bot
+
+#! ---- Register a command WITH arg metadata (recommended!) ----
+#! argNames is a list like ["user", "reason"] — first arg is required, rest optional
+fun addCmd bot name handler argNames
+    var handlerName string = string(handler)
+    var cmds dynamic = bot["commands"]
+    cmds[name] is {"handler": handlerName, "args": argNames}
+    bot["commands"] is cmds
+    give bot
+
+#! ---- Event registration (returns bot — reassign with `bot is on bot ...`) ----
+fun on bot event handler
+    var handlerName string = string(handler)
+    var hdrs dynamic = bot["handlers"]
+    hdrs[event] is handlerName
+    bot["handlers"] is hdrs
+    give bot
+
+#! ---- Command runner (parses message, sets ctx, calls handler) ----
+fun runCommand bot msg
+    var content string = msg["content"]
+    var prefix string = bot["prefix"]
+    if starts_with(content, prefix) == FALSE
+        give empty
+    var rest string = slice(content, len(prefix), 9999)
+    var parts dynamic = split(trim(rest), " ")
+    var cmdName string = parts[0]
+    var knownCmd int = 0
+    if has_key bot["commands"] cmdName
+        knownCmd is 1
+    if not knownCmd
+        give empty
+    var cmdData dynamic = bot["commands"][cmdName]
+
+    #! Build args dict
+    var args dynamic = {}
+    var idx int = 0
+    repeat part in parts
+        if idx > 0
+            args[string(idx)] is part
+        idx is idx + 1
+
+    #! Set context and call handler
+    SetCtx bot msg
+    var handler dynamic = cmdData["handler"]
+    var arg1 string = args["1"]
+    var arg2 string = args["2"]
+    handler bot arg1 arg2
+
+#! ---- Puzzles loader (like Discord.py cogs) ----
+fun load bot dir
+    if os_exists(dir) == FALSE
+        give bot
+    var files dynamic = os_list_dir(dir)
+    repeat file in files
+        var isPuzzle int = 0
+        if ends_with(file, ".ind")
+            isPuzzle is 1
+        or ends_with(file, ".ath")
+            isPuzzle is 1
+        if isPuzzle
+            var path string = dir + "/" + file
+            file_read_text(path)
+            say "📦 Loaded puzzle: " + file
+    give bot
+
+#! ---- Start bot ----
+fun start bot
+    Run bot
+
+#! ==============================================================
+#! 🚀  ZERO-CONFIG QUICKSTART — the easiest possible bot
+#! ==============================================================
+#!
+#!   get QuickStart from discord
+#!   QuickStart
+#!
+#! Reads DISCORD_TOKEN from the environment (.glo), loads every puzzle in
+#! puzzles/, and connects.  That's the whole bot.
+
+#! Alias for BotFromEnv — create a bot from DISCORD_TOKEN / BOT_TOKEN env vars.
+fun MakeBot
+    var b dynamic = BotFromEnv
+    give b
+
+#! One-call bot: env token → load puzzles → connect.
+fun QuickStart
+    var bot dynamic = BotFromEnv
+    bot is LoadPuzzles bot "puzzles"
+    bot is LoadPuzzles bot "./puzzles"
+    Run bot
+
+#! ==============================================================
+#! ⚡  SLASH COMMANDS
+#! ==============================================================
+
+#! Slash command option types (Discord):
+#! 1=subcommand 2=subcommand_group 3=string 4=integer 5=boolean
+#! 6=user 7=channel 8=role 9=mentionable 10=number
+
+fun SlashOption name desc type required
+    give {"name": name, "description": desc, "type": type, "required": required}
+
+fun StringOption name desc required
+    give SlashOption name desc 3 required
+fun IntOption name desc required
+    give SlashOption name desc 4 required
+fun BoolOption name desc required
+    give SlashOption name desc 5 required
+fun UserOption name desc required
+    give SlashOption name desc 6 required
+fun ChannelOption name desc required
+    give SlashOption name desc 7 required
+fun RoleOption name desc required
+    give SlashOption name desc 8 required
+fun NumberOption name desc required
+    give SlashOption name desc 10 required
+
+#! Register a slash command locally. handlerName receives (ctx, args) where
+#! args is a dict of option-name → value. Returns bot — reassign.
+fun AddSlash
+    bot
+    name
+    description
+    handlerName
+    options
+    var cmds dynamic = bot.commands
+    cmds[name] is {"description": description, "handler_name": handlerName, "slash": 1, "options": options}
+    bot.commands is cmds
+    give bot
+
+#! Push all locally-registered slash commands to Discord (bulk overwrite).
+#! Call once before Run. Returns the API response.
+fun SyncSlash
+    bot
+    var token string = bot.token
+    var cmdNames dynamic = keys bot.commands
+    var list dynamic = []
+    repeat name in cmdNames
+        var cmd dynamic = bot.commands[name]
+        if has_key cmd "slash"
+            var desc string = cmd.description
+            var opts dynamic = cmd.options
+            var entry dynamic = {"name": name, "description": desc, "options": opts}
+            list is append list entry
+    if len(list) == 0
+        say "   (no slash commands to sync)"
+        give empty
+    var path string = "/applications/@me/commands"
+    give Put path token list
+
+#! One-line convenience: a slash command with a single option.
+#!   bot is SlashWithUser bot "kick" "Kick a user" "slashKick"
+fun SlashWithUser bot name desc handlerName
+    var opts dynamic = []
+    var o dynamic = UserOption "user" "The target user" true
+    opts is append opts o
+    give AddSlash bot name desc handlerName opts
+
+fun SlashWithString bot name desc handlerName
+    var opts dynamic = []
+    var o dynamic = StringOption "text" "Text input" true
+    opts is append opts o
+    give AddSlash bot name desc handlerName opts
+
+fun SlashWithInt bot name desc handlerName
+    var opts dynamic = []
+    var o dynamic = IntOption "number" "Number input" true
+    opts is append opts o
+    give AddSlash bot name desc handlerName opts
+
+fun SlashWithChannel bot name desc handlerName
+    var opts dynamic = []
+    var o dynamic = ChannelOption "channel" "Target channel" true
+    opts is append opts o
+    give AddSlash bot name desc handlerName opts
+
+fun SlashWithRole bot name desc handlerName
+    var opts dynamic = []
+    var o dynamic = RoleOption "role" "Target role" true
+    opts is append opts o
+    give AddSlash bot name desc handlerName opts
+
+#! ==============================================================
+#! 🌟  PRESENCE & STATUS (op 3 over the gateway)
+#! ==============================================================
+
+#! Set the bot's status: "online", "idle", "dnd", "invisible"
+fun SetStatus
+    bot
+    status
+    var socketId int = _SOCKET
+    if socketId <= 0
+        give empty
+    var payload dynamic = {"op": 3, "d": {"since": empty, "activities": [], "status": status, "afk": false}}
+    var payloadStr string = json_dumps payload
+    WsSend socketId payloadStr
+
+#! Set activity: Playing <name>
+fun SetPlaying
+    bot
+    name
+    var socketId int = _SOCKET
+    if socketId <= 0
+        give empty
+    var act dynamic = {"name": name, "type": 0}
+    var payload dynamic = {"op": 3, "d": {"since": empty, "activities": [act], "status": "online", "afk": false}}
+    var payloadStr string = json_dumps payload
+    WsSend socketId payloadStr
+
+#! Set activity: Watching <name>
+fun SetWatching
+    bot
+    name
+    var socketId int = _SOCKET
+    if socketId <= 0
+        give empty
+    var act dynamic = {"name": name, "type": 3}
+    var payload dynamic = {"op": 3, "d": {"since": empty, "activities": [act], "status": "online", "afk": false}}
+    var payloadStr string = json_dumps payload
+    WsSend socketId payloadStr
+
+#! Set activity: Listening to <name>
+fun SetListening
+    bot
+    name
+    var socketId int = _SOCKET
+    if socketId <= 0
+        give empty
+    var act dynamic = {"name": name, "type": 2}
+    var payload dynamic = {"op": 3, "d": {"since": empty, "activities": [act], "status": "online", "afk": false}}
+    var payloadStr string = json_dumps payload
+    WsSend socketId payloadStr
+
+#! Set activity: Competing in <name>
+fun SetCompeting
+    bot
+    name
+    var socketId int = _SOCKET
+    if socketId <= 0
+        give empty
+    var act dynamic = {"name": name, "type": 5}
+    var payload dynamic = {"op": 3, "d": {"since": empty, "activities": [act], "status": "online", "afk": false}}
+    var payloadStr string = json_dumps payload
+    WsSend socketId payloadStr
+
+#! ==============================================================
+#! 🎨  EMBED BUILDER
+#! ==============================================================
+#! Embeds are dicts; builders RETURN the modified embed — reassign:
+#!   emb is AddEmbedField emb "Field" "value" true
+
+fun BuildEmbed title description color
+    give {"title": title, "description": description, "color": color}
+
+#! Convert a hex color string ("3498DB" or "#3498DB") to a decimal color int.
+#! (The native runtime does not support 0x literals — use this instead.)
+fun HexColor hex
+    var h string = hex
+    if len(h) >= 1
+        if h[:1] == "#"
+            h is h[1:]
+    var val int = 0
+    var i int = 0
+    var n int = len(h)
+    repeat
+        if i >= n
+            break
+        var ch string = h[i]
+        var digit int = 0
+        if ch == "0"
+            digit is 0
+        or ch == "1"
+            digit is 1
+        or ch == "2"
+            digit is 2
+        or ch == "3"
+            digit is 3
+        or ch == "4"
+            digit is 4
+        or ch == "5"
+            digit is 5
+        or ch == "6"
+            digit is 6
+        or ch == "7"
+            digit is 7
+        or ch == "8"
+            digit is 8
+        or ch == "9"
+            digit is 9
+        or ch == "a"
+            digit is 10
+        or ch == "A"
+            digit is 10
+        or ch == "b"
+            digit is 11
+        or ch == "B"
+            digit is 11
+        or ch == "c"
+            digit is 12
+        or ch == "C"
+            digit is 12
+        or ch == "d"
+            digit is 13
+        or ch == "D"
+            digit is 13
+        or ch == "e"
+            digit is 14
+        or ch == "E"
+            digit is 14
+        or ch == "f"
+            digit is 15
+        or ch == "F"
+            digit is 15
+        val is val * 16 + digit
+        i is i + 1
+    give val
+
+fun EmbedField name value inline
+    give {"name": name, "value": value, "inline": inline}
+
+fun AddEmbedField embed name value inline
+    var fields dynamic = []
+    if has_key embed "fields"
+        fields is embed.fields
+    var field dynamic = EmbedField name value inline
+    fields is append fields field
+    embed["fields"] is fields
+    give embed
+
+fun SetEmbedFooter embed text iconUrl
+    embed["footer"] is {"text": text, "icon_url": iconUrl}
+    give embed
+
+fun SetEmbedImage embed url
+    embed["image"] is {"url": url}
+    give embed
+
+fun SetEmbedThumbnail embed url
+    embed["thumbnail"] is {"url": url}
+    give embed
+
+fun SetEmbedAuthor embed name url iconUrl
+    embed["author"] is {"name": name, "url": url, "icon_url": iconUrl}
+    give embed
+
+fun SetEmbedTimestamp embed ts
+    embed["timestamp"] is ts
+    give embed
+
+#! ==============================================================
+#! 🔘  MESSAGE COMPONENTS (buttons, menus, action rows)
+#! ==============================================================
+
+fun Button style label customId
+    give {"type": 2, "style": style, "label": label, "custom_id": customId}
+
+fun PrimaryButton label customId
+    give Button 1 label customId
+fun SecondaryButton label customId
+    give Button 2 label customId
+fun SuccessButton label customId
+    give Button 3 label customId
+fun DangerButton label customId
+    give Button 4 label customId
+
+fun LinkButton label url
+    give {"type": 2, "style": 5, "label": label, "url": url}
+
+fun ActionRow components
+    give {"type": 1, "components": components}
+
+fun SelectOption label value desc
+    give {"label": label, "value": value, "description": desc}
+
+fun SelectMenu customId options
+    give {"type": 3, "custom_id": customId, "options": options}
+
+fun TextInput customId label style
+    give {"type": 4, "custom_id": customId, "label": label, "style": style}
+
+#! Send a message with action-row components to a channel
+fun SendWithComponents
+    token
+    channelId
+    content
+    rows
+    var path string = "/channels/" + channelId + "/messages"
+    give Post path token {"content": content, "components": rows}
+
+#! Reply (to the current context) with components
+fun ReplyWithComponents
+    bot
+    content
+    rows
+    var token string = bot["token"]
+    var source dynamic = _CTX
+    if source == empty or source == {}
+        if has_key bot "_ctx"
+            source is bot["_ctx"]
+    if source == empty or source == {}
+        give empty
+    if has_key source "author"
+        if source.author != empty
+            var path string = "/channels/" + source.channel_id + "/messages"
+            Post path token {"content": content, "components": rows}
+            give empty
+    #! interaction source
+    var iPath string = "/interactions/" + source.id + "/" + source.token + "/callback"
+    Post iPath token {"type": 4, "data": {"content": content, "components": rows}}
+
+#! Send components to a ctx's channel
+fun CtxComponents ctx content rows
+    give SendWithComponents ctx.token ctx.channel_id content rows
+
+#! Ephemeral reply with components (interaction only)
+fun CtxEphemeralComponents ctx content rows
+    var iPath string = "/interactions/" + ctx.source.id + "/" + ctx.source.token + "/callback"
+    give Post iPath ctx.token {"type": 4, "data": {"content": content, "components": rows, "flags": 64}}
+
+#! ==============================================================
+#! 🧱  CHANNELS
+#! ==============================================================
+
+fun CreateChannel token guildId name type
+    var path string = "/guilds/" + guildId + "/channels"
+    give Post path token {"name": name, "type": type}
+
+fun DeleteChannel token channelId
+    var path string = "/channels/" + channelId
+    give Delete path token {}
+
+fun EditChannel token channelId payload
+    var path string = "/channels/" + channelId
+    give Patch path token payload
+
+fun GetChannels token guildId
+    var path string = "/guilds/" + guildId + "/channels"
+    give Get path token
+
+fun CreateThread token channelId name
+    var path string = "/channels/" + channelId + "/threads"
+    give Post path token {"name": name, "type": 12}
+
+#! ==============================================================
+#! 💬  MESSAGES
+#! ==============================================================
+
+fun GetMessages token channelId limit
+    var path string = "/channels/" + channelId + "/messages?limit=" + limit
+    give Get path token
+
+fun GetMessage token channelId messageId
+    var path string = "/channels/" + channelId + "/messages/" + messageId
+    give Get path token
+
+fun EditMessage token channelId messageId content
+    var path string = "/channels/" + channelId + "/messages/" + messageId
+    give Patch path token {"content": content}
+
+fun Pin token channelId messageId
+    var path string = "/channels/" + channelId + "/pins/" + messageId
+    give Put path token {}
+
+fun Unpin token channelId messageId
+    var path string = "/channels/" + channelId + "/pins/" + messageId
+    give Delete path token {}
+
+fun DeleteMany token channelId messageIds
+    var path string = "/channels/" + channelId + "/messages/bulk-delete"
+    give Post path token {"messages": messageIds}
+
+#! Send to any channel by ID
+fun SendTo token channelId content
+    give Send token channelId content
+
+#! ==============================================================
+#! 👥  MEMBERS & ROLES
+#! ==============================================================
+
+fun GetMember token guildId userId
+    var path string = "/guilds/" + guildId + "/members/" + userId
+    give Get path token
+
+fun ListMembers token guildId limit
+    var path string = "/guilds/" + guildId + "/members?limit=" + limit
+    give Get path token
+
+fun SetNickname token guildId userId nick
+    var path string = "/guilds/" + guildId + "/members/" + userId
+    give Patch path token {"nick": nick}
+
+fun CreateRole token guildId name color
+    var path string = "/guilds/" + guildId + "/roles"
+    give Post path token {"name": name, "color": color}
+
+fun DeleteRole token guildId roleId
+    var path string = "/guilds/" + guildId + "/roles/" + roleId
+    give Delete path token {}
+
+fun GetRoles token guildId
+    var path string = "/guilds/" + guildId + "/roles"
+    give Get path token
+
+fun ListBans token guildId
+    var path string = "/guilds/" + guildId + "/bans"
+    give Get path token
+
+#! ==============================================================
+#! 🏛️  GUILDS
+#! ==============================================================
+
+fun CreateInvite token channelId maxUses
+    var path string = "/channels/" + channelId + "/invites"
+    give Post path token {"max_uses": maxUses}
+
+fun GetInvites token guildId
+    var path string = "/guilds/" + guildId + "/invites"
+    give Get path token
+
+fun CreateWebhook token channelId name
+    var path string = "/channels/" + channelId + "/webhooks"
+    give Post path token {"name": name}
+
+fun GetWebhooks token guildId
+    var path string = "/guilds/" + guildId + "/webhooks"
+    give Get path token
+
+#! ==============================================================
+#! 👍  REACTIONS
+#! ==============================================================
+
+fun AddReaction token channelId messageId emoji
+    var path string = "/channels/" + channelId + "/messages/" + messageId + "/reactions/" + emoji + "/@me"
+    give Put path token {}
+
+fun RemoveReaction token channelId messageId emoji userId
+    var path string = "/channels/" + channelId + "/messages/" + messageId + "/reactions/" + emoji + "/" + userId
+    give Delete path token {}
+
+fun RemoveAllReactions token channelId messageId
+    var path string = "/channels/" + channelId + "/messages/" + messageId + "/reactions"
+    give Delete path token {}
+
+#! ==============================================================
+#! 🧵  INTERACTION FOLLOWUPS
+#! ==============================================================
+
+fun InteractionFollowup token interaction content
+    var path string = "/webhooks/" + interaction.application_id + "/" + interaction.token
+    give Post path token {"content": content}
+
+fun CtxFollowup ctx content
+    give InteractionFollowup ctx.token ctx.source content
+
+#! ==============================================================
+#! 🔉  VOICE
+#! ==============================================================
+
+fun MoveMember token guildId userId channelId
+    var path string = "/guilds/" + guildId + "/members/" + userId
+    give Patch path token {"channel_id": channelId}
+
+fun DisconnectMember token guildId userId
+    var path string = "/guilds/" + guildId + "/members/" + userId
+    give Patch path token {"channel_id": empty}
+
+#! ==============================================================
+#! 😀  EMOJI & STICKERS
+#! ==============================================================
+
+fun CreateEmoji token guildId name imageB64 roles
+    var path string = "/guilds/" + guildId + "/emojis"
+    give Post path token {"name": name, "image": imageB64, "roles": roles}
+
+fun GetEmojis token guildId
+    var path string = "/guilds/" + guildId + "/emojis"
+    give Get path token
+
+fun GetStickers token guildId
+    var path string = "/guilds/" + guildId + "/stickers"
+    give Get path token
+
+fun CreateSticker token guildId name desc tags imageDataUri
+    var path string = "/guilds/" + guildId + "/stickers"
+    give Post path token {"name": name, "description": desc, "tags": tags, "image": imageDataUri}
+
+#! ==============================================================
+#! 🔗  WEBHOOKS
+#! ==============================================================
+
+#! Send a message through a webhook (no bot token needed).
+fun ExecuteWebhook webhookId webhookToken content
+    var url string = API + "/webhooks/" + webhookId + "/" + webhookToken
+    give http_post_json url {"content": content} ""
+
+#! ==============================================================
+#! ⚙️  SLASH COMMAND MANAGEMENT
+#! ==============================================================
+
+fun GetSlashCommands token
+    var path string = "/applications/@me/commands"
+    give Get path token
+
+fun EditSlash token commandId payload
+    var path string = "/applications/@me/commands/" + commandId
+    give Patch path token payload
+
+fun DeleteSlash token commandId
+    var path string = "/applications/@me/commands/" + commandId
+    give Delete path token {}
+
+#! ==============================================================
+#! 🤖  BOT / APP INFO & INVITE
+#! ==============================================================
+
+fun GetBotInfo token
+    var path string = "/oauth2/applications/@me"
+    give Get path token
+
+#! Build a bot invite link with the given permission integer.
+fun BotInvite token permissions
+    var url string = ""
+    Do:
+        var resp dynamic = Get "/oauth2/applications/@me" token
+        var app dynamic = json_loads resp.body
+        var cid string = app.id
+        var permStr string = string(permissions)
+        url is "https://discord.com/api/oauth2/authorize?client_id=" + cid + "&permissions=" + permStr + "&scope=bot"
+    Catch as err:
+        url is ""
+    give url
+
+#! ==============================================================
+#! 🧭  MORE CTX HELPERS
+#! ==============================================================
+
+#! Reply with an embed (message channel or interaction callback)
+fun CtxReplyEmbed ctx embed
+    var isInt int = 0
+    if CtxIsInteraction ctx
+        isInt is 1
+    if isInt
+        give InteractionEmbed ctx.token ctx.source embed
+    var path string = "/channels/" + ctx.channel_id + "/messages"
+    give Post path ctx.token {"embeds": [embed]}
+
+fun CtxAuthorMention ctx
+    give "<@" + ctx.author.id + ">"
+
+fun CtxChannelMention ctx
+    if ctx.channel_id == "" or ctx.channel_id == empty
+        give ""
+    give "<#" + ctx.channel_id + ">"
+
+#! ==============================================================
+#! ⏱️  TIMESTAMP & DURATION HELPERS
+#! ==============================================================
+
+#! Discord timestamp markup: fmt = R (relative, default), t, T, d, D, f, F
+fun DiscordTimestamp ts fmt
+    if fmt == "" or fmt == empty
+        fmt is "R"
+    var tsStr string = string(ts)
+    give "<t:" + tsStr + ":" + fmt + ">"
+
+#! Parse a human duration like "90s", "5m", "2h", "1d" into seconds.
+fun ParseDuration text
+    var total int = 0
+    var i int = 0
+    var n int = len(text)
+    var num string = ""
+    repeat
+        if i >= n
+            break
+        var ch string = text[i]
+        var isDigit int = 0
+        if contains "0123456789" ch
+            isDigit is 1
+        if isDigit
+            num is num + ch
+        otherwise
+            var unit string = ch
+            var mult int = 0
+            if unit == "s"
+                mult is 1
+            or unit == "m"
+                mult is 60
+            or unit == "h"
+                mult is 3600
+            or unit == "d"
+                mult is 86400
+            or unit == "w"
+                mult is 604800
+            if num != ""
+                var val int = int(num)
+                total is total + val * mult
+                num is ""
+        i is i + 1
+    give total
+
+#! ==============================================================
+#! 📊  POLLS
+#! ==============================================================
+
+fun CreatePoll token channelId question options hours
+    var answers dynamic = []
+    repeat opt in options
+        var entry dynamic = {"poll_media": {"text": opt}}
+        answers is append answers entry
+    var path string = "/channels/" + channelId + "/polls"
+    var payload dynamic = {"question": {"text": question}, "answers": answers, "duration": hours}
+    give Post path token payload
+
+#! ==============================================================
+#! 🔐  CHANNEL PERMISSIONS
+#! ==============================================================
+
+fun SetChannelPermissions token channelId overwriteId allow deny type
+    var path string = "/channels/" + channelId + "/permissions/" + overwriteId
+    give Put path token {"allow": allow, "deny": deny, "type": type}
+
+#! ==============================================================
+#! 🧵  THREAD MEMBERS
+#! ==============================================================
+
+fun AddThreadMember token threadId userId
+    var path string = "/channels/" + threadId + "/thread-members/" + userId
+    give Put path token {}
+
+fun RemoveThreadMember token threadId userId
+    var path string = "/channels/" + threadId + "/thread-members/" + userId
+    give Delete path token {}
+
+#! ==============================================================
+#! 📅  SCHEDULED EVENTS
+#! ==============================================================
+
+fun CreateEvent token guildId name desc channelId startIso
+    var path string = "/guilds/" + guildId + "/scheduled-events"
+    var payload dynamic = {"name": name, "description": desc, "privacy_level": 2, "scheduled_start_time": startIso, "entity_type": 3, "channel_id": channelId}
+    give Post path token payload
