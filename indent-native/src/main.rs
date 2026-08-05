@@ -7464,6 +7464,7 @@ impl Parser {
         if let Some(rest) = text.strip_prefix("set ") {
             let rest = rest.trim();
             let parts: Vec<&str> = rest.split_whitespace().collect();
+            // set varname type — type conversion
             if parts.len() == 2 && is_identifier(parts[0]) && is_identifier(parts[1]) {
                 return Ok(Stmt::MakeType {
                     line: line.line_no,
@@ -7471,6 +7472,8 @@ impl Parser {
                     name: parts[0].to_string(),
                 });
             }
+            // set [1,2,3] or set data — create a Set value
+            // Treat as a BareExpr so the expression parser handles it
         }
 
         // Indent-2: var name type = value
@@ -8566,21 +8569,18 @@ fn is_keyword(s: &str) -> bool {
             | "return" | "Return"
             | "var" | "Var"
             | "fun" | "Fun"
-            | "get" | "Get"
+            | "get" | "Get" | "import" | "Import"
             | "if" | "If"
             | "or" | "Or"
             | "otherwise" | "Otherwise"
             | "repeat" | "Repeat" | "for" | "For"
             | "stop" | "STOP" | "break"
             | "next" | "NEXT" | "continue"
-            | "get" | "Get" | "import" | "Import"
-            | "next" | "NEXT" | "continue"
             | "reset" | "RESET" | "restart"
             | "match" | "Match"
             | "do" | "Do"
             | "catch" | "Catch"
             | "lastly" | "Lastly"
-            | "makeType" | "maketype"
             | "flag" | "Flag"
             | "yield" | "Yield"
             | "open" | "Open"
@@ -9005,88 +9005,7 @@ fn split_top_level(text: &str, delimiter: char) -> Vec<String> {
 
     out.push(current);
     out
-}
-
-fn parse_function_signature(raw: &str) -> Result<(String, Vec<FunctionParam>), String> {
-    let trimmed = raw
-        .split_once("->")
-        .map(|(left, _)| left.trim())
-        .or_else(|| raw.split_once(" as ").map(|(left, _)| left.trim()))
-        .unwrap_or_else(|| raw.trim());
-
-    if trimmed.is_empty() {
-        return Err("Function name missing".to_string());
-    }
-
-    let Some(paren_start) = trimmed.find('(') else {
-        if !is_identifier(trimmed) {
-            return Err(format!("Invalid function name '{}'", trimmed));
-        }
-        return Ok((trimmed.to_string(), vec![]));
-    };
-
-    if !trimmed.ends_with(')') {
-        return Err("Function signature must end with ')'".to_string());
-    }
-
-    let name = trimmed[..paren_start].trim();
-    if !is_identifier(name) {
-        return Err(format!("Invalid function name '{}'", name));
-    }
-
-    let inner = &trimmed[paren_start + 1..trimmed.len() - 1];
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return Ok((name.to_string(), vec![]));
-    }
-
-    let mut params: Vec<FunctionParam> = Vec::new();
-    for part in inner.split(',') {
-        let p = part.trim();
-        if p.is_empty() {
-            return Err("Empty parameter in signature".to_string());
-        }
-
-        let (name, ty) = if let Some((n, t)) = p.split_once(':') {
-            let n = n.trim();
-            let t = t.trim();
-            if !is_identifier(n) {
-                return Err(format!("Invalid parameter '{}'", n));
-            }
-            if t.is_empty() {
-                return Err(format!("Missing type for parameter '{}'", n));
-            }
-            (n.to_string(), Some(t.to_string()))
-        } else {
-            if !is_identifier(p) {
-                return Err(format!("Invalid parameter '{}'", p));
-            }
-            (p.to_string(), None)
-        };
-
-        if params.iter().any(|x| x.name == name) {
-            return Err(format!("Duplicate parameter '{}'", name));
-        }
-        params.push(FunctionParam { name, ty, default_value: None });
-    }
-
-    Ok((name.to_string(), params))
-}
-
-fn parse_return_type(raw: &str) -> Option<String> {
-    // Support both -> type and as type
-    if let Some((_, right)) = raw.split_once("->") {
-        let ty = right.trim();
-        if ty.is_empty() { None } else { Some(ty.to_string()) }
-    } else if let Some((_, right)) = raw.split_once(" as ") {
-        let ty = right.trim();
-        if ty.is_empty() { None } else { Some(ty.to_string()) }
-    } else {
-        None
-    }
-}
-
-fn self_update() {
+}fn self_update() {
     let repo_url = "https://github.com/xytrolabs/indent.git";
     let tmp = std::env::temp_dir().join("indent-update");
     
