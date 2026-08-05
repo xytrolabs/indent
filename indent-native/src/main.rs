@@ -5687,11 +5687,13 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
         },
         "boolean" => match value {
             Value::Bool(_) => Ok(value),
+            Value::Int(v) => Ok(Value::Bool(v != 0)),
+            Value::Float(v) => Ok(Value::Bool(v != 0.0)),
             Value::Str(text) => {
                 let normalized = text.trim().to_ascii_lowercase();
                 match normalized.as_str() {
-                    "true" => Ok(Value::Bool(true)),
-                    "false" => Ok(Value::Bool(false)),
+                    "true" | "1" => Ok(Value::Bool(true)),
+                    "false" | "0" => Ok(Value::Bool(false)),
                     _ => Err(format!(
                         "Line {line}: variable '{name}' cannot be converted to boolean"
                     )),
@@ -7456,6 +7458,19 @@ impl Parser {
                 line: line.line_no,
                 expr: rest.trim().to_string(),
             });
+        }
+
+        // Indent-2: set varname type — convert existing variable's type
+        if let Some(rest) = text.strip_prefix("set ") {
+            let rest = rest.trim();
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() == 2 && is_identifier(parts[0]) && is_identifier(parts[1]) {
+                return Ok(Stmt::MakeType {
+                    line: line.line_no,
+                    target_type: parts[1].to_string(),
+                    name: parts[0].to_string(),
+                });
+            }
         }
 
         // Indent-2: var name type = value
