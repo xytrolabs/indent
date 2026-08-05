@@ -1,7 +1,7 @@
-# Indent Learning Course (v1.3)
+# Indent Learning Course (v1.4)
 
 > A step-by-step curriculum to go from zero to proficient in Indent.
-> **🆕 Updated for Indent 1.3** — type inference, compound assignment, and all 1.2 features!
+> **🆕 Updated for Indent 1.4** — Set type, type conversion, compound assignment, type inference, and all 1.2 features!
 
 ---
 

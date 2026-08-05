@@ -1,5 +1,33 @@
 # Indent Changelog
 
+## 1.4.0 — 2026-08-04
+
+### 🎯 Set Type — Unique Collections
+```indent
+var s = set [1, 2, 2, 3]     # → {1, 2, 3}
+var u = s + set [3, 4]        # → {1, 2, 3, 4}
+contains(s, 2)                # → TRUE
+repeat item in s              # iteration
+[x * 2 for x in s]            # comprehension
+```
+
+### 🔄 Type Conversion Syntax
+```indent
+var name1 = 21
+set name1 string               # → "21"
+set name1 int                  # → 42
+set name1 boolean              # → TRUE (non-zero=true)
+set name1 set                  # → {21} (list→set)
+```
+
+### 🧹 Code Cleanup
+- Removed duplicate keywords (get/next were listed twice)
+- Removed dead makeType keyword
+- Deleted unused parse_function_signature and parse_return_type
+- Zero compiler warnings
+
+---
+
 ## 1.3.0 — 2026-08-04
 
 ### 🐍 Python-Style Type Inference

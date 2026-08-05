@@ -2,6 +2,7 @@
 
 > Complete reference for every built-in function available in Indent 1.3.0.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`
+> **🆕 v1.4**: Set type, type conversion (`set varname type`)
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
 
 ---

@@ -1,6 +1,6 @@
 # Indent Standard Packages — Reference
 
-> All 17 packages available via `get <name>` in Indent 1.3.0.
+> All 17 packages available via `get <name>` in Indent 1.4.0.
 
 ---
 
