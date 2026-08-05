@@ -136,6 +136,14 @@ list[0]
 dict["key"]
 list is list + [4]
 person.name
+
+# Sets (v1.3) — unique ordered collections
+var s = set [1, 2, 2, 3]     # → {1, 2, 3}
+var s2 = set [3, 4]
+var u = s + s2                # union: {1, 2, 3, 4}
+contains(s, 2)                # → TRUE
+repeat item in s              # iteration
+[x * 2 for x in s]            # comprehension
 ```
 
 ## Imports
