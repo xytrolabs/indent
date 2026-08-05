@@ -1,523 +1,392 @@
 #!/usr/bin/env bash
+# AIR — Accessible Indent Registry — pip-like package manager for Indent
+# Usage: air <command> [args]
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="${HOME}/.config/aether"
-CONFIG_FILE="${CONFIG_DIR}/air.env"
-DEFAULT_REGISTRY_REPO="xytrolabs/air"
-DEFAULT_REGISTRY_REF="main"
-DEFAULT_REGISTRY_INDEX_PATH="packages/index.txt"
-DEFAULT_REGISTRY_URL="https://raw.githubusercontent.com/${DEFAULT_REGISTRY_REPO}/${DEFAULT_REGISTRY_REF}/${DEFAULT_REGISTRY_INDEX_PATH}"
-LEGACY_REGISTRY_URL_1="https://raw.githubusercontent.com/xytrolabs/indent/main/aether-release/packages/index.txt"
+AIR_HOME="${HOME}/.local/share/indent"
+AIR_PACKAGES="${AIR_HOME}/air-packages"
+AIR_CACHE="${AIR_HOME}/air-cache"
+AIR_REGISTRY="${AIR_REGISTRY:-https://raw.githubusercontent.com/xytrolabs/air/main}"
+AIR_INDEX="${AIR_REGISTRY}/packages/index.txt"
+AIR_CONFIG="${AIR_HOME}/air.conf"
 
-AETHERPKG_INDEX="${AETHERPKG_INDEX:-}"
-AIR_REGISTRY_REPO=""
-AIR_REGISTRY_REF="main"
-AIR_REGISTRY_INDEX_PATH="packages/index.txt"
-ENV_AETHERPKG_INDEX="$AETHERPKG_INDEX"
-
+# ── Help ────────────────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
-AIR — Accessible Indent Registry — Package Manager for Indent
+AIR — Indent Package Manager (pip for Indent)
 
 Usage:
-  air init
-  air install [--local|--global] <name>[@version] [source]
-  air uninstall [--local|--global] <name>
-  air update [--local|--global] [name]
-  air search <query>
-  air list [--local|--global]
-  air index
-  air publish <name> <package-file> [description] [--no-push]
-
-Version syntax (uses GitHub tags on the source repo):
-  @1.2.0       exact version
-  @^1.0        caret: >=1.0.0 <2.0.0
-  @~1.2        tilde: >=1.2.0 <1.3.0
-  @2.x         any 2.x version
-
-Registry:
-  air registry show
-  air registry set <url-or-path>
-  air registry github <owner/repo> [ref] [index-path]
-  air registry reset
+  air install <name>[@version]     Install a package
+  air install <name> <url>         Install from URL or local path
+  air uninstall <name>             Remove a package
+  air update [name]                Update one or all packages
+  air search <query>               Search registry for packages
+  air list                         List installed packages
+  air info <name>                  Show package details
+  air init                         Initialize a new Indent project
 
 Examples:
-  air registry github my-org/aether-registry main packages/index.txt
-  air search color
-  air install colors
-  air install math@2.5.0
-  air install math@^2.0
-  air install --global colors
-  air publish colors ./packages/colors.ath "Basic color constants"
+  air install colors               Install latest from registry
+  air install math@2.5.0           Install specific version
+  air install mypkg ./mypkg.ind    Install from local file
+  air uninstall colors             Remove package
+  air update                       Update all installed packages
+  air update math                  Update specific package
+  air search json                  Find json-related packages
+  air list                         Show what's installed
+  air info math                    Show package metadata
 EOF
 }
 
-check_remote_registry_url() {
-  local url="$1"
-  if ! command -v curl >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if ! curl -fsSL --connect-timeout 5 --max-time 12 "$url" -o /dev/null; then
-    echo "Warning: registry index is not reachable yet: $url" >&2
-    echo "Make sure the file exists in the repo (for example packages/index.txt)." >&2
+# ── Config ──────────────────────────────────────────────────────────
+load_config() {
+  mkdir -p "$AIR_HOME" "$AIR_PACKAGES" "$AIR_CACHE"
+  if [[ -f "$AIR_CONFIG" ]]; then
+    source "$AIR_CONFIG"
   fi
 }
 
-remote_url_exists() {
-  local url="$1"
-  if ! command -v curl >/dev/null 2>&1; then
+save_config() {
+  mkdir -p "$(dirname "$AIR_CONFIG")"
+  {
+    echo "AIR_REGISTRY='${AIR_REGISTRY}'"
+    echo "AIR_INDEX='${AIR_INDEX}'"
+  } > "$AIR_CONFIG"
+}
+
+# ── Index ───────────────────────────────────────────────────────────
+fetch_index() {
+  local idx="$1"
+  local cache_file="${AIR_CACHE}/index-$(echo "$idx" | sha256sum | cut -c1-16).txt"
+  
+  # Use cached index if less than 30 minutes old
+  if [[ -f "$cache_file" ]] && [[ $(($(date +%s) - $(stat -c %Y "$cache_file"))) -lt 1800 ]]; then
+    cat "$cache_file"
+    return
+  fi
+
+  if [[ "$idx" =~ ^https?:// ]]; then
+    if curl -fsSL --connect-timeout 5 --max-time 15 "$idx" -o "$cache_file" 2>/dev/null; then
+      cat "$cache_file"
+    else
+      echo "⚠ Cannot reach registry: $idx" >&2
+      return 1
+    fi
+  elif [[ -f "$idx" ]]; then
+    cat "$idx"
+  else
+    echo "⚠ No registry index found" >&2
     return 1
   fi
-  curl -fsSL --connect-timeout 5 --max-time 12 "$url" -o /dev/null 2>/dev/null
 }
 
-ensure_config_dir() {
-  mkdir -p "$CONFIG_DIR"
-}
+resolve_package() {
+  local name="$1"
+  local index_data
+  index_data="$(fetch_index "$AIR_INDEX")" || exit 1
 
-is_legacy_registry_url() {
-  local reg="$1"
-  # Any URL pointing to old repos is legacy
-  case "$reg" in
-    *"rafih110610"*|*"aether-lang/packages"*|*"stratos-labs/aether"*)
-      return 0
-      ;;
-    "$LEGACY_REGISTRY_URL_1"|"$LEGACY_REGISTRY_URL_2"|"$LEGACY_REGISTRY_URL_3"|"$LEGACY_REGISTRY_URL_4")
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-migrate_legacy_registry_if_needed() {
-  local reg="${AETHERPKG_INDEX:-}"
-  if [[ -z "$reg" ]]; then
-    return
-  fi
-
-  if ! is_legacy_registry_url "$reg"; then
-    return
-  fi
-
-  local repo="${AIR_REGISTRY_REPO:-}"
-  if [[ -n "$repo" ]] && ! is_legacy_registry_url "https://github.com/${repo}"; then
-    # Repo is already the new one, but index URL is stale — update just the URL
-    AETHERPKG_INDEX="$DEFAULT_REGISTRY_URL"
-    write_config
-    echo "Migrated AIR registry URL to: $AETHERPKG_INDEX"
-    return
-  fi
-
-  AETHERPKG_INDEX="$DEFAULT_REGISTRY_URL"
-  AIR_REGISTRY_REPO="$DEFAULT_REGISTRY_REPO"
-  AIR_REGISTRY_REF="$DEFAULT_REGISTRY_REF"
-  AIR_REGISTRY_INDEX_PATH="$DEFAULT_REGISTRY_INDEX_PATH"
-  write_config
-  echo "Migrated AIR registry to: $AETHERPKG_INDEX"
-}
-
-load_config() {
-  if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-  fi
-
-  # Upgrade known legacy defaults to the current official registry.
-  if [[ -z "$ENV_AETHERPKG_INDEX" ]]; then
-    migrate_legacy_registry_if_needed
-  fi
-
-  # Environment override has highest priority for one-off commands.
-  if [[ -n "$ENV_AETHERPKG_INDEX" ]]; then
-    AETHERPKG_INDEX="$ENV_AETHERPKG_INDEX"
-  fi
-}
-
-write_config() {
-  ensure_config_dir
-  {
-    printf "AETHERPKG_INDEX=%q\n" "$AETHERPKG_INDEX"
-    printf "AIR_REGISTRY_REPO=%q\n" "$AIR_REGISTRY_REPO"
-    printf "AIR_REGISTRY_REF=%q\n" "$AIR_REGISTRY_REF"
-    printf "AIR_REGISTRY_INDEX_PATH=%q\n" "$AIR_REGISTRY_INDEX_PATH"
-  } > "$CONFIG_FILE"
-}
-
-normalize_github_slug() {
-  local input="$1"
-  local slug="$input"
-
-  if [[ "$slug" =~ ^https?://github.com/ ]]; then
-    slug="${slug#https://github.com/}"
-    slug="${slug#http://github.com/}"
-  fi
-  slug="${slug%.git}"
-  slug="${slug%/}"
-
-  if [[ ! "$slug" =~ ^[^/]+/[^/]+$ ]]; then
-    echo "Invalid GitHub repo. Use owner/repo or https://github.com/owner/repo(.git)" >&2
-    exit 1
-  fi
-
-  printf "%s" "$slug"
-}
-
-get_registry() {
-  load_config
-  if [[ -n "${AETHERPKG_INDEX:-}" ]]; then
-    printf "%s" "$AETHERPKG_INDEX"
-    return
-  fi
-  printf ""
-}
-
-set_registry() {
-  local value="$1"
-  load_config
-  AETHERPKG_INDEX="$value"
-  write_config
-  echo "Registry set to: $value"
-}
-
-reset_registry() {
-  AETHERPKG_INDEX=""
-  AIR_REGISTRY_REPO=""
-  AIR_REGISTRY_REF="main"
-  AIR_REGISTRY_INDEX_PATH="packages/index.txt"
-  write_config
-  echo "Registry reset. Default registry will auto-configure on next air command."
-}
-
-ensure_auto_registry() {
-  load_config
-
-  # Respect explicit environment override and existing configured value.
-  if [[ -n "${AETHERPKG_INDEX:-}" ]]; then
-    return
-  fi
-
-  AETHERPKG_INDEX="$DEFAULT_REGISTRY_URL"
-  AIR_REGISTRY_REPO="$DEFAULT_REGISTRY_REPO"
-  AIR_REGISTRY_REF="$DEFAULT_REGISTRY_REF"
-  AIR_REGISTRY_INDEX_PATH="$DEFAULT_REGISTRY_INDEX_PATH"
-  write_config
-  echo "Auto-configured AIR registry: $AETHERPKG_INDEX"
-}
-
-normalize_path_if_local() {
-  local value="$1"
-  if [[ "$value" =~ ^https?:// ]]; then
-    printf "%s" "$value"
-    return
-  fi
-  if [[ "$value" = /* ]]; then
-    printf "%s" "$value"
-    return
-  fi
-  printf "%s" "$(pwd)/$value"
-}
-
-pkg_exec() {
-  local pkg_cmd
-  pkg_cmd="${SCRIPT_DIR}/aetherpkg"
-  if [[ ! -x "$pkg_cmd" ]]; then
-    pkg_cmd="$(command -v aetherpkg || true)"
-  fi
-
-  if [[ -z "$pkg_cmd" ]]; then
-    echo "aetherpkg not found. Expected at ${SCRIPT_DIR}/aetherpkg or in PATH." >&2
-    exit 1
-  fi
-
-  local reg
-  reg="$(get_registry)"
-  if [[ -n "$reg" ]]; then
-    AETHERPKG_INDEX="$reg" "$pkg_cmd" "$@"
-  else
-    "$pkg_cmd" "$@"
-  fi
-}
-
-cmd_registry() {
-  if [[ $# -lt 1 ]]; then
-    usage
-    exit 2
-  fi
-
-  local sub="$1"
-  shift
-
-  case "$sub" in
-    show)
-      load_config
-      local reg
-      reg="$(get_registry)"
-      if [[ -n "$reg" ]]; then
-        echo "Registry: $reg"
-      else
-        echo "Registry: auto (${DEFAULT_REGISTRY_URL})"
-      fi
-      if [[ -n "$AIR_REGISTRY_REPO" ]]; then
-        echo "Publish repo: $AIR_REGISTRY_REPO"
-        echo "Publish ref: ${AIR_REGISTRY_REF:-main}"
-        echo "Publish index path: ${AIR_REGISTRY_INDEX_PATH:-packages/index.txt}"
-      fi
-      ;;
-    set)
-      if [[ $# -ne 1 ]]; then
-        usage
-        exit 2
-      fi
-      set_registry "$(normalize_path_if_local "$1")"
-      ;;
-    github)
-      if [[ $# -lt 1 || $# -gt 3 ]]; then
-        usage
-        exit 2
-      fi
-      local repo
-      repo="$(normalize_github_slug "$1")"
-      local ref="${2:-main}"
-      local index_path="${3:-}"
-      if [[ -z "$index_path" ]]; then
-        local candidate_packages="https://raw.githubusercontent.com/${repo}/${ref}/packages/index.txt"
-        local candidate_root="https://raw.githubusercontent.com/${repo}/${ref}/index.txt"
-        if remote_url_exists "$candidate_packages"; then
-          index_path="packages/index.txt"
-        elif remote_url_exists "$candidate_root"; then
-          index_path="index.txt"
-        else
-          index_path="packages/index.txt"
-        fi
-      fi
-      local url="https://raw.githubusercontent.com/${repo}/${ref}/${index_path}"
-      load_config
-      AIR_REGISTRY_REPO="$repo"
-      AIR_REGISTRY_REF="$ref"
-      AIR_REGISTRY_INDEX_PATH="$index_path"
-      AETHERPKG_INDEX="$url"
-      write_config
-      echo "Registry set to: $url"
-      echo "GitHub registry URL: $url"
-      check_remote_registry_url "$url"
-      ;;
-    reset)
-      reset_registry
-      ;;
-    *)
-      usage
-      exit 2
-      ;;
-  esac
-}
-
-update_index_entry() {
-  local index_file="$1"
-  local name="$2"
-  local source="$3"
-  local sha256="${4:-}"
-  local description="${5:-}"
-
-  local tmp
-  tmp="$(mktemp)"
-
-  awk -F'|' -v pkg="$name" '
-    /^[[:space:]]*#/ { print; next }
-    NF == 0 { print; next }
-    {
-      raw=$1
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", raw)
-      if (raw != pkg) {
-        print
-      }
+  local line
+  line="$(echo "$index_data" | awk -F'|' -v pkg="$name" '
+    /^[[:space:]]*#/ { next }
+    NF >= 2 {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+      if ($1 == pkg) { print; exit }
     }
-  ' "$index_file" > "$tmp"
+  ')"
 
-  # New format: name|source|sha256|description
-  printf "%s|%s|%s|%s\n" "$name" "$source" "$sha256" "$description" >> "$tmp"
-  mv "$tmp" "$index_file"
+  if [[ -z "$line" ]]; then
+    echo "✗ Package '$name' not found in registry" >&2
+    exit 1
+  fi
+
+  echo "$line"
 }
 
-resolve_repo_clone_url() {
-  local repo_input="$1"
-  if [[ -d "$repo_input/.git" ]] || [[ -d "$repo_input" ]]; then
-    printf "%s" "$repo_input"
-    return
+# ── Install ─────────────────────────────────────────────────────────
+cmd_install() {
+  load_config
+
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air install <name>[@version] [source]" >&2
+    exit 1
   fi
-  if [[ "$repo_input" = /* ]] || [[ "$repo_input" == ./* ]] || [[ "$repo_input" == ../* ]]; then
-    printf "%s" "$repo_input"
-    return
+
+  local raw="$1"
+  local name="${raw%@*}"
+  local ver="${raw##*@}"
+  [[ "$ver" == "$raw" ]] && ver=""
+  
+  local source="${2:-}"
+  
+  # Resolve source if not explicitly given
+  if [[ -z "$source" ]]; then
+    local pkg_line
+    pkg_line="$(resolve_package "$name")"
+    source="$(echo "$pkg_line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')"
+    local desc="$(echo "$pkg_line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4); print $4}')"
+    
+    # If name|source|sha256|description (4 fields), extract sha256
+    local sha="$(echo "$pkg_line" | awk -F'|' 'NF>=4 {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3); if ($3~/^[a-f0-9]{64}$/) print $3}')"
+    
+    # Make relative paths absolute
+    if [[ ! "$source" =~ ^https?:// ]]; then
+      source="${AIR_REGISTRY}/packages/${source#./}"
+    fi
+    
+    echo "📦 Installing ${name}..."
+    [[ -n "$desc" ]] && echo "   $desc"
+    [[ -n "$ver" ]] && echo "   Version: $ver"
+  else
+    echo "📦 Installing ${name} from ${source}..."
   fi
-  if [[ "$repo_input" =~ ^https?:// ]] || [[ "$repo_input" =~ ^git@ ]]; then
-    printf "%s" "$repo_input"
-    return
+
+  local target="${AIR_PACKAGES}/${name}.ind"
+  
+  # Download or copy
+  if [[ "$source" =~ ^https?:// ]]; then
+    if ! curl -fsSL --connect-timeout 10 --max-time 60 "$source" -o "$target"; then
+      echo "✗ Failed to download: $source" >&2
+      exit 1
+    fi
+  else
+    if [[ ! -f "$source" ]]; then
+      echo "✗ Source file not found: $source" >&2
+      exit 1
+    fi
+    cp "$source" "$target"
   fi
-  printf "%s" "https://github.com/${repo_input}.git"
+
+  # Verify SHA256 if available
+  local actual_sha
+  actual_sha="$(sha256sum "$target" | awk '{print $1}')"
+  if [[ -n "${sha:-}" ]] && [[ "$sha" != "$actual_sha" ]]; then
+    echo "⚠ SHA256 mismatch! Expected: ${sha:0:16}... Got: ${actual_sha:0:16}..." >&2
+    rm -f "$target"
+    exit 1
+  fi
+
+  # Record in installed list
+  local installed="${AIR_HOME}/installed.txt"
+  touch "$installed"
+  # Remove old entry
+  grep -v "^${name}|" "$installed" > "${installed}.tmp" 2>/dev/null || true
+  mv "${installed}.tmp" "$installed" 2>/dev/null || true
+  echo "${name}|${source}|${actual_sha}|$(date -Iseconds)" >> "$installed"
+
+  echo "✅ Installed ${name} → ${target}"
 }
 
-cmd_publish() {
-  if [[ $# -lt 2 ]]; then
-    usage
-    exit 2
+# ── Uninstall ───────────────────────────────────────────────────────
+cmd_uninstall() {
+  load_config
+  
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air uninstall <name>" >&2
+    exit 1
   fi
 
   local name="$1"
-  local package_file="$2"
-  shift 2
+  local target="${AIR_PACKAGES}/${name}.ind"
 
-  if [[ ! "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-    echo "Invalid package name: $name" >&2
-    exit 1
+  if [[ -f "$target" ]]; then
+    rm -f "$target"
+    echo "🗑 Removed ${target}"
+  else
+    echo "⚠ Package '$name' not found at ${target}" >&2
   fi
 
-  if [[ ! -f "$package_file" ]]; then
-    echo "Package file not found: $package_file" >&2
-    exit 1
+  # Remove from installed list
+  local installed="${AIR_HOME}/installed.txt"
+  if [[ -f "$installed" ]]; then
+    grep -v "^${name}|" "$installed" > "${installed}.tmp" 2>/dev/null || true
+    mv "${installed}.tmp" "$installed" 2>/dev/null || true
   fi
 
-  local description="Published via air"
-  if [[ $# -gt 0 && "$1" != --* ]]; then
-    description="$1"
-    shift
-  fi
+  echo "✅ Uninstalled ${name}"
+}
 
+# ── Update ──────────────────────────────────────────────────────────
+cmd_update() {
   load_config
-  local repo="${AIR_REGISTRY_REPO:-}"
-  local ref="${AIR_REGISTRY_REF:-main}"
-  local index_path="${AIR_REGISTRY_INDEX_PATH:-packages/index.txt}"
-  local no_push="false"
 
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --registry-repo)
-        [[ $# -ge 2 ]] || { echo "Missing value for --registry-repo" >&2; exit 2; }
-        repo="$2"
-        shift 2
-        ;;
-      --ref)
-        [[ $# -ge 2 ]] || { echo "Missing value for --ref" >&2; exit 2; }
-        ref="$2"
-        shift 2
-        ;;
-      --index-path)
-        [[ $# -ge 2 ]] || { echo "Missing value for --index-path" >&2; exit 2; }
-        index_path="$2"
-        shift 2
-        ;;
-      --no-push)
-        no_push="true"
-        shift
-        ;;
-      *)
-        echo "Unknown option: $1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [[ -z "$repo" ]]; then
-    echo "No publish registry repo configured." >&2
-    echo "Run: air registry github <owner/repo> [ref] [index-path]" >&2
-    echo "Or pass: --registry-repo <owner/repo|url|local-path>" >&2
-    exit 1
-  fi
-
-  if ! command -v git >/dev/null 2>&1; then
-    echo "git is required for air publish" >&2
-    exit 1
-  fi
-
-  local clone_url
-  clone_url="$(resolve_repo_clone_url "$repo")"
-
-  local tmp_dir
-  tmp_dir="$(mktemp -d)"
-  local registry_dir="$tmp_dir/registry"
-
-  if ! git clone --depth 1 --branch "$ref" "$clone_url" "$registry_dir" >/dev/null 2>&1; then
-    echo "Failed to clone registry repo: $clone_url (branch: $ref)" >&2
-    rm -rf "$tmp_dir"
-    exit 1
-  fi
-
-  local index_file="$registry_dir/$index_path"
-  local index_dir
-  index_dir="$(dirname "$index_file")"
-  local index_rel_dir
-  index_rel_dir="$(dirname "$index_path")"
-  mkdir -p "$index_dir"
-  if [[ ! -f "$index_file" ]]; then
-    printf "# name|source|sha256|description\n" > "$index_file"
-  fi
-
-  local dest_pkg="$index_dir/${name}.ath"
-  cp "$package_file" "$dest_pkg"
-
-  # Compute SHA256 for package safety
-  local pkg_sha256
-  pkg_sha256="$(sha256sum "$package_file" | awk '{print $1}')"
-
-  update_index_entry "$index_file" "$name" "./${name}.ath" "$pkg_sha256" "$description"
-
-  (
-    cd "$registry_dir"
-    git add "$index_path" "$index_rel_dir/${name}.ath"
-    if git diff --cached --quiet; then
-      echo "No publish changes detected for package '$name'."
-      exit 0
-    fi
-    git commit -m "air publish: ${name}" >/dev/null
-  )
-
-  if [[ "$no_push" == "true" ]]; then
-    echo "Published locally (no push) in: $registry_dir"
-    echo "Run these commands to push:"
-    echo "  cd $registry_dir"
-    echo "  git push origin $ref"
+  local installed="${AIR_HOME}/installed.txt"
+  if [[ ! -f "$installed" ]]; then
+    echo "No packages installed"
     return
   fi
 
-  if ! (cd "$registry_dir" && git push origin "$ref"); then
-    echo "Push failed. You may need GitHub auth (SSH key or token)." >&2
-    echo "Your prepared publish commit is at: $registry_dir" >&2
-    echo "Manual push: cd $registry_dir && git push origin $ref" >&2
-    return 1
+  if [[ $# -eq 1 ]]; then
+    # Update specific package
+    local name="$1"
+    local entry
+    entry="$(grep "^${name}|" "$installed" 2>/dev/null || true)"
+    if [[ -z "$entry" ]]; then
+      echo "✗ Package '$name' is not installed" >&2
+      exit 1
+    fi
+    local source="$(echo "$entry" | awk -F'|' '{print $2}')"
+    echo "🔄 Updating ${name}..."
+    cmd_install "$name" "$source"
+  else
+    # Update all
+    echo "🔄 Updating all packages..."
+    while IFS='|' read -r name source rest; do
+      [[ -z "$name" ]] && continue
+      echo "  Updating ${name}..."
+      cmd_install "$name" "$source"
+    done < "$installed"
   fi
-
-  echo "Published '$name' to registry '$repo' on branch '$ref'."
-  rm -rf "$tmp_dir"
 }
 
+# ── Search ──────────────────────────────────────────────────────────
+cmd_search() {
+  load_config
+  
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air search <query>" >&2
+    exit 1
+  fi
+
+  local query="$1"
+  local index_data
+  index_data="$(fetch_index "$AIR_INDEX")" || exit 1
+
+  echo "🔍 Packages matching '$query':"
+  echo ""
+  
+  local found=0
+  while IFS='|' read -r name source sha desc; do
+    # Skip header/comments
+    [[ "$name" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$name" ]] && continue
+    
+    name="$(echo "$name" | xargs)"
+    desc="$(echo "${desc:-}" | xargs)"
+    source="$(echo "${source:-}" | xargs)"
+    
+    local search_text
+    search_text="$(echo "${name} ${desc} ${source}" | tr '[:upper:]' '[:lower:]')"
+    
+    if [[ "$search_text" == *"$(echo "$query" | tr '[:upper:]' '[:lower:]')"* ]]; then
+      printf "  %-20s %s\n" "$name" "$desc"
+      found=$((found + 1))
+    fi
+  done <<< "$index_data"
+
+  if [[ $found -eq 0 ]]; then
+    echo "  (no results)"
+  fi
+  echo ""
+}
+
+# ── List ────────────────────────────────────────────────────────────
+cmd_list() {
+  load_config
+
+  local installed="${AIR_HOME}/installed.txt"
+  if [[ ! -f "$installed" ]] || [[ ! -s "$installed" ]]; then
+    echo "No packages installed"
+    echo ""
+    echo "Install packages with: air install <name>"
+    return
+  fi
+
+  echo "📦 Installed packages:"
+  echo ""
+  printf "  %-20s %-50s %s\n" "NAME" "SOURCE" "INSTALLED"
+  printf "  %-20s %-50s %s\n" "----" "------" "---------"
+  
+  while IFS='|' read -r name source sha date; do
+    [[ -z "$name" ]] && continue
+    local short_source="${source:0:47}..."
+    [[ ${#source} -le 50 ]] && short_source="$source"
+    local short_date="${date:0:10}"
+    printf "  %-20s %-50s %s\n" "$name" "$short_source" "$short_date"
+  done < "$installed"
+  echo ""
+}
+
+# ── Info ────────────────────────────────────────────────────────────
+cmd_info() {
+  load_config
+
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air info <name>" >&2
+    exit 1
+  fi
+
+  local name="$1"
+  local pkg_line
+  pkg_line="$(resolve_package "$name")" || exit 1
+
+  local source desc sha
+  source="$(echo "$pkg_line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')"
+  sha="$(echo "$pkg_line" | awk -F'|' 'NF>=4 {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3); if ($3~/^[a-f0-9]{64}$/) print $3; else print "N/A"}')"
+  desc="$(echo "$pkg_line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4); print $4}')"
+
+  # Check if installed
+  local installed="${AIR_HOME}/installed.txt"
+  local status="not installed"
+  local inst_date=""
+  if [[ -f "$installed" ]]; then
+    local entry
+    entry="$(grep "^${name}|" "$installed" 2>/dev/null || true)"
+    if [[ -n "$entry" ]]; then
+      status="✓ installed"
+      inst_date="$(echo "$entry" | awk -F'|' '{print $4}')"
+    fi
+  fi
+
+  echo ""
+  echo "📦 ${name}"
+  echo "   Description: ${desc:-N/A}"
+  echo "   Source:      ${source}"
+  echo "   SHA256:      ${sha:-N/A}"
+  echo "   Status:      ${status}"
+  [[ -n "$inst_date" ]] && echo "   Installed:   ${inst_date:0:10}"
+  echo ""
+}
+
+# ── Init ────────────────────────────────────────────────────────────
+cmd_init() {
+  if [[ -f "indent.toml" ]]; then
+    echo "indent.toml already exists"
+  else
+    cat > indent.toml <<'EOF'
+[package]
+name = "my-project"
+version = "0.1.0"
+
+[dependencies]
+EOF
+    echo "✅ Created indent.toml"
+  fi
+  echo "Ready! Use 'air install <name>' to add dependencies."
+}
+
+# ── Main ────────────────────────────────────────────────────────────
 main() {
   if [[ $# -lt 1 ]]; then
     usage
-    exit 2
+    exit 0
   fi
 
   local cmd="$1"
   shift
 
   case "$cmd" in
-    init|install|add|uninstall|remove|rm|update|upgrade|search|find|list|index)
-      ensure_auto_registry
-      pkg_exec "$cmd" "$@"
-      ;;
-    publish)
-      cmd_publish "$@"
-      ;;
-    registry)
-      cmd_registry "$@"
-      ;;
-    help|--help|-h)
-      usage
-      ;;
+    install|add|i)      cmd_install "$@" ;;
+    uninstall|remove|rm) cmd_uninstall "$@" ;;
+    update|upgrade|up)   cmd_update "$@" ;;
+    search|find|s)       cmd_search "$@" ;;
+    list|ls)             cmd_list "$@" ;;
+    info|show)           cmd_info "$@" ;;
+    init)                cmd_init "$@" ;;
+    help|--help|-h)      usage ;;
     *)
-      usage
-      exit 2
+      echo "Unknown command: $cmd" >&2
+      echo "Run 'air help' for usage." >&2
+      exit 1
       ;;
   esac
 }
