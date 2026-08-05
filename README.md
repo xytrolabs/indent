@@ -3,7 +3,7 @@
 Indent is a simple, readable programming language. It uses indentation-based blocks, lowercase keywords, and minimal punctuation — designed to be easy to learn while powerful enough for real work.
 
 ```indent
-var name = ask "What is your name? "
+var name = ask("What is your name? ")
 say "Hello " + name + "!"
 ```
 
@@ -38,8 +38,12 @@ powershell -c "irm https://raw.githubusercontent.com/xytrolabs/indent/main/scrip
 | Functions | `fun greet name` with `give` returns |
 | Default params | `fun greet name = "World"` |
 | Lambdas | `fn(x): x * 2` |
-| Imports | `get math`, `get Pow from math` |
+| Imports | `get math`, `get Pow from math`, `import math` |
 | String interpolation | `"Hello %name%!"` |
+| `null` keyword | Alias for `empty` |
+| Indexing | `list[0]`, `dict["key"]`, `dict.key` |
+| Slicing | `list[1:3]`, `list[::2]` |
+| `open` context | `open "file.txt" for read as f:` |
 
 ### Control Flow
 | Feature | Syntax |
@@ -47,7 +51,7 @@ powershell -c "irm https://raw.githubusercontent.com/xytrolabs/indent/main/scrip
 | If/else-if/else | `if` / `or` / `otherwise` |
 | Pattern matching | `match x:` / `case "a":` / `otherwise:` |
 | Counted loops | `repeat 5` |
-| Iteration | `repeat item in list` |
+| Iteration | `repeat item in list`, `for x in list` |
 | Conditional loops | `repeat until x == 10` |
 | Loop control | `stop` / `next` / `reset` |
 | Error handling | `do:` / `catch as err:` / `lastly:` |
@@ -102,9 +106,11 @@ indent --update            # Update to latest
 ### Package Manager (AIR)
 ```bash
 air install colors         # Install from registry
+air uninstall colors       # Remove a package
 air search json            # Search packages
 air update                 # Update all packages
 air list                   # List installed
+air info math              # Package details
 ```
 
 ---
