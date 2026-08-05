@@ -1,11 +1,8 @@
 # Indent Quick Reference (v1.4.1)
 
 > Complete syntax reference for the Indent programming language.
-> **New in 1.4**: Group type, type conversion (`set varname type`), compound assignment, type inference.
-
----
-
-## Basics
+> **New in 1.4**: Group type (`group` keyword), type conversion (`set varname type`), compound assignment, type inference.
+> 💡 Indent calls unique collections **Groups** (not "sets") — `group [1,2,3]`. This keeps `set` free for type conversion: `set x string`.<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)
 say "Hello"                 # Print to stdout
@@ -114,7 +111,7 @@ match x:                    # Pattern matching
 ```indent
 repeat 5                    # Counted loop (Reps is 0-indexed)
 repeat item in list         # Iterate over list
-repeat item in my_set       # Iterate over set
+repeat item in my_group       # Iterate over set
 repeat until x == 10        # Conditional loop
 for x in list               # Alias for repeat
 
@@ -124,16 +121,19 @@ reset                       # Restart loop
 ```
 
 ## Groups (v1.4) — Unique Ordered Collections
+
+> 💡 Indent calls these **Groups** (not "sets"). Other languages use "set" for this, but Indent reserves `set` for type conversion.
+
 ```indent
 var s = group [1, 2, 2, 3]   # → {1, 2, 3} — deduplicated
 var s2 = group [3, 4, 5, 6]
 var u = s + s2              # Union: {1, 2, 3, 4, 5, 6}
 contains(s, 2)              # → TRUE
 len(s)                      # → 3
-type_of(s)                  # → "set"
+type_of(s)                  # → "group"
 repeat item in s            # Iteration
 [x * 2 for x in s]          # Comprehension: [2, 4, 6]
-is_missing(set [])          # → TRUE (empty set)
+is_missing(group [])        # → TRUE (empty group)
 ```
 
 ## Expressions
@@ -212,7 +212,7 @@ string(x) / int(x) / float(x) / bool(x)   # Conversion functions
 int_or(s, fallback) / float_or(s, fallback)  # Safe conversion
 
 # String operations
-len("hello")                # → 5 (also works on lists, sets, dicts)
+len("hello")                # → 5 (also works on lists, groups, dicts)
 upper(s) / lower(s) / trim(s)
 replace(s, from, to)
 split("a,b", ",") / join([1,2], ",")

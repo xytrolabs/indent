@@ -8,10 +8,12 @@
 
 ## What's New in 1.4.1
 
+> 💡 **Indent uses Groups, not Sets.** What other languages call "sets" (unique collections), Indent calls **Groups** — created with the `group` keyword. This avoids confusion with `set varname type` which converts a variable's type.
+
 - **Group type**: `group [1,2,2,3]` → `{1, 2, 3}` — unique ordered collections
 - **Type conversion**: `set name string`, `set x int` — clean type casting
-- **Set union**: `s1 + s2` — combine sets
-- **Set iteration & comprehension**: `repeat item in s`, `[x*2 for x in s]`
+- **Group union**: `s1 + s2` — combine groups
+- **Group iteration & comprehension**: `repeat item in s`, `[x*2 for x in s]`
 
 ## What's New in 1.3.0
 
@@ -107,7 +109,7 @@ var data = [1, 2, 2, 3]
 set data set                # → {1, 2, 3} (deduplicated)
 ```
 
-### Sets
+### Groups
 
 ```indent
 var colors = group ["red", "blue", "red"]  # → {"red", "blue"}
@@ -167,7 +169,7 @@ match day:
 ```indent
 repeat 5                    # Counted loop
 repeat item in list         # Iterate list
-repeat item in my_set       # Iterate set
+repeat item in my_group       # Iterate set
 repeat until done           # Conditional
 
 stop    # break
@@ -192,7 +194,7 @@ person["name"]              # → "Ada"
 person.name                 # Dot notation
 keys(person)                # → ["name", "age"]
 
-# Sets
+# Groups
 var tags = group ["rust", "indent"]
 var more = group ["indent", "go"]
 tags + more                 # → {"rust", "indent", "go"}
@@ -228,7 +230,7 @@ lastly:
 
 Key categories:
 - **String**: `len`, `upper`, `lower`, `trim`, `replace`, `split`, `join`, `contains`, `slice`
-- **List/Dict/Set**: `sort`, `reverse`, `append`, `pop`, `keys`, `values`, `has_key`, `count`
+- **List/Dict/Group**: `sort`, `reverse`, `append`, `pop`, `keys`, `values`, `has_key`, `count`
 - **Math**: `abs`, `range`, `is_even`, `is_odd`, plus `math.*` module
 - **Type**: `type_of`, `string`, `int`, `float`, `bool`, `int_or`, `float_or`
 - **Time**: `time_now`, `time_format`, `time_parse`, `time_sleep`

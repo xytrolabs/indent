@@ -62,9 +62,9 @@ Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdl
 - Difficulty: Medium (parser/evaluator changes)
 - ROI: **High** – widely used, more readable
 
-#### 5. **Tuples & Sets** 🔴
-- Python: `(1, 2, 3)` tuples (immutable), `{1, 2, 3}` sets (unique, fast membership)
-- Current: Lists only (mutable), no sets
+#### 5. **Tuples & Groups** 🔴
+- Python: `(1, 2, 3)` tuples (immutable), `{1, 2, 3}` groups (unique, fast membership)
+- Current: Lists only (mutable), no groups
 - Difficulty: Medium (new value types in runtime)
 - ROI: **High** – essential for correct semantics (e.g., dict keys must be hashable)
 
@@ -189,7 +189,7 @@ Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdl
    - Effort: 3-4 hours
    - Impact: **Very High** – file scripting becomes practical
 
-5. **Tuples & Sets**
+5. **Tuples & Groups**
    - Add tuple type: `(1, 2, 3)` - immutable lists
    - Add set type: `{1, 2, 3}` - unique collections with fast membership
    - Add set operations: `.add()`, `.remove()`, `.union()`, `.intersection()`, `.difference()`
@@ -251,7 +251,7 @@ These can be done in parallel without blocking other work:
 1. **String methods + regex**: 80% of scripting is text processing
 2. **List/Dict methods**: Immediate ergonomic gain (method chaining vs function calls)
 3. **Filesystem (glob/walk)**: File-based scripting is common
-4. **Tuples/Sets**: Fix semantic correctness issues
+4. **Tuples/Groups**: Fix semantic correctness issues
 5. **CSV**: Data import/export (universal format)
 6. **Exception types**: Robustness at scale
 7. **Comprehensions**: Readability & conciseness
@@ -276,7 +276,7 @@ After Phase 1 (string methods + regex + list/dict methods):
 | Phase | Features | Time | Version |
 |-------|----------|------|---------|
 | Phase 1 | String methods, Regex, List/Dict methods | 1-2 weeks | 0.2.0 |
-| Phase 2 | Filesystem, Tuples/Sets, CSV | 2 weeks | 0.3.0 |
+| Phase 2 | Filesystem, Tuples/Groups, CSV | 2 weeks | 0.3.0 |
 | Phase 3 | Exception types, Comprehensions | 1-2 weeks | 0.4.0 |
 | Phase 4 | Advanced features (on-demand) | Ongoing | 0.5.0+ |
 
