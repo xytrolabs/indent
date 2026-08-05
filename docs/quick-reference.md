@@ -1,7 +1,7 @@
-# Indent Quick Reference (v1.4.0)
+# Indent Quick Reference (v1.4.1)
 
 > Complete syntax reference for the Indent programming language.
-> **New in 1.4**: Set type, type conversion (`set varname type`), compound assignment, type inference.
+> **New in 1.4**: Group type, type conversion (`set varname type`), compound assignment, type inference.
 
 ---
 
@@ -123,10 +123,10 @@ next                        # Continue
 reset                       # Restart loop
 ```
 
-## Sets (v1.4) — Unique Ordered Collections
+## Groups (v1.4) — Unique Ordered Collections
 ```indent
-var s = set [1, 2, 2, 3]   # → {1, 2, 3} — deduplicated
-var s2 = set [3, 4, 5, 6]
+var s = group [1, 2, 2, 3]   # → {1, 2, 3} — deduplicated
+var s2 = group [3, 4, 5, 6]
 var u = s + s2              # Union: {1, 2, 3, 4, 5, 6}
 contains(s, 2)              # → TRUE
 len(s)                      # → 3
@@ -354,6 +354,6 @@ indent --update              # Update to latest version
 6. Compound assignment: `x += 5` instead of `x is x + 5`
 7. Reassign with `is`, not `=`: `x is 42`
 8. `set varname type` converts types: `set x string`
-9. `set [1,2,3]` creates a Set (unique collection)
+9. `group [1,2,3]` creates a Group (unique collection)
 10. Imports resolve: same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
 11. `indent --update` keeps you on the latest version

@@ -2186,13 +2186,13 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             };
             Some(Ok(out))
         }
-        "set" => {
+        "group" => {
             if positional.is_empty() || positional.len() > 1 {
-                return Some(Err("set expects exactly 1 argument: a list".to_string()));
+                return Some(Err("group expects exactly 1 argument: a list".to_string()));
             }
             let items = match &positional[0] {
                 Value::List(v) => v.clone(),
-                _ => return Some(Err(format!("set expects a list, got {}", positional[0].type_name()))),
+                _ => return Some(Err(format!("group expects a list, got {}", positional[0].type_name()))),
             };
             let mut seen: HashSet<String> = HashSet::new();
             let mut unique: Vec<Value> = Vec::new();
@@ -7094,7 +7094,10 @@ impl ExprParser {
                     if !self.match_ident("in") {
                         return Err("Expected 'in' in comprehension".to_string());
                     }
-                    let iterable = self.parse_expr()?;
+                    // Parse the iterable at a precedence level that stops
+                    // before `if` — otherwise a trailing `if <cond>` filter is
+                    // swallowed as the start of a ternary expression.
+                    let iterable = self.parse_and()?;
                     let condition = if self.match_ident("if") {
                         Some(self.parse_expr()?)
                     } else {
@@ -7128,17 +7131,11 @@ impl ExprParser {
                     return Ok(Expr::Dict(vec![]));
                 }
                 let first_key = self.parse_expr()?;
+                self.expect_sym(":")?;
+                let first_val = self.parse_expr()?;
 
                 // Check for dict comprehension: {key: value for item in iterable if cond}
-                if self.peek_ident("for") {
-                    // Need to have parsed key:value already
-                    if !self.match_sym(":") {
-                        return Err("Expected ':' in dict comprehension".to_string());
-                    }
-                    let first_val = self.parse_expr()?;
-                    if !self.match_ident("for") {
-                        return Err("Expected 'for' after key:value in dict comprehension".to_string());
-                    }
+                if self.match_ident("for") {
                     let item_name = match self.next() {
                         Some(Token::Ident(name)) => name,
                         tok => return Err(format!("Expected item variable in comprehension, got {:?}", tok)),
@@ -7146,7 +7143,9 @@ impl ExprParser {
                     if !self.match_ident("in") {
                         return Err("Expected 'in' in dict comprehension".to_string());
                     }
-                    let iterable = self.parse_expr()?;
+                    // Parse the iterable at a precedence level that stops
+                    // before `if` (see list-comprehension note above).
+                    let iterable = self.parse_and()?;
                     let condition = if self.match_ident("if") {
                         Some(self.parse_expr()?)
                     } else {
@@ -7164,8 +7163,6 @@ impl ExprParser {
                 }
 
                 // Normal dict
-                self.expect_sym(":")?;
-                let first_val = self.parse_expr()?;
                 let mut items = vec![(first_key, first_val)];
                 loop {
                     if self.match_sym(",") {
@@ -7460,7 +7457,7 @@ impl Parser {
             });
         }
 
-        // Indent-2: set varname type — convert existing variable's type
+        // Indent-2: set varname type — type casting (changes variable type)'s type
         if let Some(rest) = text.strip_prefix("set ") {
             let rest = rest.trim();
             let parts: Vec<&str> = rest.split_whitespace().collect();
@@ -7472,7 +7469,7 @@ impl Parser {
                     name: parts[0].to_string(),
                 });
             }
-            // set [1,2,3] or set data — create a Set value
+            // group [1,2,3] or group data — create a Group (use group, not set)
             // Treat as a BareExpr so the expression parser handles it
         }
 

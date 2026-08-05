@@ -1,11 +1,11 @@
 # Indent Changelog
 
-## 1.4.0 — 2026-08-04
+## 1.4.1 — 2026-08-04
 
-### 🎯 Set Type — Unique Collections
+### 🎯 Group Type — Unique Collections
 ```indent
-var s = set [1, 2, 2, 3]     # → {1, 2, 3}
-var u = s + set [3, 4]        # → {1, 2, 3, 4}
+var s = group [1, 2, 2, 3]     # → {1, 2, 3}
+var u = s + group [3, 4]        # → {1, 2, 3, 4}
 contains(s, 2)                # → TRUE
 repeat item in s              # iteration
 [x * 2 for x in s]            # comprehension

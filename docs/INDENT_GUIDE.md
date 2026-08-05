@@ -1,14 +1,14 @@
 # Your Journey with Indent 1.4
 
-> Indent 1.4 adds **Set type**, **type conversion** (`set varname type`), compound assignment, and type inference — all with the same simple, lovable syntax.
+> Indent 1.4 adds **Group type**, **type conversion** (`set varname type`), compound assignment, and type inference — all with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
 ---
 
-## What's New in 1.4.0
+## What's New in 1.4.1
 
-- **Set type**: `set [1,2,2,3]` → `{1, 2, 3}` — unique ordered collections
+- **Group type**: `group [1,2,2,3]` → `{1, 2, 3}` — unique ordered collections
 - **Type conversion**: `set name string`, `set x int` — clean type casting
 - **Set union**: `s1 + s2` — combine sets
 - **Set iteration & comprehension**: `repeat item in s`, `[x*2 for x in s]`
@@ -110,8 +110,8 @@ set data set                # → {1, 2, 3} (deduplicated)
 ### Sets
 
 ```indent
-var colors = set ["red", "blue", "red"]  # → {"red", "blue"}
-var more = set ["green", "blue"]
+var colors = group ["red", "blue", "red"]  # → {"red", "blue"}
+var more = group ["green", "blue"]
 var all = colors + more                  # Union: {"red", "blue", "green"}
 contains(colors, "red")                  # → TRUE
 len(colors)                              # → 2
@@ -193,8 +193,8 @@ person.name                 # Dot notation
 keys(person)                # → ["name", "age"]
 
 # Sets
-var tags = set ["rust", "indent"]
-var more = set ["indent", "go"]
+var tags = group ["rust", "indent"]
+var more = group ["indent", "go"]
 tags + more                 # → {"rust", "indent", "go"}
 ```
 
@@ -279,5 +279,5 @@ indent --update              # Update Indent
 4. Type inference: `var x = 42` → int
 5. Compound assignment: `x += 5`
 6. Type conversion: `set x string`
-7. Sets: `set [1,2,3]` for unique collections
+7. Groups: `group [1,2,3]` for unique collections
 8. `indent --update` keeps you current
