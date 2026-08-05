@@ -232,6 +232,7 @@ enum Value {
     Bool(bool),
     Str(String),
     List(Vec<Value>),
+    Set(Vec<Value>),  // ordered unique set
     Dict(HashMap<String, Value>),
     Object {
         class_name: String,
@@ -310,6 +311,14 @@ impl fmt::Display for Value {
                     .join(", ");
                 write!(f, "[{joined}]")
             }
+            Value::Set(items) => {
+                let joined = items
+                    .iter()
+                    .map(|x| format!("{x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{{{joined}}}")
+            }
             Value::Dict(items) => {
                 let mut keys = items.keys().cloned().collect::<Vec<_>>();
                 keys.sort();
@@ -351,6 +360,7 @@ impl Value {
             Value::Float(v) => *v != 0.0,
             Value::Str(v) => !v.is_empty(),
             Value::List(v) => !v.is_empty(),
+            Value::Set(v) => !v.is_empty(),
             Value::Dict(v) => !v.is_empty(),
             Value::Func(_) => true,
             Value::Module(_) => true,
@@ -375,6 +385,7 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
             Value::List(_) => "list",
+            Value::Set(_) => "set",
             Value::Dict(_) => "dict",
             Value::Func(_) => "function",
             Value::Module(_) => "module",
@@ -453,6 +464,7 @@ fn is_missing_value(value: &Value) -> bool {
         Value::Empty => true,
         Value::Str(v) => v.is_empty(),
         Value::List(v) => v.is_empty(),
+        Value::Set(v) => v.is_empty(),
         Value::Dict(v) => v.is_empty(),
         _ => false,
     }
@@ -1357,7 +1369,8 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
             let iterable = eval_expr(expr, ctx)?;
             let items = match iterable {
                 Value::List(v) => v,
-                _ => return Err("Repeat for expects a list value".to_string()),
+                Value::Set(v) => v,
+                _ => return Err("Repeat for expects a list or set".to_string()),
             };
             let mut reps = 0usize;
             for item in items {
@@ -1377,7 +1390,8 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
             let iterable = eval_expr(iterable_expr, ctx)?;
             let items = match iterable {
                 Value::List(v) => v,
-                _ => return Err("Repeat for <Item> in expects a list value".to_string()),
+                Value::Set(v) => v,
+                _ => return Err("Repeat for <Item> in expects a list or set".to_string()),
             };
             let mut reps = 0usize;
             for item in items {
@@ -2166,10 +2180,29 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let out = match &positional[0] {
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
                 Value::List(v) => Value::Int(v.len() as i64),
+                Value::Set(v) => Value::Int(v.len() as i64),
                 Value::Dict(v) => Value::Int(v.len() as i64),
                 _ => return Some(Err(format!("len expects a string, list, or dictionary, got {}", positional[0].type_name()))),
             };
             Some(Ok(out))
+        }
+        "set" => {
+            if positional.is_empty() || positional.len() > 1 {
+                return Some(Err("set expects exactly 1 argument: a list".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err(format!("set expects a list, got {}", positional[0].type_name()))),
+            };
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut unique: Vec<Value> = Vec::new();
+            for item in items {
+                let key = format!("{}", item);
+                if seen.insert(key) {
+                    unique.push(item);
+                }
+            }
+            Some(Ok(Value::Set(unique)))
         }
         "range" => {
             if positional.is_empty() || positional.len() > 3 {
@@ -3043,6 +3076,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
 
             match &positional[0] {
                 Value::List(_) => Some(Ok(Value::List(vec![]))),
+                Value::Set(_) => Some(Ok(Value::Set(vec![]))),
                 Value::Dict(_) => Some(Ok(Value::Dict(HashMap::new()))),
                 Value::Str(_) => Some(Ok(Value::Str(String::new()))),
                 _ => Some(Err(format!("clear expects a string, list, or dictionary, got {}", positional[0].type_name()))),
@@ -3632,6 +3666,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Bool(_) => "boolean",
                 Value::Str(_) => "string",
                 Value::List(_) => "list",
+                Value::Set(_) => "set",
                 Value::Dict(_) => "dict",
                 Value::Func(_) => "function",
                 Value::Object { .. } => "object",
@@ -5268,6 +5303,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::Bool(v) => JsonValue::from(*v),
         Value::Str(v) => JsonValue::from(v.clone()),
         Value::List(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
+        Value::Set(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::Dict(items) => {
             let mut out = JsonMap::new();
             for (k, v) in items {
@@ -5875,7 +5911,8 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             let iter = eval_ast(iterable, ctx)?;
             let items = match iter {
                 Value::List(v) => v,
-                _ => return Err("Comprehension iterable must be a list".to_string()),
+                Value::Set(v) => v,
+                _ => return Err("Comprehension iterable must be a list or set".to_string()),
             };
             match kind.as_str() {
                 "list" => {
@@ -6278,6 +6315,15 @@ fn eval_binary(op: &str, a: Value, b: Value) -> Result<Value, String> {
                 x.extend(y);
                 Ok(Value::List(x))
             }
+            (Value::Set(mut x), Value::Set(y)) => {
+                for item in y {
+                    let key = format!("{}", item);
+                    if !x.iter().any(|v| format!("{}", v) == key) {
+                        x.push(item);
+                    }
+                }
+                Ok(Value::Set(x))
+            }
             (Value::Dict(mut x), Value::Dict(y)) => {
                 x.extend(y);
                 Ok(Value::Dict(x))
@@ -6313,6 +6359,7 @@ fn eval_binary(op: &str, a: Value, b: Value) -> Result<Value, String> {
 fn contains_value(container: &Value, item: &Value) -> Result<bool, String> {
     match container {
         Value::List(items) => Ok(items.iter().any(|v| eq_values(v, item))),
+        Value::Set(items) => Ok(items.iter().any(|v| eq_values(v, item))),
         Value::Dict(map) => {
             let key = match item {
                 Value::Str(s) => s,
@@ -6382,6 +6429,13 @@ fn eq_values(a: &Value, b: &Value) -> bool {
                     .iter()
                     .zip(y.iter())
                     .all(|(left, right)| eq_values(left, right))
+        }
+        (Value::Set(x), Value::Set(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|item| {
+                    let key = format!("{}", item);
+                    y.iter().any(|other| format!("{}", other) == key && eq_values(item, other))
+                })
         }
         (Value::Dict(x), Value::Dict(y)) => {
             x.len() == y.len()
