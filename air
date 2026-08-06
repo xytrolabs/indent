@@ -16,7 +16,8 @@ usage() {
 AIR — Indent Package Manager (pip for Indent)
 
 Usage:
-  air install <name>[@version]     Install a package
+  air deps [dir]                   Auto-detect and install dependencies
+  air install <name>[@version]     Install a package (auto-installs its deps)
   air install <name> <url>         Install from URL or local path
   air uninstall <name>             Remove a package
   air update [name]                Update one or all packages
@@ -26,6 +27,7 @@ Usage:
   air init                         Initialize a new Indent project
 
 Examples:
+  air deps                        # Scan current directory, install all deps
   air install colors               Install latest from registry
   air install math@2.5.0           Install specific version
   air install mypkg ./mypkg.ind    Install from local file
@@ -174,6 +176,9 @@ cmd_install() {
   echo "${name}|${source}|${actual_sha}|$(date -Iseconds)" >> "$installed"
 
   echo "✅ Installed ${name} → ${target}"
+
+  # Auto-detect and install transitive dependencies
+  auto_install_deps "$name"
 }
 
 # ── Uninstall ───────────────────────────────────────────────────────
@@ -364,6 +369,115 @@ EOF
   echo "Ready! Use 'air install <name>' to add dependencies."
 }
 
+# ── Dependency Detection ────────────────────────────────────────────
+# Scans .ind files for 'get X from Y' imports and resolves Y to registry packages
+scan_deps() {
+  local dir="${1:-.}"
+  local index_data
+  index_data="$(fetch_index "$AIR_INDEX" 2>/dev/null || true)"
+
+  echo "🔍 Scanning for dependencies in ${dir}..."
+  echo ""
+
+  local found=0
+  local -A seen_pkgs  # bash associative array to avoid duplicates
+  
+  # Find all .ind files and scan for imports
+  while IFS= read -r -d '' file; do
+    while IFS= read -r line; do
+      # Match: get X from Y  or  get X, Y from Z  or  import X from Y
+      if [[ "$line" =~ (get|import)[[:space:]]+.+[[:space:]]+from[[:space:]]+([A-Za-z_][A-Za-z0-9_]*) ]]; then
+        local module="${BASH_REMATCH[2]}"
+        # Skip standard library modules (they ship with Indent)
+        case "$module" in
+          math|os|sys|time|random|json|http|strings|io|net|fs|testing|builtins|datetime|path)
+            continue ;;
+        esac
+        # Check if already seen
+        if [[ -n "${seen_pkgs[$module]:-}" ]]; then
+          continue
+        fi
+        seen_pkgs[$module]=1
+        
+        # Check if already installed
+        local installed="${AIR_HOME}/installed.txt"
+        if [[ -f "$installed" ]] && grep -q "^${module}|" "$installed" 2>/dev/null; then
+          echo "  ✅ ${module} (already installed)"
+          found=$((found + 1))
+          continue
+        fi
+        
+        # Check if in registry
+        if [[ -n "$index_data" ]] && echo "$index_data" | grep -q "^${module}|" 2>/dev/null; then
+          echo "  📦 ${module} (in registry)"
+          cmd_install "$module"
+          found=$((found + 1))
+        elif [[ -n "$index_data" ]] && echo "$index_data" | grep -q "^${module}\." 2>/dev/null; then
+          echo "  📦 ${module} (in registry)"
+          cmd_install "$module"  
+          found=$((found + 1))
+        else
+          echo "  ⚠ ${module} (not found in registry — may be a local module)"
+        fi
+      fi
+    done < "$file"
+  done < <(find "$dir" -maxdepth 5 -name "*.ind" -print0 2>/dev/null)
+
+  echo ""
+  if [[ $found -eq 0 ]]; then
+    echo "No external dependencies detected."
+  else
+    echo "✅ Processed ${found} dependencies."
+  fi
+}
+
+cmd_deps() {
+  load_config
+  local dir="${1:-.}"
+  scan_deps "$dir"
+}
+
+# ── Auto-deps on install ────────────────────────────────────────────
+# After installing a package, scan its files for its own dependencies
+auto_install_deps() {
+  local pkg_name="$1"
+  local pkg_dir="${AIR_PACKAGES}"
+  local pkg_file="${pkg_dir}/${pkg_name}.ind"
+  
+  if [[ ! -f "$pkg_file" ]]; then
+    return
+  fi
+
+  local index_data
+  index_data="$(fetch_index "$AIR_INDEX" 2>/dev/null || true)"
+
+  # Scan just the installed package file for its imports
+  local -A seen
+  while IFS= read -r line; do
+    if [[ "$line" =~ (get|import)[[:space:]]+.+[[:space:]]+from[[:space:]]+([A-Za-z_][A-Za-z0-9_]*) ]]; then
+      local dep="${BASH_REMATCH[2]}"
+      case "$dep" in
+        math|os|sys|time|random|json|http|strings|io|net|fs|testing|builtins|datetime|path) continue ;;
+        "$pkg_name") continue ;;
+      esac
+      if [[ -n "${seen[$dep]:-}" ]]; then continue; fi
+      seen[$dep]=1
+      
+      if [[ -z "$index_data" ]] || ! echo "$index_data" | grep -q "^${dep}|" 2>/dev/null; then
+        continue
+      fi
+      
+      local installed="${AIR_HOME}/installed.txt"
+      if [[ -f "$installed" ]] && grep -q "^${dep}|" "$installed" 2>/dev/null; then
+        continue
+      fi
+      
+      echo "   └─ Auto-installing dependency: ${dep}"
+      cmd_install "$dep" > /dev/null 2>&1 || true
+    fi
+  done < "$pkg_file"
+}
+
 # ── Main ────────────────────────────────────────────────────────────
 main() {
   if [[ $# -lt 1 ]]; then
@@ -381,6 +495,7 @@ main() {
     search|find|s)       cmd_search "$@" ;;
     list|ls)             cmd_list "$@" ;;
     info|show)           cmd_info "$@" ;;
+    deps)                cmd_deps "$@" ;;
     init)                cmd_init "$@" ;;
     help|--help|-h)      usage ;;
     *)
