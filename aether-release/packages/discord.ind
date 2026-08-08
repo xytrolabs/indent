@@ -822,10 +822,16 @@ fun HasRole
     roleId1
     roleId2
     roleId3
-    if not has_key source "member"
+    var hasM int = 0
+    if has_key source "member"
+        hasM is 1
+    if hasM == 0
         give "❌ This command requires a guild."
     var member dynamic = source.member
-    if not has_key member "roles"
+    var hasR int = 0
+    if has_key member "roles"
+        hasR is 1
+    if hasR == 0
         give "❌ Cannot read your roles."
     var roles dynamic = member.roles
     var passed int = 0
@@ -848,9 +854,15 @@ fun IsOwnerCheck
     source
     cmd
     args
-    if not has_key bot "ownerId"
+    var hasO int = 0
+    if has_key bot "ownerId"
+        hasO is 1
+    if hasO == 0
         give "❌ Owner ID not configured."
-    if not has_key source "author"
+    var hasA int = 0
+    if has_key source "author"
+        hasA is 1
+    if hasA == 0
         give "❌ Cannot check permissions."
     var author dynamic = source.author
     var uid string = ""
@@ -1384,7 +1396,10 @@ fun RemoveTask
 #! Run all due background tasks. Called from inside connectOnce loop.
 fun RunTasks
     bot
-    if not has_key bot "_tasks"
+    var hasT int = 0
+    if has_key bot "_tasks"
+        hasT is 1
+    if hasT == 0
         give empty
     var now float = time_now
     var tasks dynamic = bot._tasks
