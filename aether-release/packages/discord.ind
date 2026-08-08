@@ -1,5 +1,5 @@
 #! =============================================================================
-#! discord.ind 3.0 — The Indent Discord bot library
+#! discord.ind 4.0 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
@@ -7,10 +7,10 @@
 #! system, clean block-style helpers, and a built-in audit/monitoring suite.
 #! Import it and write your bot.
 #!
-#! v3.0 adds: message monitoring (edits, deletes, bulk-deletes, pins,
-#! reactions), moderation events (bans/unbans, member/voice/channel changes),
-#! a message cache, and one-call SetupAudit logging. Gateway intents now
-#! default to a broad non-privileged set — override with bot.intents.
+#! 🆕 v4.0 adds: command checks (permissions), custom error handler, cooldowns,
+#! converters (User/Role/Channel ID extraction), modal builder, context menus
+#! (user & message commands), hybrid commands (prefix+slash), background task
+#! loops, command groups/subcommands, and wait_for event polling.
 #!
 #! NOTE: the native Indent runtime passes function arguments by value, so every
 #! function that modifies the bot RETURNS the modified bot. Always reassign:
@@ -29,7 +29,14 @@
 #!   On bot "ready" readyHandler
 #!   Run bot
 #!
-#! 📋 Audit log (new in 3.0):
+#! 🔒 Permission checks (new in 4.0):
+#!   get AddCheck, HasRole from discord
+#!   bot is AddCheck bot "kick" "OnlyMods"
+#!   bot is AddCheck bot "ban" "OnlyAdmins"
+#!   fun OnlyMods bot src cmd args
+#!       give HasRole src "" "MOD_ROLE_ID"
+#!
+#! 📋 Audit log:
 #!   get QuickBot, SetupAudit from discord
 #!   var bot dynamic = QuickBot "TOKEN" "!"
 #!   bot is SetupAudit bot "123456789012345678"   # <- channel id for logs
@@ -556,6 +563,38 @@ fun RunCommand
 
     var command dynamic = bot.commands[cmd]
 
+    #! ----- 4.0: run global checks first -----
+    if has_key bot "_globalChecks"
+        repeat checkFn in bot._globalChecks
+            do:
+                var checkErr string = call_func checkFn bot source cmd args
+                if checkErr != empty and checkErr != ""
+                    ReplyTo token source checkErr
+                    give empty
+            catch as err:
+                ReplyTo token source "⚠️ Check error"
+                give empty
+
+    #! ----- 4.0: run per-command checks -----
+    if has_key bot "_checks"
+        var chkStore dynamic = bot._checks
+        if has_key chkStore cmd
+            var chkFn string = chkStore[cmd]
+            do:
+                var chkErr string = call_func chkFn bot source cmd args
+                if chkErr != empty and chkErr != ""
+                    ReplyTo token source chkErr
+                    give empty
+            catch as err:
+                ReplyTo token source "⚠️ Check error"
+                give empty
+
+    #! ----- 4.0: cooldown check -----
+    var cdMsg string = CheckCooldown bot source cmd
+    if cdMsg != empty and cdMsg != ""
+        ReplyTo token source cdMsg
+        give empty
+
     #! 1) simple reply command (from puzzles or SimpleCommand)
     if has_key command "reply"
         var reply dynamic = command.reply
@@ -594,11 +633,22 @@ fun RunCommand
                     give empty
                 j is j + 1
 
+        #! ----- 4.0: custom error handler -----
         do:
             call_func handlerFunc dictArgs
         catch as err:
-            var cmdErrMsg string = "❌ Command error: " + err
-            ReplyTo token source cmdErrMsg
+            var handled int = 0
+            if has_key bot "_errorHandler"
+                var errH dynamic = bot._errorHandler
+                if errH != empty and errH != ""
+                    var src2 dynamic = source
+                    var cmdErrMsg string = "❌ Command error: " + err
+                    src2["error"] is cmdErrMsg
+                    call_func errH bot src2 cmd
+                    handled is 1
+            if handled == 0
+                var cmdErrMsg string = "❌ Command error: " + err
+                ReplyTo token source cmdErrMsg
         give empty
 
     ReplyTo token source "Command has no action"
@@ -628,6 +678,53 @@ fun CallEvent
         call_func found bot args ""
 
 #! ==============================
+#! ⏳  WAIT_FOR (4.0) — wait for the next occurrence of an event
+#! ==============================
+#! Wait for a specific gateway event within a timeout. Used inside commands:
+#!   get WaitFor from discord
+#!   var resp dynamic = WaitFor bot "message" 30
+#!   if resp != empty: CtxSend ctx "Got: " + resp.content
+#! Internally sets a one-shot handler that stores the event data in
+#! bot._awaited[event] and returns it to the caller.
+var _WAIT_TARGET string = ""
+var _WAIT_DATA dynamic = empty
+
+#! Start waiting for an event. Returns the bot dict.
+fun WaitForStart
+    bot
+    event
+    bot._waitEvent is event
+    bot._waitData is empty
+    bot._waitDone is 0
+    #! register a temporary handler that captures the next event payload
+    var tmpHandler string = "_wait_capture"
+    bot is On bot event tmpHandler
+    give bot
+
+#! Internal — called by connectOnce when the awaited event fires.
+fun _wait_capture
+    bot
+    data
+    _x
+    bot._waitData is data
+    bot._waitDone is 1
+
+#! Poll until the event arrives or timeout expires (non-blocking poll).
+#! Call from inside a command handler after WaitForStart.
+fun WaitForPoll
+    bot
+    timeout
+    var start float = time_now
+    repeat
+        if has_key bot "_waitDone"
+            if bot._waitDone == 1
+                bot._waitDone is 0
+                give bot._waitData
+        if time_now - start >= timeout
+            give empty
+        time_sleep 0.2
+
+#! ==============================
 #! 🎯  QUICKBOT API (high level)
 #! ==============================
 
@@ -635,7 +732,7 @@ fun CallEvent
 fun QuickBot
     token
     prefix
-    give {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0}
+    give {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0, "_checks": {}, "_cooldowns": {}, "_tasks": [], "_globalChecks": [], "_userCommands": {}, "_messageCommands": {}, "_waitData": empty, "_waitDone": 0}
 
 #! Add a prefix command (handler = function reference — limited support)
 #! Returns bot — reassign:  bot is AddCommand bot "name" "desc" handler
@@ -676,7 +773,271 @@ fun On
     give bot
 
 #! ==============================
-#! 📋  AUDIT / MONITORING (3.0)
+#! �  COMMAND CHECKS / PERMISSIONS (4.0)
+#! ==============================
+#! Checks gate command execution. Register with AddCheck:
+#!   bot is AddCheck bot "kick" "IsModerator"
+#! The check function receives (bot, source, cmd, args) and must return ""
+#! on success or an error string. If a string is returned, it's sent as the
+#! error reply and the command is NOT executed.
+#!   fun IsModerator bot source cmd args
+#!       var roles dynamic = source.member.roles   (when available)
+#!       if <user has mod role>: give ""
+#!       give "❌ You need Moderator permissions."
+
+#! Register a check function for a specific command.
+#! Returns bot — reassign:  bot is AddCheck bot "kick" "IsModerator"
+fun AddCheck
+    bot
+    cmdName
+    checkFnName
+    var checksStore dynamic = {}
+    if has_key bot "_checks"
+        checksStore is bot._checks
+    checksStore[cmdName] is checkFnName
+    bot._checks is checksStore
+    give bot
+
+#! Register a global check (runs for ALL commands).
+#! Returns bot — reassign:  bot is AddGlobalCheck bot "IsOwner"
+fun AddGlobalCheck
+    bot
+    checkFnName
+    var gcs dynamic = []
+    if has_key bot "_globalChecks"
+        gcs is bot._globalChecks
+    append gcs checkFnName
+    bot._globalChecks is gcs
+    give bot
+
+#! Built-in: check that the user has at least one of the given role IDs.
+#! Usage:  bot is AddCheck bot "kick" "IsModerator"
+#! Then define the handler in your bot:
+#!   fun IsModerator bot source cmd args
+#!       get HasRole from discord
+#!       give HasRole source empty "MOD_ROLE_ID" "ADMIN_ROLE_ID"
+fun HasRole
+    source
+    _xtra
+    roleId1
+    roleId2
+    roleId3
+    if not has_key source "member"
+        give "❌ This command requires a guild."
+    var member dynamic = source.member
+    if not has_key member "roles"
+        give "❌ Cannot read your roles."
+    var roles dynamic = member.roles
+    var passed int = 0
+    repeat r in roles
+        if r == roleId1
+            passed is 1
+        if roleId2 != empty and r == roleId2
+            passed is 1
+        if roleId3 != empty and r == roleId3
+            passed is 1
+    if passed == 1
+        give ""
+    give "❌ You don't have permission to use this command."
+
+#! Built-in: owner-only check. Compares user.id to bot.ownerId.
+#!   bot.ownerId is "1234567890"
+#!   bot is AddCheck bot "shutdown" "IsOwnerCheck"
+fun IsOwnerCheck
+    bot
+    source
+    cmd
+    args
+    if not has_key bot "ownerId"
+        give "❌ Owner ID not configured."
+    if not has_key source "author"
+        give "❌ Cannot check permissions."
+    var author dynamic = source.author
+    var uid string = ""
+    if has_key author "id"
+        uid is author.id
+    if uid == bot.ownerId
+        give ""
+    give "❌ Only the bot owner can use this command."
+
+#! ==============================
+#! ⚡  COMMAND ERROR HANDLER (4.0)
+#! ==============================
+#! Set a custom error handler that fires when a command raises an error.
+#!   bot is SetErrorHandler bot "onCmdError"
+#!   fun onCmdError bot cmd err
+#!       CtxSend err.ctx "❌ " + err.message
+fun SetErrorHandler
+    bot
+    handlerName
+    bot._errorHandler is handlerName
+    give bot
+
+#! ==============================
+#! ⏱️  COOLDOWNS (4.0)
+#! ==============================
+#! per-command cooldown tracking: {cmdName: {userId: lastUsedTimestamp}}
+var _COOLDOWNS dynamic = {}
+
+#! Set a cooldown (seconds) on a command. 0 = no cooldown.
+#! Returns bot — reassign:  bot is SetCooldown bot "kick" 30
+fun SetCooldown
+    bot
+    cmdName
+    seconds
+    var cds dynamic = {}
+    if has_key bot "_cooldowns"
+        cds is bot._cooldowns
+    cds[cmdName] is seconds
+    bot._cooldowns is cds
+    give bot
+
+#! Check+enforce cooldown. Returns "" if OK, or an error message if on cooldown.
+#! Called automatically by RunCommand before executing a handler.
+fun CheckCooldown
+    bot
+    source
+    cmd
+    var cds dynamic = {}
+    if has_key bot "_cooldowns"
+        cds is bot._cooldowns
+    var hasCd int = 0
+    if has_key cds cmd
+        hasCd is 1
+    if hasCd == 0
+        give ""
+    var cdSeconds dynamic = cds[cmd]
+    var now float = time_now
+
+    var uid string = "anon"
+    if has_key source "author"
+        if has_key source.author "id"
+            uid is source.author.id
+
+    var key string = cmd + "_" + uid
+    if has_key _COOLDOWNS key
+        var last float = _COOLDOWNS[key]
+        if now - last < cdSeconds
+            var remain float = cdSeconds - (now - last)
+            give "⏱️ Cooldown: " + string(remain) + "s remaining."
+    _COOLDOWNS[key] is now
+    give ""
+
+#! ==============================
+#! 🔄  CONVERTERS (4.0)
+#! ==============================
+#! Convert a raw arg string like "<@123>" or "123" into a clean ID.
+#! Returns the ID string or empty on failure.
+fun ConvertUserId
+    raw
+    if raw == empty
+        give empty
+    var id string = raw
+    #! strip <@...> / <@!...> mention syntax
+    if starts_with id "<@"
+        id is replace id "<@" ""
+        if starts_with id "!"
+            id is replace id "!" ""
+        if ends_with id ">"
+            id is replace id ">" ""
+    give id
+
+fun ConvertRoleId
+    raw
+    if raw == empty
+        give empty
+    var id string = raw
+    if starts_with id "<@&"
+        id is replace id "<@&" ""
+        if ends_with id ">"
+            id is replace id ">" ""
+    give id
+
+fun ConvertChannelId
+    raw
+    if raw == empty
+        give empty
+    var id string = raw
+    if starts_with id "<#"
+        id is replace id "<#" ""
+        if ends_with id ">"
+            id is replace id ">" ""
+    give id
+
+#! ==============================
+#! 🪟  MODALS (4.0)
+#! ==============================
+#! Build a modal dict ready to send as an interaction response.
+#!   var modal dynamic = BuildModal "custom_modal" "My Title"
+#!   AddModalField modal "name" "Your Name" "short" 1 "e.g. Ada"
+#!   SendModal token interaction modal
+fun BuildModal
+    customId
+    title
+    give {"title": title, "custom_id": customId, "components": []}
+
+fun AddModalField
+    modal
+    fieldId
+    label
+    styleName
+    required
+    placeholder
+    var st int = styleInt styleName
+    var row dynamic = {"type": 1, "components": [{"type": 4, "custom_id": fieldId, "label": label, "style": st, "required": required}]}
+    if placeholder != empty
+        var compList dynamic = row.components
+        var inp dynamic = compList[0]
+        inp["placeholder"] is placeholder
+    var comps dynamic = modal.components
+    append comps row
+    modal.components is comps
+    give modal
+
+#! "short" → 1, "paragraph" → 2
+fun styleInt
+    styleName
+    if styleName == "paragraph"
+        give 2
+    give 1
+
+#! Send a modal as an interaction response (type 9)
+fun SendModal
+    token
+    interaction
+    modal
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    Post path token {"type": 9, "data": modal}
+
+#! Extract modal field values from a modal submit interaction.
+#! Returns a dict of {custom_id: value}
+fun ModalValues
+    interaction
+    var vals dynamic = {}
+    var hasData int = 0
+    if has_key interaction "data"
+        hasData is 1
+    if hasData == 0
+        give vals
+    var d dynamic = interaction.data
+    var hasComps int = 0
+    if has_key d "components"
+        hasComps is 1
+    if hasComps == 0
+        give vals
+    repeat row in d.components
+        if has_key row "components"
+            repeat comp in row.components
+                if has_key comp "custom_id"
+                    var mid string = comp.custom_id
+                    var val string = ""
+                    if has_key comp "value"
+                        val is comp.value
+                    vals[mid] is val
+    give vals
+
+#! ==============================
+#! �📋  AUDIT / MONITORING (3.0)
 #! ==============================
 #! SetupAudit registers handlers for every monitoring event and posts a
 #! summary embed to the given channel. Call once during setup:
@@ -911,6 +1272,156 @@ fun SetupAudit
     bot is On bot "channel_delete" "AuditChannelDelete"
     give bot
 
+#! ==============================
+#! 📎  CONTEXT MENUS (4.0) — user & message commands
+#! ==============================
+#! Register a user-context-menu command (right-click user → Apps).
+#! Returns bot — reassign:  bot is AddUserCommand bot "Get Avatar" "onAvatar"
+fun AddUserCommand
+    bot
+    name
+    handlerName
+    var ucms dynamic = {}
+    if has_key bot "_userCommands"
+        ucms is bot._userCommands
+    ucms[name] is handlerName
+    bot._userCommands is ucms
+    give bot
+
+#! Register a message-context-menu command (right-click msg → Apps).
+#! Returns bot — reassign:  bot is AddMessageCommand bot "Report" "onReport"
+fun AddMessageCommand
+    bot
+    name
+    handlerName
+    var mcms dynamic = {}
+    if has_key bot "_messageCommands"
+        mcms is bot._messageCommands
+    mcms[name] is handlerName
+    bot._messageCommands is mcms
+    give bot
+
+#! Sync ALL application commands (slash + user + message) to Discord.
+#! Returns bot.
+fun SyncAllCommands
+    bot
+    var globalUrl string = API + "/applications/" + os_getenv "DISCORD_APP_ID" "" + "/commands"
+    if os_getenv "DISCORD_APP_ID" "" == empty
+        say "⚠️ Set DISCORD_APP_ID to sync commands"
+        give bot
+
+    var commands dynamic = []
+    if has_key bot "slash"
+        repeat cmd in bot.slash
+            append commands cmd
+    if has_key bot "_userCommands"
+        var ucms dynamic = bot._userCommands
+        var uKeys dynamic = keys ucms
+        repeat uk in uKeys
+            append commands {"name": uk, "type": 2}
+    if has_key bot "_messageCommands"
+        var mcms dynamic = bot._messageCommands
+        var mKeys dynamic = keys mcms
+        repeat mk in mKeys
+            append commands {"name": mk, "type": 3}
+
+    Put globalUrl bot.token commands
+    give bot
+
+#! ==============================
+#! 🔀  HYBRID COMMANDS (4.0) — one definition, prefix + slash
+#! ==============================
+#! Register a command that works as BOTH prefix AND slash.
+#!   bot is HybridCommand bot "ping" "Check latency" "onPing"
+#! The handler MUST accept (ctx, args) like a regular BotHandler.
+fun HybridCommand
+    bot
+    name
+    desc
+    handlerName
+    bot is BotHandler bot name desc handlerName
+    bot is AddSlash bot name desc handlerName empty
+    give bot
+
+#! ==============================
+#! ⏰  BACKGROUND TASKS / LOOPS (4.0)
+#! ==============================
+#! Schedule a function to run every N seconds in the background.
+#! The task queue is polled inside the gateway event loop (connectOnce).
+#!   bot is TaskLoop bot "cleanupTask" 3600
+#!   fun cleanupTask bot
+#!       say "Hourly cleanup..."
+#! Tasks persist in bot._tasks: [{name, interval, lastRun, handler}]
+fun TaskLoop
+    bot
+    handlerName
+    intervalSecs
+    var tasks dynamic = []
+    if has_key bot "_tasks"
+        tasks is bot._tasks
+    append tasks {"name": handlerName, "interval": intervalSecs, "lastRun": 0, "handler": handlerName}
+    bot._tasks is tasks
+    give bot
+
+#! Remove a background task by handler name.
+#! Returns bot.
+fun RemoveTask
+    bot
+    handlerName
+    var tasks dynamic = []
+    if has_key bot "_tasks"
+        tasks is bot._tasks
+    var filtered dynamic = []
+    repeat t in tasks
+        var name string = ""
+        if has_key t "name"
+            name is t.name
+        if name != handlerName
+            append filtered t
+    bot._tasks is filtered
+    give bot
+
+#! Run all due background tasks. Called from inside connectOnce loop.
+fun RunTasks
+    bot
+    if not has_key bot "_tasks"
+        give empty
+    var now float = time_now
+    var tasks dynamic = bot._tasks
+    repeat t in tasks
+        var interval float = 0
+        var last float = 0
+        var handler string = ""
+        if has_key t "interval"
+            interval is t.interval
+        if has_key t "lastRun"
+            last is t.lastRun
+        if has_key t "handler"
+            handler is t.handler
+        if interval > 0 and handler != empty
+            if now - last >= interval
+                do:
+                    call_func handler bot
+                catch as err:
+                    say "   ⚠️ Task error (" + handler + "): " + err
+                t["lastRun"] is now
+
+#! ==============================
+#! 📁  COMMAND GROUPS / SUBCOMMANDS (4.0)
+#! ==============================
+#! Register a subcommand under a parent group.
+#!   bot is GroupCommand bot "config" "prefix" "SetPrefix" "Set the bot prefix"
+#! Then use:  !config prefix "!"
+fun GroupCommand
+    bot
+    group
+    subcmd
+    handlerName
+    desc
+    var fullName string = group + "_" + subcmd
+    bot is BotHandler bot fullName desc handlerName
+    give bot
+
 #! One full connect + event-loop cycle. Returns "reconnect" or "fatal".
 fun connectOnce
     bot
@@ -980,8 +1491,10 @@ fun connectOnce
 
         #! timeout — heartbeat check above already handled timing
         if has_key resp "timeout"
+            RunTasks bot
             next
         if resp.ok != true
+            RunTasks bot
             next
 
         var raw string = resp.text
