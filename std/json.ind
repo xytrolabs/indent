@@ -1,0 +1,14 @@
+#! json.ind
+#! JSON utilities for Indent
+
+fun Loads text
+    give json_loads text
+
+fun Dumps value
+    give json_dumps value
+
+fun Stringify value
+    give json_dumps value
+
+fun Parse text
+    give json_loads text

@@ -1,0 +1,105 @@
+#! collections.ind
+#! List and dictionary utilities for Indent
+
+#! --- List helpers ---
+
+fun Append items item
+    give append items item
+
+fun Extend items more
+    give extend items more
+
+fun Insert items index value
+    give insert items index value
+
+fun Pop items
+    give pop items
+
+fun Remove items value
+    give remove items value
+
+fun Contains items value
+    give contains items value
+
+fun Sort items
+    give sort items
+
+fun SortDesc items
+    give reverse sort items
+
+fun Reverse items
+    give reverse items
+
+fun Slice items start end
+    give slice items start end
+
+fun Sum items
+    give sum items
+
+fun Min items
+    give min items
+
+fun Max items
+    give max items
+
+fun Any items
+    give any items
+
+fun All items
+    give all items
+
+fun Count items value
+    give count items value
+
+fun Enumerate items
+    give enumerate items
+
+fun Zip a b
+    give zip a b
+
+fun Range end
+    give range end
+
+fun Length items
+    give len items
+
+fun First items
+    give items[0]
+
+fun Last items
+    give items[len items - 1]
+
+fun Filter predicate items
+    give filter predicate items
+
+fun Map function items
+    give map function items
+
+#! --- Dictionary helpers ---
+
+fun DictGet d key
+    give dict_get d key
+
+fun DictSet d key value
+    give dict_set d key value
+
+fun DictRemove d key
+    give dict_remove d key
+
+fun DictUpdate d updates
+    give dict_update d updates
+
+fun Keys d
+    give keys d
+
+fun Values d
+    give values d
+
+fun Items d
+    give items d
+
+fun HasKey d key
+    give has_key d key
+
+fun ContainsKey d key
+    give contains_key d key

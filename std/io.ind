@@ -1,8 +1,32 @@
-#! io.ath
-#! Input/Output helpers for Aether-2
+#! io.ind
+#! Input/Output helpers for Indent
 
 fun Print value
     say value
 
-fun PrintLine value
+fun PrintLn value
     say value
+
+fun Input prompt
+    give ask prompt
+
+fun InputInt prompt
+    give ask "int" prompt
+
+fun InputFloat prompt
+    give ask "float" prompt
+
+fun ReadLine
+    give ask
+
+fun ReadFile path
+    give file_read_text path
+
+fun WriteFile path content
+    file_write_text path content
+
+fun AppendFile path content
+    file_append_text path content
+
+fun Error message
+    err message

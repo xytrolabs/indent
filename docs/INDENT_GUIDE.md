@@ -211,6 +211,38 @@ get Pow from math           # Single function
 get RandInt from random as R # Aliased import
 ```
 
+Imports resolve in order: the script's directory (and parents) → `INDENT_PATH` → `~/.local/share/indent/site-packages/`. The std library installs there automatically, so every module below is available in any script.
+
+### Standard Library (std/)
+
+The std library is a set of PascalCase helper functions that wrap the (lowercase) builtins. PascalCase avoids clashing with builtins, and user-defined/imported functions take precedence over builtins at call time.
+
+| Module | What it provides |
+|---|---|
+| `strings` | case transforms, trim/pad, split/join, search, slice, repeat |
+| `math` | arithmetic, abs/sqrt/pow/floor/ceil/round, trig, log/exp, min/max/clamp |
+| `collections` | list ops (sort, sum, map, filter, zip, range) + dict ops (keys, values, items, get/set/remove) |
+| `fs` | read/write/append file, exists, delete, copy, rename, list dir, sha256 |
+| `json` | load/dump/stringify/parse JSON |
+| `os` | env vars, cwd, file/dir checks, mkdir/remove/rename, list dir, run command |
+| `io` | print, input (string/int/float), read/write/append file, error |
+| `time` | now, utc, sleep, format, parse, perf counter |
+| `datetime` | date/time now/utc, format/parse, sleep, timestamp |
+| `random` | random int/float, choice, shuffle, seed, uuid |
+| `regex` | match, search, findall, replace, split |
+| `path` | basename, dirname, join, exists/file/dir checks |
+| `hash` | sha256 of text or file |
+| `base64` | encode/decode |
+| `sys` | args, exit, platform, arch, version, executable |
+| `testing` | assert, assert-eq, assert-true/false |
+
+```indent
+get Upper from strings
+get Write from fs
+get Sha256 from hash
+say Upper "hello"           # → HELLO
+```
+
 ---
 
 ## 8. Error Handling

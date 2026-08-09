@@ -1,5 +1,71 @@
-#! strings.ath
-#! String utilities for Aether-2
+#! strings.ind
+#! String utilities for Indent
+
+fun Upper text
+    give upper text
+
+fun Lower text
+    give lower text
+
+fun Trim text
+    give trim text
+
+fun LStrip text
+    give lstrip text
+
+fun RStrip text
+    give rstrip text
+
+fun Capitalize text
+    give capitalize text
+
+fun Title text
+    give title text
+
+fun SwapCase text
+    give swapcase text
+
+fun Replace text from to
+    give replace text from to
+
+fun Split text sep
+    give split text sep
+
+fun Join items sep
+    give join items sep
+
+fun StartsWith text prefix
+    give starts_with text prefix
+
+fun EndsWith text suffix
+    give ends_with text suffix
+
+fun Contains text sub
+    give contains text sub
+
+fun Find text sub
+    give find text sub
+
+fun Length text
+    give len text
+
+fun Reverse text
+    give reverse text
+
+fun Slice text start end
+    give slice text start end
+
+fun PadLeft text width char
+    give pad_left text width char
+
+fun PadRight text width char
+    give pad_right text width char
+
+fun Repeat text count
+    give repeat_str text count
+
+fun Count text sub
+    give count text sub
 
 fun Concat a b
     give a + b
@@ -7,9 +73,11 @@ fun Concat a b
 fun FirstChar text
     give text[0]
 
-fun LengthHint text
-    #! Temporary helper until builtin length exists.
-    if text == empty
-        give 0
+fun IsEmpty text
+    if len text == 0
+        give true
     otherwise
-        give 1
+        give false
+
+fun Lines text
+    give split text "\n"

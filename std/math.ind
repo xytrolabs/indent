@@ -1,5 +1,5 @@
-#! math.ath
-#! Math utilities for Aether-2
+#! math.ind
+#! Math utilities for Indent
 
 fun Add a b
     give a + b
@@ -13,10 +13,79 @@ fun Mul a b
 fun Div a b
     give a / b
 
-fun Clamp value minValue maxValue
-    if value < minValue
-        give minValue
-    or value > maxValue
-        give maxValue
+fun Mod a b
+    give a % b
+
+fun Abs n
+    give math_abs n
+
+fun Sqrt n
+    give math_sqrt n
+
+fun Pow a b
+    give math_pow a b
+
+fun Floor n
+    give math_floor n
+
+fun Ceil n
+    give math_ceil n
+
+fun Round n
+    give math_round n
+
+fun Sin n
+    give math_sin n
+
+fun Cos n
+    give math_cos n
+
+fun Tan n
+    give math_tan n
+
+fun Asin n
+    give math_asin n
+
+fun Acos n
+    give math_acos n
+
+fun Atan n
+    give math_atan n
+
+fun Atan2 y x
+    give math_atan2 y x
+
+fun Log n
+    give math_log n
+
+fun Log10 n
+    give math_log10 n
+
+fun Exp n
+    give math_exp n
+
+fun Min a b
+    if a < b
+        give a
+    otherwise
+        give b
+
+fun Max a b
+    if a > b
+        give a
+    otherwise
+        give b
+
+fun Clamp value low high
+    if value < low
+        give low
+    or value > high
+        give high
     otherwise
         give value
+
+fun IsEven n
+    give is_even n
+
+fun IsOdd n
+    give is_odd n

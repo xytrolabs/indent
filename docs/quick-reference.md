@@ -345,6 +345,42 @@ indent --debug file.ind      # Debug mode
 indent --update              # Update to latest version
 ```
 
+
+## Standard Library (std/)
+
+The std library ships with Indent and is installed to `~/.local/share/indent/site-packages/`. Import functions by name:
+
+```indent
+get Pow from math
+get Upper from strings
+get Sha256 from hash
+get Write from fs
+```
+
+Available modules:
+
+| Module | Functions |
+|---|---|
+| `strings` | `Upper`, `Lower`, `Trim`, `LStrip`, `RStrip`, `Capitalize`, `Title`, `SwapCase`, `Replace`, `Split`, `Join`, `StartsWith`, `EndsWith`, `Contains`, `Find`, `Length`, `Reverse`, `Slice`, `PadLeft`, `PadRight`, `Repeat`, `Count`, `Concat`, `FirstChar`, `IsEmpty`, `Lines` |
+| `math` | `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Abs`, `Sqrt`, `Pow`, `Floor`, `Ceil`, `Round`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2`, `Log`, `Log10`, `Exp`, `Min`, `Max`, `Clamp`, `IsEven`, `IsOdd` |
+| `collections` | `Append`, `Extend`, `Insert`, `Pop`, `Remove`, `Contains`, `Sort`, `SortDesc`, `Reverse`, `Slice`, `Sum`, `Min`, `Max`, `Any`, `All`, `Count`, `Enumerate`, `Zip`, `Range`, `Length`, `First`, `Last`, `Filter`, `Map`, `DictGet`, `DictSet`, `DictRemove`, `DictUpdate`, `Keys`, `Values`, `Items`, `HasKey`, `ContainsKey` |
+| `fs` | `Read`, `Write`, `Append`, `Exists`, `IsFile`, `IsDir`, `Delete`, `Copy`, `Rename`, `ListDir`, `Mkdir`, `Sha256` |
+| `json` | `Loads`, `Dumps`, `Stringify`, `Parse` |
+| `os` | `GetEnv`, `SetEnv`, `Environ`, `GetCwd`, `Chdir`, `Exists`, `IsFile`, `IsDir`, `Mkdir`, `Remove`, `Rename`, `ListDir`, `Run`, `WriteText`, `ReadText` |
+| `io` | `Print`, `PrintLn`, `Input`, `InputInt`, `InputFloat`, `ReadLine`, `ReadFile`, `WriteFile`, `AppendFile`, `Error` |
+| `time` | `Time`, `Now`, `Utc`, `Sleep`, `Format`, `Parse`, `PerfCounter` |
+| `datetime` | `Now`, `Utc`, `Format`, `Parse`, `Sleep`, `PerfCounter`, `Timestamp` |
+| `random` | `RandInt`, `RandFloat`, `Choice`, `Shuffle`, `Seed`, `Uuid` |
+| `regex` | `Match`, `Search`, `FindAll`, `Replace`, `Split` |
+| `path` | `Basename`, `Dirname`, `Join`, `Exists`, `IsFile`, `IsDir` |
+| `hash` | `Sha256`, `Sha256File` |
+| `base64` | `Encode`, `Decode` |
+| `net` | `HttpGet`, `PostJson`, `PutJson`, `PatchJson`, `Delete`, `ServeDir` |
+| `sys` | `Args`, `Exit`, `Platform`, `Arch`, `Version`, `Executable` |
+| `testing` | `Assert`, `AssertEq`, `AssertTrue`, `AssertFalse` |
+
+> Note: std functions use PascalCase so they never collide with the (lowercase) builtins. User-defined functions take precedence over builtins.
+
 ## Golden Rules
 1. `func(args)` works **everywhere** — in `say`, `if`, `is` assignments, nested calls
 2. `#!` for comments, `#` is for hex colors only

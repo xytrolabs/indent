@@ -1,0 +1,23 @@
+#! datetime.ind
+#! Date/time utilities for Indent
+
+fun Now
+    give time_now
+
+fun Utc
+    give time_utc
+
+fun Format timestamp fmt
+    give time_format timestamp fmt
+
+fun Parse text fmt
+    give time_parse text fmt
+
+fun Sleep seconds
+    time_sleep seconds
+
+fun PerfCounter
+    give time_perf_counter
+
+fun Timestamp
+    give time_now

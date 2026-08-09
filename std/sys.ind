@@ -1,0 +1,20 @@
+#! sys.ind
+#! System utilities for Indent
+
+fun Args
+    give sys_argv
+
+fun Exit code
+    process_exit code
+
+fun Platform
+    give sys_platform
+
+fun Arch
+    give sys_arch
+
+fun Version
+    give sys_version
+
+fun Executable
+    give sys_executable

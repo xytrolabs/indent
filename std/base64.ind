@@ -1,0 +1,8 @@
+#! base64.ind
+#! Base64 encode/decode utilities for Indent
+
+fun Encode text
+    give base64_encode text
+
+fun Decode text
+    give base64_decode text

@@ -1,0 +1,20 @@
+#! path.ind
+#! Path utilities for Indent
+
+fun Basename path
+    give path_basename path
+
+fun Dirname path
+    give path_dirname path
+
+fun Join a b
+    give path_join a b
+
+fun Exists path
+    give os_exists path
+
+fun IsFile path
+    give os_is_file path
+
+fun IsDir path
+    give os_is_dir path

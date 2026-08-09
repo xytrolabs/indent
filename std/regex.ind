@@ -1,0 +1,17 @@
+#! regex.ind
+#! Regular expression utilities for Indent
+
+fun Match pattern text
+    give regex_match pattern text
+
+fun Search pattern text
+    give regex_search pattern text
+
+fun FindAll pattern text
+    give regex_findall pattern text
+
+fun Replace pattern text replacement
+    give regex_replace pattern text replacement
+
+fun Split pattern text
+    give regex_split pattern text

@@ -1,0 +1,20 @@
+#! net.ind
+#! Network utilities for Indent
+
+fun HttpGet url
+    give http_get url
+
+fun PostJson url body
+    give http_post_json url body
+
+fun PutJson url body
+    give http_put_json url body
+
+fun PatchJson url body
+    give http_patch_json url body
+
+fun Delete url
+    give http_delete url
+
+fun ServeDir path port
+    http_serve_dir path port

@@ -1,0 +1,39 @@
+#! fs.ind
+#! File system operations for Indent
+
+fun Read path
+    give file_read_text path
+
+fun Write path content
+    file_write_text path content
+
+fun Append path content
+    file_append_text path content
+
+fun Exists path
+    give os_exists path
+
+fun IsFile path
+    give os_is_file path
+
+fun IsDir path
+    give os_is_dir path
+
+fun Delete path
+    os_remove path
+
+fun Copy src dst
+    var content = Read src
+    Write dst content
+
+fun Rename old new
+    os_rename old new
+
+fun ListDir path
+    give os_list_dir path
+
+fun Mkdir path
+    os_mkdir path
+
+fun Sha256 path
+    give file_sha256 path

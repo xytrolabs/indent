@@ -237,9 +237,9 @@ INDENT_HOME="${HOME}/.local/share/indent"
 # Include site-packages, packages, and std in INDENT_PATH (like Python's sys.path)
 SITE_PKGS="${INDENT_HOME}/site-packages"
 if [[ -z "${INDENT_PATH:-}" ]]; then
-  export INDENT_PATH="${SITE_PKGS}:${INDENT_HOME}/packages:${INDENT_HOME}"
+  export INDENT_PATH="${SITE_PKGS}:${INDENT_HOME}/packages:${INDENT_HOME}/std:${INDENT_HOME}"
 else
-  export INDENT_PATH="${SITE_PKGS}:${INDENT_HOME}/packages:${INDENT_HOME}:${INDENT_PATH}"
+  export INDENT_PATH="${SITE_PKGS}:${INDENT_HOME}/packages:${INDENT_HOME}/std:${INDENT_HOME}:${INDENT_PATH}"
 fi
 exec "${INDENT_HOME}/bin/indent" "$@"
 LAUNCHEREOF

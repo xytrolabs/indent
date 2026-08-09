@@ -119,6 +119,18 @@ indent --debug file.ind    # Debug with breakpoints
 indent --update            # Update to latest
 ```
 
+### Standard Library (std/)
+Indent ships with 17 std modules — no install needed. Import by name:
+
+```indent
+get Pow from math          # math helpers
+get Upper from strings     # string utilities
+get Sha256 from hash       # hashing
+get Write from fs          # file system
+```
+
+Modules: `strings`, `math`, `collections`, `fs`, `json`, `os`, `io`, `time`, `datetime`, `random`, `regex`, `path`, `hash`, `base64`, `sys`, `testing`, `net`. Std functions are PascalCase so they never clash with the (lowercase) builtins.
+
 ### Package Manager (AIR)
 ```bash
 air install colors         # Install from registry

@@ -1,5 +1,5 @@
 #! =============================================================================
-#! discord.ind 5.0 — The Indent Discord bot library
+#! discord.ind 5.1 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
@@ -7,10 +7,10 @@
 #! system, clean block-style helpers, and a built-in audit/monitoring suite.
 #! Import it and write your bot.
 #!
-#! 🆕 v5.0 adds: voice gateway (connect/speak/disconnect), file attachments,
-#! full permissions bitmask (36 flags + PermHas + PermsOf), paginators,
-#! enhanced cache (guild/channel/role), auto-complete for slash commands,
-#! ResolveUser converter, enhanced cooldowns, and more.
+#! 🆕 v5.1 adds: EZBot zero-boilerplate system (EZBot, EZCmd, EZSlash, EZHandler,
+#! EZStart, EZRun) — simpler than discord.py. Auto ping/help/error handling.
+#! Also: voice gateway, file attachments, 36-flag permissions, paginators,
+#! enhanced cache, auto-complete, ResolveUser, cooldowns, and more.
 #!
 #! NOTE: the native Indent runtime passes function arguments by value, so every
 #! function that modifies the bot RETURNS the modified bot. Always reassign:
@@ -56,7 +56,7 @@ var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 #! discord package version
-var DiscordVersion string = "5.0.0"
+var DiscordVersion string = "5.1.0"
 
 #! Current source/context for the clean block API (module-level, shared).
 #! The native runtime passes args by value, so we stash the "current source"
@@ -965,6 +965,98 @@ fun On
     _handlers2[event] is handler
     bot.handlers is _handlers2
     give bot
+
+#! ==============================
+#! EZBOT (5.1) - The One-Call Discord Bot
+#! ==============================
+#! Simpler than discord.py. Create a bot in one call.
+#!   get EZBot, EZCmd, EZRun from discord
+#!   var bot dynamic = EZBot "TOKEN" "!"
+#!   EZCmd bot "hello" "Hi there!"
+#!   EZRun bot
+
+fun EZBot
+    token
+    prefix
+    var bot dynamic = QuickBot token prefix
+    bot is BotHandler bot "ping" "Check bot latency" "_ez_ping"
+    bot is BotHandler bot "help" "List all commands" "_ez_help"
+    bot is SetErrorHandler bot "_ez_error"
+    give bot
+
+fun _ez_ping
+    ctx
+    args
+    var start float = time_perf_counter
+    var pingUrl string = API + "/users/@me"
+    var pingAuth string = "Bot " + ctx.token
+    http_get pingUrl pingAuth
+    var end float = time_perf_counter
+    var ms float = (end - start) * 1000.0
+    var msg string = "Pong! `" + string(ms) + "ms`"
+    CtxSend ctx msg
+
+fun _ez_help
+    ctx
+    args
+    var msg string = "**Commands:**"
+    CtxSend ctx msg
+
+fun _ez_error
+    bot
+    source
+    cmd
+    var errMsg string = ""
+    var hasErr int = 0
+    if has_key source "error"
+        hasErr is 1
+    if hasErr == 1
+        errMsg is source.error
+    var clean string = "**" + cmd + "** failed."
+    if errMsg != empty
+        clean is clean + " " + errMsg
+    CtxSend source clean
+
+fun EZCmd
+    bot
+    name
+    reply
+    var cmds dynamic = bot.commands
+    cmds[name] is {"description": reply, "reply": reply}
+    bot.commands is cmds
+    give bot
+
+fun EZSlash
+    bot
+    name
+    desc
+    bot is BotHandler bot name desc name
+    bot is AddSlash bot name desc name empty
+    give bot
+
+fun EZHandler
+    bot
+    name
+    desc
+    handlerName
+    bot is BotHandler bot name desc handlerName
+    bot is AddSlash bot name desc handlerName empty
+    give bot
+
+fun EZStart
+    token
+    prefix
+    puzzlesDir
+    var bot dynamic = EZBot token prefix
+    bot is LoadPuzzles bot puzzlesDir
+    EZRun bot
+
+fun EZRun
+    bot
+    say "Connecting to Discord..."
+    SyncSlash bot
+    Run bot
+
 
 #! ==============================
 #! �  COMMAND CHECKS / PERMISSIONS (4.0)

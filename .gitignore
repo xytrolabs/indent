@@ -24,5 +24,9 @@ Thumbs.db
 # Build artifacts
 indent-native/indent
 
+# Legacy Aether artifacts; Zor gets its own registry later, so .zor is ignored too
+*.ath
+*.zor
+
 # ML training data (huge)
 scripts/train-starcoder/

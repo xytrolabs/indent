@@ -1,5 +1,5 @@
-#! testing.ath
-#! Testing helpers for Aether-2
+#! testing.ind
+#! Testing helpers for Indent
 
 fun Assert condition message
     assert condition message
@@ -7,4 +7,12 @@ fun Assert condition message
 
 fun AssertEq left right message
     assert_eq left right message
+    give empty
+
+fun AssertTrue condition
+    assert condition "expected true"
+    give empty
+
+fun AssertFalse condition
+    assert not condition "expected false"
     give empty

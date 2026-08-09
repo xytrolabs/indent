@@ -123,9 +123,9 @@ cat > "$LAUNCHER" <<'LAUNCHEREOF'
 set -euo pipefail
 INDENT_HOME="${HOME}/.local/share/indent"
 if [[ -z "${INDENT_PATH:-}" ]]; then
-  export INDENT_PATH="${INDENT_HOME}/packages:${INDENT_HOME}"
+  export INDENT_PATH="${INDENT_HOME}/packages:${INDENT_HOME}/std:${INDENT_HOME}"
 else
-  export INDENT_PATH="${INDENT_HOME}/packages:${INDENT_HOME}:${INDENT_PATH}"
+  export INDENT_PATH="${INDENT_HOME}/packages:${INDENT_HOME}/std:${INDENT_HOME}:${INDENT_PATH}"
 fi
 exec "${INDENT_HOME}/bin/indent" "$@"
 LAUNCHEREOF

@@ -1645,6 +1645,18 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         };
     }
 
+    // User-defined and imported functions take precedence over builtins
+    // (Python-style shadowing), so std library functions like `Upper` or
+    // `Append` are not hidden by case-insensitive builtin lookup.
+    if let Ok(callable) = resolve_callable(callee, ctx) {
+        return match callable {
+            Callable::Local(f) => invoke_function(&f, &positional, &named, ctx),
+            Callable::External { module, name } => {
+                invoke_external_function(module, &name, &positional, &named, ctx)
+            }
+        };
+    }
+
     if named.is_empty() {
         if let Some(result) = invoke_builtin(callee, &positional) {
             return result;
@@ -1655,13 +1667,8 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return result;
     }
 
-    let callable = resolve_callable(callee, ctx)?;
-    match callable {
-        Callable::Local(f) => invoke_function(&f, &positional, &named, ctx),
-        Callable::External { module, name } => {
-            invoke_external_function(module, &name, &positional, &named, ctx)
-        }
-    }
+    resolve_callable(callee, ctx)?;
+    unreachable!()
 }
 
 fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static str> {

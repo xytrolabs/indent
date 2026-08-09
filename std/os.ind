@@ -1,0 +1,47 @@
+#! os.ind
+#! OS utilities for Indent
+
+fun GetEnv name
+    give os_getenv name
+
+fun SetEnv name value
+    os_setenv name value
+
+fun Environ
+    give os_environ
+
+fun GetCwd
+    give os_getcwd
+
+fun Chdir path
+    os_chdir path
+
+fun Exists path
+    give os_exists path
+
+fun IsFile path
+    give os_is_file path
+
+fun IsDir path
+    give os_is_dir path
+
+fun Mkdir path
+    os_mkdir path
+
+fun Remove path
+    os_remove path
+
+fun Rename old new
+    os_rename old new
+
+fun ListDir path
+    give os_list_dir path
+
+fun Run command
+    give os_system command
+
+fun WriteText path content
+    file_write_text path content
+
+fun ReadText path
+    give file_read_text path
