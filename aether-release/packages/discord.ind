@@ -1,5 +1,5 @@
 #! =============================================================================
-#! discord.ind 5.1 — The Indent Discord bot library
+#! discord.ind 6.0 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
@@ -7,8 +7,8 @@
 #! system, clean block-style helpers, and a built-in audit/monitoring suite.
 #! Import it and write your bot.
 #!
-#! 🆕 v5.1 adds: EZBot zero-boilerplate system (EZBot, EZCmd, EZSlash, EZHandler,
-#! EZStart, EZRun) — simpler than discord.py. Auto ping/help/error handling.
+#! 🆕 v6.0 adds: Real Bot API (Bot, Command, Ready, Message, Interaction,
+#! MemberJoin, MemberLeave, Start, Audit) — production-grade, minimal boilerplate.
 #! Also: voice gateway, file attachments, 36-flag permissions, paginators,
 #! enhanced cache, auto-complete, ResolveUser, cooldowns, and more.
 #!
@@ -56,7 +56,7 @@ var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 #! discord package version
-var DiscordVersion string = "5.1.0"
+var DiscordVersion string = "6.0.0"
 
 #! Current source/context for the clean block API (module-level, shared).
 #! The native runtime passes args by value, so we stash the "current source"
@@ -967,74 +967,87 @@ fun On
     give bot
 
 #! ==============================
-#! EZBOT (5.1) - The One-Call Discord Bot
 #! ==============================
-#! Simpler than discord.py. Create a bot in one call.
-#!   get EZBot, EZCmd, EZRun from discord
-#!   var bot dynamic = EZBot "TOKEN" "!"
-#!   EZCmd bot "hello" "Hi there!"
-#!   EZRun bot
+#! 🤖  BOT API (6.0) — Production-grade bot system
+#! ==============================
+#! Create a real Discord bot with minimal boilerplate. Production-ready:
+#! built-in ping, help, error handling, audit logging, health checks.
+#!
+#!   get Bot, Command, Ready, Start from discord
+#!
+#!   var bot dynamic = Bot "TOKEN" "!"
+#!
+#!   Command bot "ping" "Check latency" "onPing"
+#!   Ready bot "onReady"
+#!
+#!   fun onPing ctx
+#!       CtxSend ctx "Pong!"
+#!
+#!   fun onReady bot
+#!       say "Bot is online!"
+#!
+#!   Start bot
 
-fun EZBot
+fun Bot
     token
     prefix
     var bot dynamic = QuickBot token prefix
-    bot is BotHandler bot "ping" "Check bot latency" "_ez_ping"
-    bot is BotHandler bot "help" "List all commands" "_ez_help"
-    bot is SetErrorHandler bot "_ez_error"
+    #! Built-in commands
+    bot is BotHandler bot "ping" "Check bot latency" "_bot_ping"
+    bot is BotHandler bot "help" "List all commands" "_bot_help"
+    #! Built-in error handler
+    bot is SetErrorHandler bot "_bot_error"
+    #! Health tracking
+    bot._started is time_now
+    bot._reconnects is 0
+    bot._lastHb is time_now
     give bot
 
-fun _ez_ping
+fun _bot_ping
     ctx
     args
-    var start float = time_perf_counter
-    var pingUrl string = API + "/users/@me"
-    var pingAuth string = "Bot " + ctx.token
-    http_get pingUrl pingAuth
-    var end float = time_perf_counter
-    var ms float = (end - start) * 1000.0
-    var msg string = "Pong! `" + string(ms) + "ms`"
-    CtxSend ctx msg
+    var s float = time_perf_counter
+    http_get (API + "/users/@me") ("Bot " + ctx.token)
+    var ms float = (time_perf_counter - s) * 1000.0
+    CtxSend ctx ("Pong! Gateway: `" + string(ms) + "ms`")
 
-fun _ez_help
+fun _bot_help
     ctx
     args
-    var msg string = "**Commands:**"
+    var cmds dynamic = {}
+    if has_key ctx "_bot"
+        cmds is ctx._bot.commands
+    var msg string = "**Commands:**\n"
+    var keysList dynamic = keys cmds
+    repeat k in keysList
+        var entry dynamic = cmds[k]
+        var desc string = ""
+        if has_key entry "description"
+            desc is entry.description
+        var line string = "`" + k + "` - " + desc + "\n"
+        msg is msg + line
     CtxSend ctx msg
 
-fun _ez_error
+fun _bot_error
     bot
     source
     cmd
-    var errMsg string = ""
-    var hasErr int = 0
+    var err string = ""
+    var hasE int = 0
     if has_key source "error"
-        hasErr is 1
-    if hasErr == 1
-        errMsg is source.error
-    var clean string = "**" + cmd + "** failed."
-    if errMsg != empty
-        clean is clean + " " + errMsg
-    CtxSend source clean
+        hasE is 1
+    if hasE == 1
+        err is source.error
+    var msg string = "Command `" + cmd + "` failed"
+    if err != empty
+        msg is msg + ": " + err
+    CtxSend source msg
 
-fun EZCmd
-    bot
-    name
-    reply
-    var cmds dynamic = bot.commands
-    cmds[name] is {"description": reply, "reply": reply}
-    bot.commands is cmds
-    give bot
-
-fun EZSlash
-    bot
-    name
-    desc
-    bot is BotHandler bot name desc name
-    bot is AddSlash bot name desc name empty
-    give bot
-
-fun EZHandler
+#! Register a prefix+slash command with a ctx-based handler.
+#!   Command bot "greet" "Greet someone" "onGreet"
+#!   fun onGreet ctx
+#!       CtxSend ctx "Hello " + CtxUserName ctx
+fun Command
     bot
     name
     desc
@@ -1043,19 +1056,65 @@ fun EZHandler
     bot is AddSlash bot name desc handlerName empty
     give bot
 
-fun EZStart
-    token
-    prefix
-    puzzlesDir
-    var bot dynamic = EZBot token prefix
-    bot is LoadPuzzles bot puzzlesDir
-    EZRun bot
-
-fun EZRun
+#! Register a READY event handler. Handler receives (bot).
+#!   Ready bot "onReady"
+#!   fun onReady bot
+#!       say "Bot online as " + bot.user.username
+fun Ready
     bot
-    say "Connecting to Discord..."
+    handlerName
+    bot is On bot "ready" handlerName
+    give bot
+
+#! Register a MESSAGE event handler. Handler receives (bot, msg).
+#!   Message bot "onMsg"
+#!   fun onMsg bot msg
+#!       CtxSend msg "Hello!"
+fun Message
+    bot
+    handlerName
+    bot is On bot "message" handlerName
+    give bot
+
+#! Register an INTERACTION event handler.
+#!   Interaction bot "onBtn"
+#!   fun onBtn bot interaction
+#!       CtxSend interaction "Clicked!"
+fun Interaction
+    bot
+    handlerName
+    bot is On bot "interaction" handlerName
+    give bot
+
+#! Register a member-join handler.
+fun MemberJoin
+    bot
+    handlerName
+    bot is On bot "member_join" handlerName
+    give bot
+
+#! Register a member-leave handler.
+fun MemberLeave
+    bot
+    handlerName
+    bot is On bot "member_leave" handlerName
+    give bot
+
+#! Start the bot: sync slash commands, connect gateway, run forever.
+#! Handles auto-reconnect, health logging.
+fun Start
+    bot
+    say "Starting bot..."
     SyncSlash bot
+    say "Slash commands synced. Connecting to Discord..."
     Run bot
+
+#! Register an audit-log channel. Posts monitoring events as embeds.
+#!   Audit bot "123456789012345678"
+fun Audit
+    bot
+    channelId
+    give SetupAudit bot channelId
 
 
 #! ==============================
@@ -2312,7 +2371,7 @@ fun BotFromEnv
         say "❌ Set DISCORD_TOKEN or BOT_TOKEN in .glo or .env"
         process_exit 1
     var prefix string = os_getenv "DISCORD_PREFIX" "!"
-    give QuickBot token prefix
+    give Bot token prefix
 
 #! Run a bot with puzzle auto-loading
 fun RunWithPuzzles
