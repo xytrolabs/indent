@@ -147,6 +147,21 @@ else
     chmod +x "${BIN_DIR}/indent"
     green "✓ Built and installed indent from source"
 
+    # Build the native GUI helper (indent-gui) if a C toolchain + GTK/WebKit are available
+    if command -v gcc >/dev/null 2>&1 && pkg-config --exists gtk+-3.0 webkit2gtk-4.1 2>/dev/null; then
+      if [[ -f "$BUILD_DIR/indent-native/indent-gui.c" ]]; then
+        echo "→ Building indent-gui (native HTML window helper)..."
+        if gcc -o "${BIN_DIR}/indent-gui" "$BUILD_DIR/indent-native/indent-gui.c"              $(pkg-config --cflags --libs gtk+-3.0 webkit2gtk-4.1) 2>/dev/null; then
+          chmod +x "${BIN_DIR}/indent-gui"
+          green "✓ Built and installed indent-gui"
+        else
+          yellow "⚠ indent-gui build skipped (compile error); gui_show_html unavailable"
+        fi
+      fi
+    else
+      yellow "⚠ indent-gui skipped (need gcc + gtk3 + webkit2gtk dev headers for GUI)"
+    fi
+
     # Copy companion tools from the cloned repo
     for tool in air aetherpkg; do
       if [[ -f "$BUILD_DIR/${tool}" ]]; then

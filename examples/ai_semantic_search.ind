@@ -1,0 +1,52 @@
+#! Semantic search engine built entirely in Indent using Ollama embeddings
+
+fun Embed text
+    var payload = {"model": "nomic-embed-text", "prompt": text}
+    var resp = http_post_json("http://localhost:11434/api/embeddings", payload)
+    var data = json_loads(resp["body"])
+    give data["embedding"]
+
+fun DotProduct a b
+    var total = 0
+    var i = 0
+    repeat while i < len(a)
+        total is total + a[i] * b[i]
+        i is i + 1
+    give total
+
+fun Magnitude v
+    var total = 0
+    repeat item in v
+        total is total + item * item
+    give math_sqrt(total)
+
+fun CosineSimilarity a b
+    var denom = Magnitude(a) * Magnitude(b)
+    if denom == 0
+        give 0
+    give DotProduct(a, b) / denom
+
+var docs = []
+docs is docs + ["Python is a high-level programming language"]
+docs is docs + ["Rust is a systems language focused on safety"]
+docs is docs + ["Indent is an indentation-based language"]
+docs is docs + ["Cats are small furry pets"]
+docs is docs + ["Dogs are loyal animal companions"]
+docs is docs + ["The weather is sunny today"]
+
+say "=== Semantic search over " + string(len(docs)) + " docs ==="
+var query = "programming languages"
+say "query: '" + query + "'"
+say ""
+
+var queryEmb = Embed(query)
+var scored dynamic = []
+repeat d in docs
+    var dEmb = Embed(d)
+    var sim = CosineSimilarity(queryEmb, dEmb)
+    scored is scored + [[sim, d]]
+
+var ranked = reverse(sort(scored))
+say "Ranked results (best first):"
+repeat pair in ranked
+    say "  " + string(pair[0]) + "  " + string(pair[1])

@@ -1,0 +1,89 @@
+#! AI-Powered Game with GUI — rigorous end-to-end test
+#! Combines: Ollama AI generation + agame game logic + gui_show_html rendering
+
+get RandInt from random as RRand
+get NewEntity from agame as GNew
+get Collides from agame as GCollides
+get Distance from agame as GDist
+
+#! --- AI helper: chat with Ollama ---
+fun AiChat prompt
+    var payload = {"model": "qwen2.5:0.5b", "prompt": prompt, "stream": false, "options": {"temperature": 0.7}}
+    var resp = http_post_json("http://localhost:11434/api/generate", payload)
+    var data = json_loads(resp["body"])
+    give data["response"]
+
+#! --- Game state ---
+var TILE = 40
+var player = GNew(0, 0, TILE, TILE)
+var treasure = GNew(3 * TILE, 3 * TILE, TILE, TILE)
+var score = 0
+var turn = 0
+var log = ""
+
+#! --- AI writes a story line each turn ---
+say "=== AI Game: 3 turns with GUI ==="
+
+var html = "<html><head><style>body{font-family:monospace;background:#0d1117;color:#c9d1d9;padding:20px}h1{color:#58a6ff}table{border-collapse:collapse}td{width:40px;height:40px;border:1px solid #30363d;text-align:center}.P{background:#f78166}.T{background:#d29922}.e{background:#21262d}</style></head><body>"
+html is html + "<h1>AI Quest</h1>"
+
+repeat while turn < 3
+    #! Move player toward treasure (simple AI pathing)
+    var px = player["x"] / TILE
+    var py = player["y"] / TILE
+    var tx = treasure["x"] / TILE
+    var ty = treasure["y"] / TILE
+    var dx = 0
+    var dy = 0
+    if tx > px
+        dx is 1
+    or tx < px
+        dx is -1
+    if ty > py
+        dy is 1
+    or ty < py
+        dy is -1
+    player is GNew((px + dx) * TILE, (py + dy) * TILE, TILE, TILE)
+
+    #! Check if treasure collected
+    if GCollides(player, treasure)
+        score is score + 50
+        treasure is GNew(RRand(0, 7) * TILE, RRand(0, 7) * TILE, TILE, TILE)
+
+    #! AI narrates
+    var line = AiChat("In one short sentence, describe an adventurer finding treasure in a dungeon. Do not use quotes.")
+    log is log + "Turn " + string(turn) + ": " + line + "\n"
+    turn is turn + 1
+
+#! --- Render game grid as HTML ---
+html is html + "<p><strong>Final Score: " + string(score) + "</strong></p>"
+html is html + "<table>"
+var gy = 0
+repeat while gy < 8
+    html is html + "<tr>"
+    var gx = 0
+    repeat while gx < 8
+        var cell = "e"
+        if gx == player["x"] / TILE and gy == player["y"] / TILE
+            cell is "P"
+        if gx == treasure["x"] / TILE and gy == treasure["y"] / TILE
+            cell is "T"
+        html is html + "<td class='" + cell + "'>" + cell + "</td>"
+        gx is gx + 1
+    html is html + "</tr>"
+    gy is gy + 1
+html is html + "</table>"
+html is html + "<pre style='white-space:pre-wrap'>" + log + "</pre>"
+html is html + "</body></html>"
+
+say "AI story:"
+say log
+say "Final score: " + string(score)
+
+#! --- Show in native window (GUI) ---
+say "Opening GUI window..."
+do:
+    gui_show_html(html, "AI Quest — Indent", 700, 700)
+    say "GUI closed OK"
+catch as e:
+    say "GUI error: " + string(e)

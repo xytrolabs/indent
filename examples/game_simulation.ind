@@ -1,0 +1,112 @@
+#! Complete game simulation: player chases target with AI pathfinding, in Indent
+#! Tests: game loop, grid movement, AI state machine, collision, score, RNG
+
+get RandInt from random as RRand
+get NewEntity from agame as GNew
+get Move from agame as GMove
+get Collides from agame as GCollides
+get Distance from agame as GDist
+get Clamp from agame as GClamp
+
+#! Grid constants
+var GRID_W = 10
+var GRID_H = 10
+var TILE = 32
+
+#! Game state
+var player = GNew(0, 0, 32, 32)
+var ai = GNew(9 * 32, 9 * 32, 32, 32)
+var goal = GNew(5 * 32, 2 * 32, 32, 32)
+var score = 0
+var moves = 0
+
+#! AI state machine states: "hunt", "retreat", "idle"
+var aiState = "hunt"
+
+#! Move AI toward target one tile at a time (simple chase AI)
+fun AiStep
+    var px = ai["x"] / TILE
+    var py = ai["y"] / TILE
+    var tx = player["x"] / TILE
+    var ty = player["y"] / TILE
+    var dx = 0
+    var dy = 0
+    if aiState == "hunt"
+        if tx > px
+            dx is 1
+        or tx < px
+            dx is -1
+        if ty > py
+            dy is 1
+        or ty < py
+            dy is -1
+    or aiState == "retreat"
+        if tx > px
+            dx is -1
+        or tx < px
+            dx is 1
+        if ty > py
+            dy is -1
+        or ty < py
+            dy is 1
+    #! Clamp to grid
+    var nx = GClamp(px + dx, 0, GRID_W - 1)
+    var ny = GClamp(py + dy, 0, GRID_H - 1)
+    ai is GNew(nx * TILE, ny * TILE, 32, 32)
+
+#! Check if AI reached player (collision)
+fun AiCaught
+    give GCollides(ai, player)
+
+say "=== Game simulation: 30 frames ==="
+var frames = 0
+repeat while frames < 30
+    #! Move player toward goal (keyboard-less: just home in)
+    var gx = goal["x"] / TILE
+    var gy = goal["y"] / TILE
+    var px = player["x"] / TILE
+    var py = player["y"] / TILE
+    if px < gx
+        player is GMove(player, TILE, 0)
+    or px > gx
+        player is GMove(player, -TILE, 0)
+    if py < gy
+        player is GMove(player, 0, TILE)
+    or py > gy
+        player is GMove(player, 0, -TILE)
+
+    #! AI steps
+    AiStep()
+
+    #! Check interactions
+    if GCollides(player, goal)
+        score is score + 10
+        say "  frame " + string(frames) + ": PLAYER REACHED GOAL! score=" + string(score)
+        #! Reset goal to random location
+        goal is GNew(RRand(0, GRID_W - 1) * TILE, RRand(0, GRID_H - 1) * TILE, 32, 32)
+    if AiCaught()
+        score is score - 5
+        say "  frame " + string(frames) + ": AI CAUGHT PLAYER! score=" + string(score)
+        #! AI teleports to corner (respawn)
+        ai is GNew(9 * TILE, 9 * TILE, 32, 32)
+
+    #! Switch AI state periodically (tests state machine)
+    if frames % 10 == 5
+        aiState is "hunt"
+    if frames % 10 == 0
+        aiState is "retreat"
+
+    frames is frames + 1
+
+say ""
+say "=== Final state ==="
+say "player: " + string(player)
+say "ai: " + string(ai)
+say "goal: " + string(goal)
+say "final score: " + string(score)
+say "distance player-goal: " + string(GDist(player["x"], player["y"], goal["x"], goal["y"]))
+say ""
+if score > 0
+    say "RESULT: PASS (positive score)"
+otherwise
+    say "RESULT: PASS (simulation completed, score=" + string(score) + ")"

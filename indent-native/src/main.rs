@@ -1574,6 +1574,11 @@ fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
         if let Some(found) = module_in_dir(&site_pkg, &module_rel) {
             return Some(found);
         }
+        // AIR-installed packages (air install <pkg>).
+        let air_pkg = Path::new(&home).join(".local/share/indent/air-packages");
+        if let Some(found) = module_in_dir(&air_pkg, &module_rel) {
+            return Some(found);
+        }
         // Legacy Aether global installs (aetherpkg --global) also resolve.
         let legacy_pkg = Path::new(&home).join(".local/share/aether/site-packages");
         if let Some(found) = module_in_dir(&legacy_pkg, &module_rel) {
@@ -2047,6 +2052,19 @@ fn invoke_callable_expr(
         return python_prefixed_call_builtin(target, &positional, &HashMap::new());
     }
 
+    // User-defined and imported functions take precedence over builtins
+    // (Python-style shadowing) — must match exec_call_inner so expression-level
+    // calls to module functions (e.g. `Count(items)` inside a module) are not
+    // shadowed by case-insensitive builtin lookup.
+    if let Ok(callable) = resolve_callable(callee, ctx) {
+        return match callable {
+            Callable::Local(f) => invoke_function(&f, &positional, &HashMap::new(), ctx),
+            Callable::External { module, name } => {
+                invoke_external_function(module, &name, &positional, &HashMap::new(), ctx)
+            }
+        };
+    }
+
     if let Some(result) = invoke_builtin(callee, &positional) {
         return result;
     }
@@ -2066,6 +2084,35 @@ fn invoke_callable_expr(
         Callable::External { module, name } => {
             invoke_external_function(module, &name, &positional, &HashMap::new(), ctx)
         }
+    }
+}
+
+/// Compare two Values for sorting: numbers numerically, strings
+/// lexicographically, booleans false<true, lists element-wise (like Python),
+/// and mixed types fall back to string comparison. Used by `sort` so that
+/// lists of pairs (e.g. [similarity, item]) sort by their first element
+/// instead of being flattened to strings.
+fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::List(x), Value::List(y)) => {
+            let n = x.len().min(y.len());
+            for i in 0..n {
+                let ord = compare_values(&x[i], &y[i]);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+            x.len().cmp(&y.len())
+        }
+        (Value::Empty, Value::Empty) => std::cmp::Ordering::Equal,
+        // Mixed types: fall back to string representation for a stable order.
+        _ => a.to_string().cmp(&b.to_string()),
     }
 }
 
@@ -2494,11 +2541,13 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                     .collect::<Vec<_>>();
                 Some(Ok(Value::List(out)))
             } else {
-                let mut text_items = items.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-                text_items.sort();
-                Some(Ok(Value::List(
-                    text_items.into_iter().map(Value::Str).collect::<Vec<_>>(),
-                )))
+                // Generic stable sort that preserves element values. Handles
+                // strings, booleans, and nested lists (sorted element-wise by
+                // compare_values, like Python's default list comparison) so
+                // e.g. [similarity, item] pairs sort by their score.
+                let mut sorted = items.clone();
+                sorted.sort_by(|a, b| compare_values(a, b));
+                Some(Ok(Value::List(sorted)))
             }
         }
         "reverse" => {
@@ -10171,5 +10220,34 @@ say p
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn sort_preserves_nested_pair_values() {
+        // Regression: sort() on a list of pairs used to flatten elements to
+        // strings, destroying data. It must sort by the first element and keep
+        // the original values (e.g. [similarity, item] scored results).
+        let dir = unique_dir("indent_test_sort_pairs");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let main_file = dir.join("main.ind");
+        let src = r#"
+var scored = []
+scored is scored + [[0.9, "c"]]
+scored is scored + [[0.1, "a"]]
+scored is scored + [[0.5, "b"]]
+var ranked = reverse(sort(scored))
+var top = ranked[0]
+say top[0]
+"#;
+        fs::write(&main_file, src).expect("write main file");
+
+        let mut rt = Runtime::new(dir.clone());
+        let result = rt.run_file(&main_file);
+        assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+        // top should be [0.9, "c"]
+        assert!(matches!(
+            rt.vars.get("top"),
+            Some(Value::List(v)) if v.len() == 2 && matches!(&v[0], Value::Float(x) if (*x - 0.9).abs() < 1e-9)
+        ));
     }
 }

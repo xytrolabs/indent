@@ -1,0 +1,10 @@
+say "=== AI Chat: qwen2.5:0.5b via Indent ==="
+var payload = {"model": "qwen2.5:0.5b", "prompt": "What is 2+2? Answer in one short sentence.", "stream": false, "options": {"temperature": 0.2}}
+var resp = http_post_json("http://localhost:11434/api/generate", payload)
+say "ok: " + string(resp["ok"]) + " status: " + string(resp["status"])
+var raw = resp["body"]
+var data = json_loads(raw)
+say "response: " + string(data["response"])
+say "eval_count: " + string(data["eval_count"])
+var dur = data["total_duration"]
+say "total_duration_ms: " + string(div_int dur 1000000)

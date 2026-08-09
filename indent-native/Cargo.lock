@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "indent"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "regex",
  "reqwest",

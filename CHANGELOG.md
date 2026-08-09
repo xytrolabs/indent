@@ -1,5 +1,48 @@
 # Indent Changelog
 
+## 1.4.3 — 2026-08-09
+
+### 🔬 Rigorous testing: AI, GUI, and games
+Validated Indent end-to-end against a live Ollama server, WebKitGTK GUI, and full game simulations. Found and fixed real bugs:
+
+### 🐛 Bug fixes
+- **`sort()` destroyed nested lists** — sorting a list of pairs (e.g. `[[similarity, item], ...]`) flattened every element to a *string*, corrupting data. Now `sort` uses `compare_values`: numbers numerically, strings lexicographically, booleans, and lists element-wise (Python-style). Scored-result sorting (semantic search, leaderboards) now works.
+- **`agame.WorldToTile` parse error** — used space-separated calls inside a dict literal. Fixed with temp vars. (Pushed to registry.)
+
+### ✨ New: native GUI helper (`indent-gui`)
+- Added `indent-native/indent-gui.c` — a WebKitGTK helper that renders HTML from stdin in a native window. `install.sh` builds it automatically when gcc + gtk3 + webkit2gtk dev headers are present.
+- `gui_show_html(html, [title], [w], [h])` now works end-to-end (verified on display `:1`).
+
+### ✅ Verified working (rigorous tests)
+- **AI**: chat generation (qwen2.5:0.5b), embeddings (nomic-embed-text, 768-dim), and a **semantic search engine built entirely in Indent** (embed → cosine similarity → sort) that correctly ranks programming docs above non-programming ones.
+- **Python interop**: `python_eval`, `python_eval_json` (typed results), `python_exec`, `python_run_file` all working.
+- **Games**: full 30-frame game simulation with AI state machine (hunt/retreat), collision, score tracking, and random spawning — final score 40. Plus an **AI-narrated game rendered to the GUI**.
+- 13/13 Rust tests pass, zero warnings.
+
+---
+
+## 1.4.2 — 2026-08-08
+
+### 📦 Registry expanded: 7 → 47 packages
+AIR now ships **47 packages** (up from 7). New additions include:
+
+- **Core**: `slug`, `textwrap`, `roman`, `lev`, `base`, `diff`, `chunk`, `search`
+- **Data structures**: `stack`, `queue`, `linkedlist`, `lru`, `heap`, `counter`
+- **Math/Stats**: `stats`, `matrix`, `vector`, `fraction`, `units`
+- **Text/Encoding**: `markdown`, `htmltable`, `asciitable`, `xml`, `yaml`, `jsonptr`, `ansi`
+- **Files/Config**: `env`, `temp`, `filelock`, `globx`, `mime`
+- **System/CLI**: `args`, `logger`, `progress`, `timer`, `retry`, `password`, `semver`
+- **Web**: `url`, `cookie`
+- Modernized `agame` (legacy syntax → Indent) and `colors` (real hex/RGB impl)
+
+### 🔧 Runtime fixes
+- **Expression-level shadowing**: `invoke_callable_expr` now checks user/imported functions before builtins — so module functions calling sibling functions with builtin-colliding names (e.g. `Count` inside `counter`) work correctly. (Matches the statement-level fix from 1.4.1.)
+- **AIR package resolution**: the runtime now searches `~/.local/share/indent/air-packages/` by default, so `air install`-ed packages import without setting `INDENT_PATH`.
+
+---
+
+# Indent Changelog
+
 ## 1.4.1 — 2026-08-04
 
 ### 🎯 Group Type — Unique Collections

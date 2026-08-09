@@ -132,14 +132,38 @@ get Write from fs          # file system
 Modules: `strings`, `math`, `collections`, `fs`, `json`, `os`, `io`, `time`, `datetime`, `random`, `regex`, `path`, `hash`, `base64`, `sys`, `testing`, `net`. Std functions are PascalCase so they never clash with the (lowercase) builtins.
 
 ### Package Manager (AIR)
+AIR is Indent's pip — install packages from the [registry](https://github.com/xytrolabs/air) (47 packages and growing):
 ```bash
-air install colors         # Install from registry
-air uninstall colors       # Remove
+air install stats          # Install from registry
+air install slug           # Install another
+air uninstall stats        # Remove
 air search json            # Find packages
 air update                 # Update all
 air list                   # Show installed
 air info math              # Package details
 ```
+
+Popular packages: `stats`, `matrix`, `markdown`, `yaml`, `args`, `logger`, `url`, `cookie`, `slug`, `textwrap`, `diff`, `fraction`, `semver`, `asciitable`, `colors`, `agame`, `discord`. AIR auto-detects and installs `get X from Y` dependencies. Installed packages resolve automatically from `~/.local/share/indent/air-packages/`.
+
+### GUI
+Indent can open native windows with `gui_show_html(html, [title], [w], [h])` — a WebKitGTK window rendering HTML:
+```indent
+gui_show_html("<h1>Hello</h1>", "My App", 800, 600)
+```
+The `indent-gui` helper builds automatically during install (needs `gcc`, `gtk3`, `webkit2gtk`). See `indent-native/indent-gui.c`.
+
+### AI
+Indent talks to Ollama over HTTP — chat, embeddings, and more, all natively:
+```indent
+var payload = {"model": "qwen2.5:0.5b", "prompt": "What is 2+2?", "stream": false}
+var resp = http_post_json("http://localhost:11434/api/generate", payload)
+var data = json_loads(resp["body"])
+say data["response"]    # → "The answer to 2+2 is 4."
+```
+Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, `python_run_file`).
+
+### Examples
+Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop.
 
 ---
 

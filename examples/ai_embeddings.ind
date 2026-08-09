@@ -1,0 +1,8 @@
+say "=== Embeddings: nomic-embed-text ==="
+var payload = {"model": "nomic-embed-text", "prompt": "Indent programming language"}
+var resp = http_post_json("http://localhost:11434/api/embeddings", payload)
+say "ok: " + string(resp["ok"])
+var data = json_loads(resp["body"])
+var emb = data["embedding"]
+say "embedding dim: " + string(len(emb))
+say "first 5: " + string(slice(emb, 0, 5))
