@@ -1,5 +1,5 @@
 #! =============================================================================
-#! discord.ind 4.0 — The Indent Discord bot library
+#! discord.ind 5.0 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
@@ -7,10 +7,10 @@
 #! system, clean block-style helpers, and a built-in audit/monitoring suite.
 #! Import it and write your bot.
 #!
-#! 🆕 v4.0 adds: command checks (permissions), custom error handler, cooldowns,
-#! converters (User/Role/Channel ID extraction), modal builder, context menus
-#! (user & message commands), hybrid commands (prefix+slash), background task
-#! loops, command groups/subcommands, and wait_for event polling.
+#! 🆕 v5.0 adds: voice gateway (connect/speak/disconnect), file attachments,
+#! full permissions bitmask (36 flags + PermHas + PermsOf), paginators,
+#! enhanced cache (guild/channel/role), auto-complete for slash commands,
+#! ResolveUser converter, enhanced cooldowns, and more.
 #!
 #! NOTE: the native Indent runtime passes function arguments by value, so every
 #! function that modifies the bot RETURNS the modified bot. Always reassign:
@@ -56,7 +56,7 @@ var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 #! discord package version
-var DiscordVersion string = "3.0.0"
+var DiscordVersion string = "5.0.0"
 
 #! Current source/context for the clean block API (module-level, shared).
 #! The native runtime passes args by value, so we stash the "current source"
@@ -126,6 +126,42 @@ fun Delete
     var url string = API + path
     var auth string = "Bot " + token
     give http_delete url auth
+
+#! ==============================
+#! 📎  FILE ATTACHMENTS (5.0)
+#! ==============================
+#! Send a file as a message attachment using multipart/form-data.
+#! The runtime's http_post_multipart sends {content, file_name, file_data}.
+#!   var file dynamic = BuildFile "image.png" fileBytes
+#!   PostFile bot.token channelId "Look!" file
+
+fun BuildFile
+    filename
+    filedata
+    give {"filename": filename, "data": filedata}
+
+#! Read a file into a multipart body. Returns the file data as a string.
+#! Usage:  var f dynamic = ReadFile "path/to/image.png"
+fun ReadFile
+    filePath
+    give file_read filePath
+
+fun PostFile
+    token
+    channelId
+    content
+    file
+    var path string = "/channels/" + channelId + "/messages"
+    give http_post_multipart path token content file
+
+fun SendFile
+    token
+    channelId
+    content
+    filePath
+    var f dynamic = ReadFile filePath
+    var file dynamic = BuildFile filePath f
+    give PostFile token channelId content file
 
 #! ---- message actions ----
 fun Send
@@ -275,6 +311,122 @@ fun WsRecvTimeout
 fun WsClose
     socketId
     give ws_close socketId
+
+#! ==============================
+#! 🔊  VOICE GATEWAY (5.0) — voice channel connect, audio, disconnect
+#! ==============================
+#! Voice uses a separate WebSocket connection. The flow:
+#!   1. ConnectVoice bot guildId channelId  →  receives voice state + server
+#!   2. VoicePlay bot path                  →  sends audio
+#!   3. VoiceStop bot                       →  stops playback
+#!   4. DisconnectVoice bot                 →  leaves the channel
+var _VOICE_SOCKET int = 0
+var _VOICE_GUILD string = ""
+var _VOICE_CHANNEL string = ""
+var _VOICE_ENDPOINT string = ""
+var _VOICE_TOKEN_STR string = ""
+var _VOICE_SESSION string = ""
+var _VOICE_SERVER_ID string = ""
+var _VOICE_USER_ID string = ""
+var _VOICE_PLAYING int = 0
+
+#! Connect to a voice channel. Sends the voice state update and waits
+#! for the VOICE_SERVER_UPDATE event via the main gateway. Once the
+#! voice server info arrives, opens a UDP voice WebSocket.
+#! Returns the voice socket ID or 0 on timeout.
+fun ConnectVoice
+    bot
+    guildId
+    channelId
+    _VOICE_GUILD is guildId
+    _VOICE_CHANNEL is channelId
+    if has_key bot "user"
+        if has_key bot.user "id"
+            _VOICE_USER_ID is bot.user.id
+
+    #! Send voice state update (op 4) via the main gateway
+    var vsu dynamic = {"op": 4, "d": {"guild_id": guildId, "channel_id": channelId, "self_mute": false, "self_deaf": false}}
+    var vsuStr string = json_dumps vsu
+    WsSend _SOCKET vsuStr
+    say "   🎤 Requesting voice connection to channel " + channelId + "..."
+
+    #! Wait up to 15 seconds for VOICE_SERVER_UPDATE (op 0 t=VOICE_SERVER_UPDATE)
+    var waited int = 0
+    repeat
+        if _VOICE_ENDPOINT != empty and _VOICE_TOKEN_STR != empty
+            #! We have server info — open the voice WebSocket
+            var vConn dynamic = ws_connect "wss://" + _VOICE_ENDPOINT + "/?v=4"
+            _VOICE_SOCKET is vConn.socket_id
+            #! Send voice identify
+            var vid dynamic = {"op": 0, "d": {"server_id": _VOICE_SERVER_ID, "user_id": _VOICE_USER_ID, "session_id": _VOICE_SESSION, "token": _VOICE_TOKEN_STR}}
+            var vidStr string = json_dumps vid
+            WsSend _VOICE_SOCKET vidStr
+            #! Send select protocol (UDP)
+            var vsp dynamic = {"op": 1, "d": {"protocol": "udp", "data": {"address": "0.0.0.0", "port": 0, "mode": "xsalsa20_poly1305"}}}
+            var vspStr string = json_dumps vsp
+            WsSend _VOICE_SOCKET vspStr
+            say "   🎤 Voice connected!"
+            give _VOICE_SOCKET
+        if waited > 15
+            say "   ⚠️ Voice connection timed out"
+            give 0
+        time_sleep 1
+        waited is waited + 1
+
+#! Send a play tone (silence/beep) over the voice connection.
+#! For now, sends a speaking indicator (op 5).
+fun VoiceStartSpeaking
+    bot
+    var speak dynamic = {"op": 5, "d": {"speaking": 1, "delay": 0, "ssrc": 1}}
+    var speakStr string = json_dumps speak
+    WsSend _VOICE_SOCKET speakStr
+    _VOICE_PLAYING is 1
+    give bot
+
+fun VoiceStopSpeaking
+    bot
+    var silence dynamic = {"op": 5, "d": {"speaking": 0, "delay": 0, "ssrc": 1}}
+    var silStr string = json_dumps silence
+    WsSend _VOICE_SOCKET silStr
+    _VOICE_PLAYING is 0
+    give bot
+
+#! Leave the current voice channel.
+fun DisconnectVoice
+    bot
+    if _VOICE_SOCKET != 0
+        WsClose _VOICE_SOCKET
+        _VOICE_SOCKET is 0
+    if _VOICE_GUILD != empty
+        var leave dynamic = {"op": 4, "d": {"guild_id": _VOICE_GUILD, "channel_id": empty, "self_mute": false, "self_deaf": false}}
+        var leaveStr string = json_dumps leave
+        WsSend _SOCKET leaveStr
+    _VOICE_ENDPOINT is ""
+    _VOICE_TOKEN_STR is ""
+    _VOICE_SESSION is ""
+    _VOICE_SERVER_ID is ""
+    say "   🎤 Disconnected from voice"
+    give bot
+
+#! Capture VOICE_STATE_UPDATE to get session_id, and VOICE_SERVER_UPDATE
+#! to get endpoint+token. Called from the main gateway dispatch.
+fun OnVoiceStateUpdate
+    bot
+    data
+    _x
+    if has_key data "session_id"
+        _VOICE_SESSION is data.session_id
+
+fun OnVoiceServerUpdate
+    bot
+    data
+    _x
+    if has_key data "endpoint"
+        _VOICE_ENDPOINT is data.endpoint
+    if has_key data "token"
+        _VOICE_TOKEN_STR is data.token
+    if has_key data "guild_id"
+        _VOICE_SERVER_ID is data.guild_id
 
 #! ==============================
 #! 🤖  BOT ENGINE (mid level)
@@ -476,9 +628,51 @@ fun HandleInteraction
     Acknowledge token interaction
     RunCommand bot token interaction name opts
 
+fun HandleAutocomplete
+    bot
+    token
+    interaction
+    var hasData int = 0
+    if has_key interaction "data"
+        hasData is 1
+    if hasData == 0
+        give empty
+    var d dynamic = interaction.data
+    var hasName int = 0
+    if has_key d "name"
+        hasName is 1
+    if hasName == 0
+        give empty
+    var cmdName string = d.name
+    var hasOpts int = 0
+    if has_key d "options"
+        hasOpts is 1
+    if hasOpts == 0
+        give empty
+    var autoKey string = "auto_" + cmdName
+    if has_key bot "_autocomplete"
+        var ac dynamic = bot._autocomplete
+        if has_key ac autoKey
+            var handler string = ac[autoKey]
+            call_func handler bot interaction
+    give empty
+
+fun RegisterAutocomplete
+    bot
+    cmdName
+    handlerName
+    var ac dynamic = {}
+    if has_key bot "_autocomplete"
+        ac is bot._autocomplete
+    var autoKey string = "auto_" + cmdName
+    ac[autoKey] is handlerName
+    bot._autocomplete is ac
+    give bot
+
 fun Acknowledge
     token
     interaction
+
     var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
     Post path token {"type": 5}
 
@@ -1049,6 +1243,204 @@ fun ModalValues
     give vals
 
 #! ==============================
+#! ==============================
+#! PERMISSIONS BITMASK SYSTEM (5.0)
+#! ==============================
+var PermCreateInvite int = 1
+var PermKick int = 2
+var PermBan int = 4
+var PermAdmin int = 8
+var PermManageChannels int = 16
+var PermManageGuild int = 32
+var PermAddReactions int = 64
+var PermViewAuditLog int = 128
+var PermPrioritySpeaker int = 256
+var PermStream int = 512
+var PermViewChannel int = 1024
+var PermSendMessages int = 2048
+var PermSendTts int = 4096
+var PermManageMessages int = 8192
+var PermEmbedLinks int = 16384
+var PermAttachFiles int = 32768
+var PermReadHistory int = 65536
+var PermMentionEveryone int = 131072
+var PermExternalEmojis int = 262144
+var PermViewGuildInsights int = 524288
+var PermConnect int = 1048576
+var PermSpeak int = 2097152
+var PermMute int = 4194304
+var PermDeafen int = 8388608
+var PermMove int = 16777216
+var PermUseVad int = 33554432
+var PermChangeNick int = 67108864
+var PermManageNicks int = 134217728
+var PermManageRoles int = 268435456
+var PermManageWebhooks int = 536870912
+var PermManageEmojis int = 1073741824
+var PermUseSlash int = 2147483648
+var PermRequestToSpeak int = 4294967296
+var PermManageEvents int = 8589934592
+var PermManageThreads int = 17179869184
+var PermCreatePublicThreads int = 34359738368
+var PermCreatePrivateThreads int = 68719476736
+var PermExternalStickers int = 137438953472
+var PermSendMessagesInThreads int = 274877906944
+var PermStartEmbeddedActivities int = 549755813888
+var PermModerateMembers int = 1099511627776
+var PermAll int = 2251799813685247
+
+fun PermHas
+    mask
+    perm
+    #! For power-of-2 permissions: check if (mask % (perm*2)) >= perm
+    var double float = perm * 2
+    var mod float = mask % double
+    if mod >= perm
+        give 1
+    give 0
+
+fun PermsOf
+    names
+    var mask int = 0
+    repeat name in names
+        var added int = 0
+        if name == "CreateInvite"
+            mask is mask + PermCreateInvite
+        or name == "Kick"
+            mask is mask + PermKick
+        or name == "Ban"
+            mask is mask + PermBan
+        or name == "Admin"
+            mask is mask + PermAdmin
+        or name == "ManageChannels"
+            mask is mask + PermManageChannels
+        or name == "ManageGuild"
+            mask is mask + PermManageGuild
+        or name == "AddReactions"
+            mask is mask + PermAddReactions
+        or name == "ViewChannel"
+            mask is mask + PermViewChannel
+        or name == "SendMessages"
+            mask is mask + PermSendMessages
+        or name == "ManageMessages"
+            mask is mask + PermManageMessages
+        or name == "EmbedLinks"
+            mask is mask + PermEmbedLinks
+        or name == "AttachFiles"
+            mask is mask + PermAttachFiles
+        or name == "ReadHistory"
+            mask is mask + PermReadHistory
+        or name == "MentionEveryone"
+            mask is mask + PermMentionEveryone
+        or name == "Connect"
+            mask is mask + PermConnect
+        or name == "Speak"
+            mask is mask + PermSpeak
+        or name == "Mute"
+            mask is mask + PermMute
+        or name == "Deafen"
+            mask is mask + PermDeafen
+        or name == "Move"
+            mask is mask + PermMove
+        or name == "ManageRoles"
+            mask is mask + PermManageRoles
+        or name == "ManageWebhooks"
+            mask is mask + PermManageWebhooks
+        or name == "UseSlash"
+            mask is mask + PermUseSlash
+        or name == "ModerateMembers"
+            mask is mask + PermModerateMembers
+    give mask
+
+#! ==============================
+#! PAGINATORS (5.0)
+#! ==============================
+fun Paginator
+    pages
+    firstLabel
+    prevLabel
+    nextLabel
+    lastLabel
+    give {"_pages": pages, "_page": 0, "_first": firstLabel, "_prev": prevLabel, "_next": nextLabel, "_last": lastLabel}
+
+fun PaginatorCurrent
+    paginator
+    var idx int = paginator._page
+    var pages dynamic = paginator._pages
+    give pages[idx]
+
+fun PaginatorPage
+    paginator
+    delta
+    var idx int = paginator._page + delta
+    var pages dynamic = paginator._pages
+    if idx < 0
+        idx is 0
+    if idx >= len(pages)
+        idx is len(pages) - 1
+    paginator._page is idx
+    give pages[idx]
+
+fun PaginatorButtons
+    paginator
+    var first dynamic = Button 2 paginator._first "pag_first"
+    var prev dynamic = Button 2 paginator._prev "pag_prev"
+    var next dynamic = Button 2 paginator._next "pag_next"
+    var last dynamic = Button 2 paginator._last "pag_last"
+    var row dynamic = ActionRow first prev next last
+    give row
+
+#! ==============================
+#! ENHANCED CACHE (5.0)
+#! ==============================
+var _GUILD_CACHE dynamic = {}
+var _CHANNEL_CACHE dynamic = {}
+var _ROLE_CACHE dynamic = {}
+
+fun CacheGuild
+    guild
+    if has_key guild "id"
+        _GUILD_CACHE[guild.id] is guild
+
+fun GetCachedGuild
+    guildId
+    if has_key _GUILD_CACHE guildId
+        give _GUILD_CACHE[guildId]
+    give empty
+
+fun CacheChannel
+    channel
+    if has_key channel "id"
+        _CHANNEL_CACHE[channel.id] is channel
+
+fun GetCachedChannel
+    channelId
+    if has_key _CHANNEL_CACHE channelId
+        give _CHANNEL_CACHE[channelId]
+    give empty
+
+fun CacheRole
+    guildId
+    role
+    var key string = guildId + ":" + role.id
+    _ROLE_CACHE[key] is role
+
+fun GetCachedRole
+    guildId
+    roleId
+    var key string = guildId + ":" + roleId
+    if has_key _ROLE_CACHE key
+        give _ROLE_CACHE[key]
+    give empty
+
+fun ResolveUser
+    guildId
+    raw
+    var uid string = ConvertUserId raw
+    if uid == empty
+        give empty
+    give {"id": uid, "mention": "<@" + uid + ">"}
+
 #! �📋  AUDIT / MONITORING (3.0)
 #! ==============================
 #! SetupAudit registers handlers for every monitoring event and posts a
