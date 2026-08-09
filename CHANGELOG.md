@@ -1,5 +1,20 @@
 # Indent Changelog
 
+## 1.5.0 — 2026-08-09
+
+### 🎮 InGame — PyGame-style games written entirely in Indent
+New native 2D game framework: **all game logic lives in Indent**, a native window just draws frames and reports input.
+- `std/ingame.ind` — API: `Init(w,h,title)`, `Clear(color)`, `Rect(x,y,w,h,color)`, `Circle(cx,cy,r,color)`, `Text(x,y,str,color,size)`, `Present(clear)`, `Events()`, `Quit()`
+- `indent-native/indent-ingame.c` — native WebKitGTK canvas window; reads JSON frames from `frame.json`, emits keyboard events to `events.txt`
+- Framework spawns the window in the background via `os_system("... &")`; Indent's game loop runs independently
+- `examples/snake_game.ind` rewritten as **100% Indent logic** (bot AI, wall/self collision, growth, scoring, rendering). `INDENT_SNAKE_BOT=1` auto-plays (verified: score 80, snake grows 3→11 segments). Arrow keys play manually.
+- `air install ingame` — added to the registry (48 packages)
+
+### 🐛 Bug fix: `and` / `or` now short-circuit
+`and`/`or` previously evaluated **both** operands eagerly, so guards like `e["type"] == "key" and e["down"] == true` errored on dicts lacking `down`. Now Python-style short-circuit: RHS is only evaluated when needed. Found via the InGame input loop. All 13 tests pass.
+
+---
+
 ## 1.4.4 — 2026-08-09
 
 ### 🎮 Playable GUI game: Snake

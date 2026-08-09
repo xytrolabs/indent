@@ -162,18 +162,32 @@ say data["response"]    # → "The answer to 2+2 is 4."
 ```
 Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, `python_run_file`).
 
-### Examples
-Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop.
+### InGame — PyGame-style games in pure Indent
+[`std/ingame.ind`](std/ingame.ind) is a native 2D game framework: **all game logic lives in Indent** (movement, collision, scoring, rendering), while a native window just draws frames and reports input — just like PyGame but in Indent.
+```indent
+get Init from ingame
+get Rect from ingame
+get Present from ingame
+get Events from ingame
+
+var win = Init(400, 400, "My Game")
+repeat while running
+    repeat e in Events()          #! arrow keys, quit
+        ...
+    Rect x y w h "#39d353"        #! draw
+    Present "#000000"             #! flush frame
+```
+Works via `indent-ingame` (a native WebKitGTK canvas helper, built by `install.sh`). `air install ingame` also works.
 
 #### Playable GUI game: Snake
 ```bash
-indent examples/snake_game.ind       # play Snake in a native window (arrow keys)
+indent examples/snake_game.ind                 # play (arrow keys)
+INDENT_SNAKE_BOT=1 indent examples/snake_game.ind   # auto-play bot
 ```
-Opens a playable Snake game in a WebKitGTK window, with an AI-generated tip from Ollama injected into the page. Test it automatically:
-```bash
-node tests/snake_logic_test.js       # validates game logic headlessly (5 tests)
-bash tests/gui_snake_test.sh         # opens the window, verifies render, closes it
-```
+Snake is written 100% in Indent using InGame — the bot AI, wall/self collision, growth, and scoring are all Indent logic. `INDENT_SNAKE_BOT=1` makes it play itself (verified: scores 80, snake grows to 11 segments).
+
+### Examples
+Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop, InGame Snake.
 
 ---
 

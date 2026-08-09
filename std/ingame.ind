@@ -1,0 +1,81 @@
+#! ingame.ind
+#! InGame — PyGame-style 2D game framework for Indent.
+#!
+#! All game logic lives in Indent; a native window renders frames and reports
+#! input. Usage:
+#!
+#!   get Init from ingame
+#!   get Clear from ingame
+#!   get Rect from ingame
+#!   get Circle from ingame
+#!   get Text from ingame
+#!   get Present from ingame
+#!   get Events from ingame
+#!   get Quit from ingame
+#!
+#!   var game = Init(400, 400, "My Game")
+#!   repeat while running
+#!       for each event in Events() -> handle keys
+#!       Clear "#000000"
+#!       Rect x y w h "#39d353"
+#!       Text x y "Score: 10" "#ffffff" 14
+#!       Present "#000000"     #! flush frame to the window
+#!       time_sleep 0.05       #! ~20 fps
+
+#! --- Internal state ---
+var _workdir = ""
+var _shapes = []
+
+#! --- Initialize: spawn the native window and prep IPC files ---
+fun Init width height title
+    var dir = "/tmp/ingame-" + uuid()
+    os_mkdir dir
+    _workdir is dir
+    file_write_text(dir + "/frame.json", "{\"clear\":\"#000000\",\"shapes\":[]}")
+    file_write_text(dir + "/events.txt", "")
+    var cmd = "indent-ingame " + dir + " \"" + title + "\" " + string(width) + " " + string(height) + " >/dev/null 2>&1 &"
+    os_system cmd
+    give dir
+
+#! --- Frame building ---
+fun Clear color
+    _shapes is []
+
+fun Rect x y w h color
+    _shapes is _shapes + [{"t": "rect", "x": x, "y": y, "w": w, "h": h, "c": color}]
+
+fun Circle cx cy r color
+    _shapes is _shapes + [{"t": "circle", "cx": cx, "cy": cy, "r": r, "c": color}]
+
+fun Text x y text color size
+    _shapes is _shapes + [{"t": "text", "x": x, "y": y, "s": text, "c": color, "size": size}]
+
+#! --- Flush the current frame to the window ---
+fun Present clear
+    var frame = {"clear": clear, "shapes": _shapes}
+    file_write_text(_workdir + "/frame.json", json_dumps(frame))
+
+#! --- Read (and clear) input events. Returns a list of dicts like
+#!    {"key":"ArrowUp","down":true} or {"type":"quit"} ---
+fun Events
+    var path = _workdir + "/events.txt"
+    if not os_exists(path)
+        give []
+    var content = file_read_text(path)
+    file_write_text(path, "")
+    if len(trim(content)) == 0
+        give []
+    var out dynamic = []
+    var lines = split(content, "\n")
+    repeat line in lines
+        if len(trim(line)) > 0
+            out is out + [json_loads(line)]
+    give out
+
+#! --- Signal the window to close ---
+fun Quit
+    if len(_workdir) == 0
+        give empty
+    file_write_text(_workdir + "/quit.flag", "quit")
+    os_system("pkill -f " + _workdir + " 2>/dev/null")
+    give empty

@@ -5961,6 +5961,26 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             }
         }
         Expr::Binary { op, lhs, rhs } => {
+            // Short-circuit `and`/`or` (Python semantics): only evaluate the
+            // right-hand side when needed. This matters for guards like
+            // `e["type"] == "key" and e["down"] == true` where the rhs would
+            // error on dicts that lack the key.
+            if op == "and" {
+                let a = eval_ast(lhs, ctx)?;
+                if !a.to_bool() {
+                    return Ok(Value::Bool(false));
+                }
+                let b = eval_ast(rhs, ctx)?;
+                return Ok(Value::Bool(b.to_bool()));
+            }
+            if op == "or" {
+                let a = eval_ast(lhs, ctx)?;
+                if a.to_bool() {
+                    return Ok(Value::Bool(true));
+                }
+                let b = eval_ast(rhs, ctx)?;
+                return Ok(Value::Bool(b.to_bool()));
+            }
             let a = eval_ast(lhs, ctx)?;
             let b = eval_ast(rhs, ctx)?;
             eval_binary(op, a, b)
@@ -10249,5 +10269,32 @@ say top[0]
             rt.vars.get("top"),
             Some(Value::List(v)) if v.len() == 2 && matches!(&v[0], Value::Float(x) if (*x - 0.9).abs() < 1e-9)
         ));
+    }
+
+    #[test]
+    fn and_or_short_circuit() {
+        // Regression: `and`/`or` must not evaluate the RHS when the LHS decides
+        // the result (Python semantics). Previously both sides were evaluated,
+        // so `false and d["missing"]` errored.
+        let dir = unique_dir("indent_test_shortcircuit");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let main_file = dir.join("main.ind");
+        let src = r#"
+var e = {"type": "quit"}
+var r1 = (e["type"] == "key" and e["down"] == true)
+var r2 = (false and e["missing"])
+var r3 = (true or e["missing"])
+var d = {"a": 1}
+var r4 = (has_key(d, "a") and d["a"] == 1)
+"#;
+        fs::write(&main_file, src).expect("write main file");
+
+        let mut rt = Runtime::new(dir.clone());
+        let result = rt.run_file(&main_file);
+        assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+        assert!(matches!(rt.vars.get("r1"), Some(Value::Bool(false))));
+        assert!(matches!(rt.vars.get("r2"), Some(Value::Bool(false))));
+        assert!(matches!(rt.vars.get("r3"), Some(Value::Bool(true))));
+        assert!(matches!(rt.vars.get("r4"), Some(Value::Bool(true))));
     }
 }

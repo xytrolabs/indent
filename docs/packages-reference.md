@@ -1,286 +1,363 @@
-# Indent Standard Packages — Reference
+# Indent Package Registry — Reference
 
-> All 17 packages available via `get <name>` in Indent 1.4.0.
+> 47 packages available via the [AIR registry](https://github.com/xytrolabs/air).
+> Install with `air install <package>`, then import with `get <Function> from <package>`.
+
+```bash
+air install stats
+air install markdown yaml logger
+```
 
 ---
 
-## `html` — HTML Templating & Builder
+## Core Utilities
 
-```indent
-get Escape from html
-get Tag from html
-get Page from html
-```
+### `slug` — URL slugification
+| Function | Description |
+|---|---|
+| `Slugify(text)` | Lowercase, strip non-alphanumerics, join with `-` |
+
+### `textwrap` — Text wrapping
+| Function | Description |
+|---|---|
+| `Wrap(text, width)` | Split into wrapped lines |
+| `Fill(text, width)` | Join wrapped lines with newlines |
+| `Center(text, width)` | Center text in a width |
+
+### `roman` — Roman numerals
+| Function | Description |
+|---|---|
+| `ToRoman(n)` | int → Roman (1..3999) |
+| `FromRoman(text)` | Roman → int |
+
+### `lev` — Levenshtein distance
+| Function | Description |
+|---|---|
+| `Distance(a, b)` | Edit distance between two strings |
+
+### `base` — Base conversion
+| Function | Description |
+|---|---|
+| `ToString(n, base)` | int → string (base 2-36) |
+| `FromString(text, base)` | string → int |
+| `Bin(n)` / `Oct(n)` / `Hex(n)` | Shorthand conversions |
+
+### `diff` — Line diff
+| Function | Description |
+|---|---|
+| `LCSLength(a, b)` | Longest common subsequence length |
+| `Similarity(a, b)` | 0.0-1.0 similarity score |
+
+### `chunk` — List chunking
+| Function | Description |
+|---|---|
+| `Chunk(items, size)` | Split into fixed-size chunks |
+| `Pairs(items)` | Chunks of 2 |
+| `Windows(items, size)` | Sliding windows |
+
+### `search` — Searching
+| Function | Description |
+|---|---|
+| `BinarySearch(items, target)` | Index or -1 (sorted list) |
+| `LinearSearch(items, target)` | Index or -1 |
+
+---
+
+## Data Structures
+
+### `stack` — LIFO stack (immutable)
+| Function | Description |
+|---|---|
+| `New()` | `[]` |
+| `Push(stack, item)` | New stack with item |
+| `Pop(stack)` | `{"item":.., "stack":..}` |
+| `Peek(stack)` | Top without removing |
+| `IsEmpty(stack)` / `Size(stack)` | Introspection |
+
+### `queue` — FIFO queue (immutable)
+| Function | Description |
+|---|---|
+| `New()` / `Enqueue(q, item)` | Create / add |
+| `Dequeue(q)` | `{"item":.., "queue":..}` |
+| `Peek(q)` / `IsEmpty(q)` / `Size(q)` | Introspection |
+
+### `linkedlist` — persistent list
+| Function | Description |
+|---|---|
+| `New()` / `Cons(value, rest)` | Create / prepend |
+| `Head(list)` / `Tail(list)` | Access |
+| `Append(list, v)` / `Prepend(list, v)` | Add |
+| `Nth(list, n)` / `Size` / `IsEmpty` / `ToList` | Access |
+
+### `lru` — LRU cache
+| Function | Description |
+|---|---|
+| `New(capacity)` | `{"capacity":..,"data":{}}` |
+| `Get(cache, key)` / `Put(cache, key, v)` | Access |
+| `Contains` / `Size` / `Clear` | Management |
+
+### `heap` — min-heap
+| Function | Description |
+|---|---|
+| `Push(heap, value)` | New heap with value |
+| `Pop(heap)` | `[min_value, new_heap]` |
+
+### `counter` — counting
+| Function | Description |
+|---|---|
+| `Count(items)` | `{value: count}` dict |
+| `MostCommon(items, n)` | Sorted `[count, value]` pairs |
+| `Total(items)` | Item count |
+
+---
+
+## Math & Stats
+
+### `stats` — statistics
+| Function | Description |
+|---|---|
+| `Mean(items)` / `Median(items)` / `Mode(items)` | Central tendency |
+| `Variance(items)` / `StdDev(items)` | Spread |
+| `Min` / `Max` / `Sum` | Aggregates |
+
+### `matrix` — matrices (lists of lists)
+| Function | Description |
+|---|---|
+| `Add(a, b)` / `Multiply(a, b)` | Arithmetic |
+| `Transpose(m)` / `Identity(n)` / `ScalarMul(m, s)` | Operations |
+
+### `vector` — vector math
+| Function | Description |
+|---|---|
+| `Add(a, b)` / `Subtract(a, b)` | Arithmetic |
+| `Scale(v, s)` / `Dot(a, b)` | Scaling / dot product |
+| `Magnitude(v)` / `Normalize(v)` | Length / unit vector |
+
+### `fraction` — rational numbers
+| Function | Description |
+|---|---|
+| `New(num, den)` | Reduced fraction `{"num":..,"den":..}` |
+| `Add` / `Subtract` / `Multiply` / `Divide` | Arithmetic |
+| `ToFloat(f)` / `ToString(f)` | Conversion |
+
+### `units` — unit conversion
+| Function | Description |
+|---|---|
+| `KmToMiles` / `MilesToKm` | Distance |
+| `CToF` / `FToC` | Temperature |
+| `KgToLb` / `LbToKg` | Weight |
+| `LitersToGal` / `GalToLiters` | Volume |
+| `BytesToMb` / `MbToBytes` | Storage |
+
+---
+
+## Text & Encoding
+
+### `markdown` — markdown to HTML
+| Function | Description |
+|---|---|
+| `Render(text)` | Headers, bold/italic/code, lists |
+
+### `htmltable` — HTML tables
+| Function | Description |
+|---|---|
+| `Table(headers, rows)` | From headers + rows |
+| `TableFromDicts(records)` | From list of dicts |
+
+### `asciitable` — plain-text tables
+| Function | Description |
+|---|---|
+| `Table(headers, rows)` | ASCII box table |
+
+### `xml` — minimal XML
+| Function | Description |
+|---|---|
+| `Tags(text)` | `[{"name","attrs","content"}]` |
+| `DecodeEntities(text)` | `&lt;` → `<` etc. |
+
+### `yaml` — minimal YAML
+| Function | Description |
+|---|---|
+| `Parse(text)` | Flat `key: value` → dict |
+
+### `jsonptr` — JSON Pointer
+| Function | Description |
+|---|---|
+| `Get(data, pointer)` | Navigate `/a/b/c` |
+| `Has(data, pointer)` | True if exists |
+
+### `csv` — CSV
+| Function | Description |
+|---|---|
+| `Parse(text)` | Rows as lists |
+| `Stringify(rows)` | Rows → CSV text |
+
+### `html` — HTML builder
+| Function | Description |
+|---|---|
+| `Escape(text)` / `Tag(...)` / `VoidTag(...)` / `Render(...)` | Build HTML |
+
+### `ansi` — terminal colors
+| Function | Description |
+|---|---|
+| `Red` / `Green` / `Yellow` / `Blue` / `Magenta` / `Cyan` | Color wrap |
+| `Bold` / `Dim` / `Underline` / `Reset` | Style |
+
+---
+
+## Files & Config
+
+### `env` — .env loader
+| Function | Description |
+|---|---|
+| `Load(path)` | Parse KEY=VALUE pairs |
+| `Get(path, key, default)` | Typed lookup |
+
+### `config` — INI parser
+| Function | Description |
+|---|---|
+| `Parse(text)` / `Read(path)` | Parse sections |
+| `Get(config, key, default)` / `GetSection(...)` | Lookup |
+
+### `jsondb` — JSON database
+| Function | Description |
+|---|---|
+| `Load` / `Save` / `Create` | Persistence |
+| `FindAll` / `FindOne` | Query |
+| `Add` / `Update` / `Delete` / `Size` / `All` | CRUD |
+
+### `temp` — temp files
+| Function | Description |
+|---|---|
+| `Dir()` / `Path(prefix)` / `Write(prefix, content)` | Create |
+| `Read(path)` / `Remove(path)` | Use |
+
+### `filelock` — file locking
+| Function | Description |
+|---|---|
+| `Lock(path)` / `Unlock(path)` / `IsLocked(path)` | Manage locks |
+
+### `globx` — glob matching
+| Function | Description |
+|---|---|
+| `Match(pattern, text)` | `*` and `?` support |
+| `Filter(patterns, items)` | Filter list |
+
+### `mime` — MIME types
+| Function | Description |
+|---|---|
+| `ForFile(name)` | Extension → MIME string |
+
+---
+
+## System & CLI
+
+### `args` — CLI argument parsing
+| Function | Description |
+|---|---|
+| `Parse(argv)` | `{"flags":..,"positional":..}` |
+| `Has(flags, name)` / `Get(flags, name, default)` | Lookup |
+
+### `logger` — leveled logging
+| Function | Description |
+|---|---|
+| `SetLevel(level)` | debug/info/warn/error |
+| `Debug` / `Info` / `Warn` / `Error` | Log with timestamp |
+
+### `progress` — progress bars
+| Function | Description |
+|---|---|
+| `Bar(current, total, width)` | `[====      ] 50%` string |
+
+### `timer` — benchmarking
+| Function | Description |
+|---|---|
+| `Start()` / `Elapsed(timer)` | Stopwatch |
+| `Measure(iterations, fn)` | `{"total","avg","iterations"}` |
+
+### `retry` — retry logic
+| Function | Description |
+|---|---|
+| `WithRetries(attempts, fn)` | Call fn, retry on error |
+
+### `password` — password generation
+| Function | Description |
+|---|---|
+| `Generate(length)` | Random alphanumeric + symbols |
+| `GeneratePin(length)` | Random digits |
+
+### `semver` — semantic versions
+| Function | Description |
+|---|---|
+| `Parse(version)` | `[major, minor, patch]` |
+| `Compare(a, b)` | -1/0/1 |
+| `IsGreater` / `IsLess` / `IsEqual` | Comparisons |
+
+---
+
+
+## `ingame` — PyGame-style 2D game framework (v1.5.0)
+
+All game logic lives in Indent; a native window (WebKitGTK canvas) renders frames and reports input.
 
 | Function | Description |
 |---|---|
-| `Escape(text)` | HTML-escape `&`, `<`, `>`, `"`, `'` |
-| `Tag(name, attrs, content)` | Build `<name attrs>content</name>` |
-| `VoidTag(name, attrs)` | Self-closing tag like `<img />` |
-| `Render(template, vars)` | Replace `{{key}}` with dict values |
-| `Div(attrs, content)` | `<div>` wrapper |
-| `Span(attrs, content)` | `<span>` wrapper |
-| `Heading(level, attrs, content)` | `<h1>`–`<h6>` |
-| `Paragraph(attrs, content)` | `<p>` wrapper |
-| `Link(href, text)` | `<a href>` tag |
-| `Image(src, alt)` | `<img>` tag |
-| `UnorderedList(items)` | `<ul>` from list |
-| `OrderedList(items)` | `<ol>` from list |
-| `Table(headers, rows)` | Full `<table>` |
-| `Page(title, headExtra, body)` | Full HTML5 document |
-| `StyleLink(href)` | CSS `<link>` |
-| `Script(src)` | JS `<script>` |
-| `InlineStyle(css)` | `<style>` block |
-| `Form(action, method, content)` | `<form>` wrapper |
-| `Input(type, name, attrs)` | Form `<input>` |
-| `TextInput(name, attrs)` | Text input shortcut |
-| `TextArea(name, attrs, content)` | Textarea |
-| `Button(attrs, content)` | `<button>` |
-
----
-
-## `csv` — CSV Parsing & Generation
+| `Init(w, h, title)` | Spawn the native window, prep IPC files, return workdir |
+| `Clear(color)` | Reset the current frame's shape list |
+| `Rect(x, y, w, h, color)` | Add a rectangle to the frame |
+| `Circle(cx, cy, r, color)` | Add a circle to the frame |
+| `Text(x, y, str, color, size)` | Add text to the frame |
+| `Present(clear)` | Flush the frame to the window |
+| `Events()` | Read + clear input events (list of `{"key","down"}` / `{"type":"quit"}`) |
+| `Quit()` | Close the window and exit |
 
 ```indent
-get Parse from csv
-get Stringify from csv
-get ToDicts from csv
+get Init from ingame
+get Rect from ingame
+get Present from ingame
+get Events from ingame
+
+var win = Init(400, 400, "My Game")
+repeat while running
+    repeat e in Events()
+        if e["type"] == "quit"
+            running is false
+    Rect 10 10 50 50 "#39d353"
+    Present "#000000"
+    time_sleep 0.05
+Quit()
 ```
 
+Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + gtk3 + webkit2gtk). See `examples/snake_game.ind` for a complete game.
+
+## Web & More
+
+### `url` — URL encoding
 | Function | Description |
 |---|---|
-| `Parse(text)` | CSV text → list of lists |
-| `Stringify(rows)` | List of lists → CSV text |
-| `Read(path)` | Read CSV file |
-| `Write(path, rows)` | Write CSV file |
-| `Headers(rows)` | Get first row as headers |
-| `ToDicts(rows)` | Convert to list of dicts (first row = keys) |
+| `EncodeComponent(text)` | Percent-encode |
+| `DecodeComponent(text)` | Percent-decode |
 
----
-
-## `jsondb` — JSON File Database
-
-```indent
-get Create from jsondb
-get Add from jsondb
-get FindOne from jsondb
-```
-
+### `cookie` — HTTP cookies
 | Function | Description |
 |---|---|
-| `Create(path)` | Create empty database file |
-| `Add(path, record)` | Insert a record (dict) |
-| `FindAll(path, conditions)` | Find all matching records |
-| `FindOne(path, conditions)` | Find first matching record |
-| `Update(path, conditions, updates)` | Update matching records |
-| `Delete(path, conditions)` | Remove matching records |
-| `Size(path)` | Count records |
-| `All(path)` | Get all records |
+| `Parse(header)` / `Stringify(cookies)` | Serialize |
+| `Get(cookies, name, default)` | Lookup |
 
----
-
-## `config` — INI Config Parser
-
-```indent
-get Parse from config
-get GetSection from config
-```
-
+### `colors` — named colors
 | Function | Description |
 |---|---|
-| `Parse(text)` | INI text → nested dict |
-| `Read(path)` | Read and parse INI file |
-| `Get(config, key, default)` | Get value with fallback |
-| `GetSection(config, section, key, default)` | Get from `[section]` |
+| `Red` ... `Navy` | 16 named color constants |
+| `HexToRGB(hex)` / `RGBToHex(r,g,b)` | Conversion |
 
----
-
-## `json` — JSON Helpers
-
-```indent
-get Loads from json
-get Dumps from json
-```
-
+### `agame` — 2D game helpers
 | Function | Description |
 |---|---|
-| `Loads(text)` | Parse JSON string |
-| `Dumps(value, pretty)` | Serialize to JSON |
-| `Load(path)` | Read and parse JSON file |
-| `Dump(value, path, pretty)` | Write JSON to file |
+| `Lerp` / `Clamp` / `Distance` / `Wrap` | Math |
+| `NewEntity` / `Move` / `Collides` | Entities |
+| `TileToWorld` / `WorldToTile` | Tile math |
 
----
-
-## `http` — HTTP Client
-
-```indent
-get Get from http
-get PostJson from http
-```
-
+### `discord` — Discord bot library
 | Function | Description |
 |---|---|
-| `Get(url, auth)` | GET request |
-| `Delete(url, auth)` | DELETE request |
-| `PostJson(url, payload, auth)` | POST JSON |
-| `PutJson(url, payload, auth)` | PUT JSON |
-| `PatchJson(url, payload, auth)` | PATCH JSON |
-| `IsOk(response)` | Check if response succeeded |
-| `StatusCode(response)` | HTTP status code |
-| `Text(response)` | Response body as string |
-| `Json(response)` | Parse response body as JSON |
-
----
-
-## `math` — Math Constants & Functions
-
-```indent
-get PI from math
-get Pow from math
-```
-
-| Constant | Value |
-|---|---|
-| `PI` | 3.141592653589793 |
-| `TAU` | 6.283185307179586 |
-| `E` | 2.718281828459045 |
-
-| Function | Description |
-|---|---|
-| `Abs(n)` | Absolute value |
-| `Sqrt(n)` | Square root |
-| `Pow(base, exp)` | Power |
-| `Floor(n)` | Floor |
-| `Ceil(n)` | Ceiling |
-| `Round(n)` | Round |
-| `Sin(n)` / `Cos(n)` / `Tan(n)` | Trig (radians) |
-| `Log(n)` / `Log10(n)` | Natural / base-10 log |
-| `Exp(n)` | e^n |
-
----
-
-## `os` — OS & Filesystem
-
-```indent
-get GetCwd from os
-get Exists from os
-get ReadText from os
-```
-
-| Function | Description |
-|---|---|
-| `GetCwd()` | Current directory |
-| `Chdir(path)` | Change directory |
-| `Environ()` | Get environment variable |
-| `GetEnv(key, default)` | Get env var with default |
-| `SetEnv(key, value)` | Set env var |
-| `Exit(code)` | Exit process |
-| `System(cmd)` | Run shell command |
-| `Exists(path)` | Check path exists |
-| `IsFile(path)` | Check if file |
-| `IsDir(path)` | Check if directory |
-| `ListDir(path)` | List directory |
-| `Mkdir(path)` | Create directory |
-| `Remove(path)` | Delete file/dir |
-| `Rename(src, dst)` | Rename/move |
-| `ReadText(path)` | Read file |
-| `WriteText(path, text)` | Write file |
-| `AppendText(path, text)` | Append to file |
-
----
-
-## `time` — Time & Sleep
-
-| Function | Description |
-|---|---|
-| `Time()` | Current Unix timestamp |
-| `Sleep(ms)` | Sleep milliseconds |
-
----
-
-## `random` — Random Numbers
-
-| Function | Description |
-|---|---|
-| `RandInt(min, max)` | Random integer |
-| `RandFloat()` | Random float 0–1 |
-| `Choice(list)` | Random element |
-| `Shuffle(list)` | Shuffled copy |
-
----
-
-## `sys` — System Info
-
-| Constant | Description |
-|---|---|
-| `name` | Platform name (`"linux"`, `"darwin"`, `"win32"`) |
-| `sep` | Path separator (`"/"`) |
-| `linesep` | Line separator (`"\n"`) |
-
----
-
-## `discord` — Discord Bot Framework
-
-```indent
-get NewBot from discord
-get kick from discord
-get say from discord
-get add from discord
-get start from discord
-```
-
-**Clean block API (v2.2.0)** — build bots with pre-made blocks:
-
-| Category | Functions |
-|---|---|
-| **Bot** | `NewBot(token, prefix)`, `add(bot, name, handler)`, `on(bot, event, handler)`, `start(bot)` |
-| **Actions** | `kick(bot, user, reason)`, `ban(bot, user, reason)`, `addRole(bot, user, role)`, `removeRole(bot, user, role)`, `dm(bot, user, msg)` |
-| **Reply** | `say(bot, message)` |
-| **Puzzles** | `load(bot, dir)` — auto-load command modules from a directory |
-
-Example:
-```indent
-fun kickCmd args
-    var user string = args["1"]
-    kick bot user "No reason"
-    say bot "✅ Kicked " + user
-add bot "kick" kickCmd        # ✅ Handler as reference!
-start bot
-```
-
-Full REST API, gateway, embeds, buttons, slash commands also available in the base package.
-
----
-
-## `colors` — Color Constants
-
-```indent
-get RED from colors
-get BLUE from colors
-```
-
-Predefined: `RED`, `GREEN`, `BLUE`, `CYAN`, `MAGENTA`, `YELLOW`, `ORANGE`, `PURPLE`, `PINK`, `BLACK`, `WHITE` — all as hex strings (e.g., `"#ff4d4d"`).
-
----
-
-## `datetime` — Date/Time Helpers
-
-Built on the `time` module. Provides structured date/time utilities.
-
----
-
-## `path` — Path Utilities
-
-Filesystem path manipulation helpers. Joins, splits, extensions, basename, dirname.
-
----
-
-## `agame` — Starter 2D Game API
-
-A simple game development API for learning and prototyping 2D games in Indent.
-
----
-
-## `builtins` — Function Aliases
-
-Provides convenience aliases for common built-in functions: `Print`, `Input`, `Len`, `Assert`, etc.
+| (see `docs/discord-package.md`) | Bots, commands, slash commands |

@@ -158,8 +158,19 @@ else
           yellow "⚠ indent-gui build skipped (compile error); gui_show_html unavailable"
         fi
       fi
+
+      # Build the InGame canvas helper (indent-ingame) too.
+      if [[ -f "$BUILD_DIR/indent-native/indent-ingame.c" ]]; then
+        echo "→ Building indent-ingame (native canvas game window)..."
+        if gcc -o "${BIN_DIR}/indent-ingame" "$BUILD_DIR/indent-native/indent-ingame.c"              $(pkg-config --cflags --libs gtk+-3.0 webkit2gtk-4.1) 2>/dev/null; then
+          chmod +x "${BIN_DIR}/indent-ingame"
+          green "✓ Built and installed indent-ingame"
+        else
+          yellow "⚠ indent-ingame build skipped (compile error); InGame games unavailable"
+        fi
+      fi
     else
-      yellow "⚠ indent-gui skipped (need gcc + gtk3 + webkit2gtk dev headers for GUI)"
+      yellow "⚠ GUI helpers skipped (need gcc + gtk3 + webkit2gtk dev headers for GUI)"
     fi
 
     # Copy companion tools from the cloned repo

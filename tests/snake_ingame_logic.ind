@@ -1,0 +1,77 @@
+#! Headless regression test for the InGame Snake game logic.
+#! Verifies the bot AI, movement, collision, growth, and scoring — no window needed.
+#! Run: indent tests/snake_ingame_logic.ind
+var GRID = 20
+var snake = [[10, 10], [9, 10], [8, 10]]
+var dir = [1, 0]
+var food = [15, 10]
+var score = 0
+var gameOver = false
+
+fun BotSteer
+    var head = snake[0]
+    var candidates = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    var best = dir
+    var bestDist = 100000
+    repeat c in candidates
+        var nx = head[0] + c[0]
+        var ny = head[1] + c[1]
+        if nx < 0 or nx >= GRID or ny < 0 or ny >= GRID
+            next
+        var blocked = false
+        repeat seg in snake
+            if seg[0] == nx and seg[1] == ny
+                blocked is true
+        if blocked
+            next
+        var dx = food[0] - nx
+        var dy = food[1] - ny
+        var dist = dx * dx + dy * dy
+        if dist < bestDist
+            bestDist is dist
+            best is c
+    dir is best
+
+fun Step
+    var head = snake[0]
+    var newHead = [head[0] + dir[0], head[1] + dir[1]]
+    if newHead[0] < 0 or newHead[0] >= GRID or newHead[1] < 0 or newHead[1] >= GRID
+        gameOver is true
+        give empty
+    repeat seg in snake
+        if seg[0] == newHead[0] and seg[1] == newHead[1]
+            gameOver is true
+    if gameOver
+        give empty
+    snake is [[newHead[0], newHead[1]]] + snake
+    if newHead[0] == food[0] and newHead[1] == food[1]
+        score is score + 10
+        food is [random_int(0, GRID - 1), random_int(0, GRID - 1)]
+    otherwise
+        snake is slice(snake, 0, len(snake) - 1)
+
+var frames = 0
+repeat while frames < 100 and not gameOver
+    BotSteer()
+    Step()
+    frames is frames + 1
+
+say "frames=" + string(frames) + " score=" + string(score) + " len=" + string(len(snake)) + " gameOver=" + string(gameOver)
+
+#! Assertions
+var pass = true
+if score < 50
+    say "FAIL: bot should score at least 50 (got " + string(score) + ")"
+    pass is false
+if len(snake) < 8
+    say "FAIL: snake should grow to at least 8 (got " + string(len(snake)) + ")"
+    pass is false
+if gameOver
+    say "FAIL: game should not be over after 100 frames"
+    pass is false
+
+if pass
+    say "SNAKE INGAME LOGIC TEST PASSED"
+otherwise
+    say "SNAKE INGAME LOGIC TEST FAILED"
+    process_exit 1
