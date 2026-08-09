@@ -1,0 +1,42 @@
+#! GUI Snake — playable game rendered by Indent into a native WebKitGTK window.
+#!
+#! How it works:
+#!   1. Reads the Snake game HTML/JS from snake_game.html
+#!   2. Uses Ollama AI to generate a short "tip" and injects it into the page
+#!   3. Opens the game in a native window via gui_show_html
+#!
+#! The window blocks until you close it. Snake runs inside (arrow keys to play,
+#! space to pause, click Play Again to restart).
+#!
+#! Usage:
+#!   indent examples/snake_game.ind
+
+#! --- AI helper: ask Ollama for a one-line tip ---
+fun AiTip
+    var payload = {"model": "qwen2.5:0.5b", "prompt": "Give one short, fun tip for playing the game Snake. Max 10 words, no quotes.", "stream": false, "options": {"temperature": 0.8}}
+    var resp = http_post_json("http://localhost:11434/api/generate", payload)
+    var data = json_loads(resp["body"])
+    give data["response"]
+
+#! --- Load the game HTML ---
+var gameHtml = file_read_text("examples/snake_game.html")
+
+#! --- Inject an AI tip into the #ai element ---
+var tip = "💡 "
+do:
+    tip is tip + AiTip()
+catch as e:
+    tip is tip + "Eat the food, don't hit the walls!"
+gameHtml is replace(gameHtml, "<p id=\"ai\" class=\"controls\"></p>", "<p id=\"ai\" class=\"controls\">" + tip + "</p>")
+
+#! --- Open the game window (blocks until closed) ---
+say "Opening Indent Snake in a native window..."
+say "AI tip: " + tip
+do:
+    gui_show_html(gameHtml, "Indent Snake", 460, 560)
+    say "Window closed — thanks for playing!"
+catch as e:
+    say "GUI error: " + string(e)
+    exit 1
+
+say "Snake GUI test complete ✓"

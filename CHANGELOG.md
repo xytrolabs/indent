@@ -1,5 +1,19 @@
 # Indent Changelog
 
+## 1.4.4 — 2026-08-09
+
+### 🎮 Playable GUI game: Snake
+Added a fully playable **Snake** game that renders in a native WebKitGTK window via `gui_show_html`:
+- `examples/snake_game.html` — canvas + JS game (movement, food, growth, wall/self collision, score, high score, pause, restart)
+- `examples/snake_game.ind` — Indent wrapper that loads the game, asks **Ollama AI** for a one-line tip, injects it, and opens the window
+- **Automated tests** (both pass):
+  - `node tests/snake_logic_test.js` — 5 headless tests of game logic (movement, eat+score, wall collision, self collision, bot plays 200 frames → 120 pts)
+  - `bash tests/gui_snake_test.sh` — opens the real window, verifies it renders, closes it, confirms the script completes cleanly
+
+Verified end-to-end: window opens → AI tip generated → game renders → close → Indent completes.
+
+---
+
 ## 1.4.3 — 2026-08-09
 
 ### 🔬 Rigorous testing: AI, GUI, and games

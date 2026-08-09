@@ -165,6 +165,16 @@ Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, 
 ### Examples
 Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop.
 
+#### Playable GUI game: Snake
+```bash
+indent examples/snake_game.ind       # play Snake in a native window (arrow keys)
+```
+Opens a playable Snake game in a WebKitGTK window, with an AI-generated tip from Ollama injected into the page. Test it automatically:
+```bash
+node tests/snake_logic_test.js       # validates game logic headlessly (5 tests)
+bash tests/gui_snake_test.sh         # opens the window, verifies render, closes it
+```
+
 ---
 
 ## Documentation
