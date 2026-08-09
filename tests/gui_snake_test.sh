@@ -15,7 +15,7 @@ INDENT_PID=$!
 GUIPID=""
 for i in $(seq 1 10); do
   sleep 1
-  GUIPID=$(pgrep -x indent-gui | head -1)
+  GUIPID=$(pgrep -x indent-ingame | head -1)
   if [ -n "$GUIPID" ]; then
     echo "  frame $i: WINDOW OPEN (pid $GUIPID)"
     break
@@ -36,8 +36,14 @@ else
   echo "  FAIL: window exited early"
 fi
 
-# Simulate the user closing the window
-kill -9 "$GUIPID" 2>/dev/null
+# Simulate the user closing the window: write a quit event to the IPC dir
+INGAME_DIR=$(ls -dt /tmp/ingame-* 2>/dev/null | head -1)
+if [ -n "$INGAME_DIR" ]; then
+  echo '{"type":"quit"}' >> "$INGAME_DIR/events.txt"
+  echo "  quit event written to $INGAME_DIR/events.txt"
+else
+  echo "  WARN: no ingame IPC dir found"
+fi
 sleep 1
 
 for i in 1 2 3 4 5; do
@@ -51,10 +57,10 @@ done
 echo "=== indent output ==="
 cat "$LOG"
 
-pkill -9 -x indent-gui 2>/dev/null
+pkill -9 -x indent-ingame 2>/dev/null
 pkill -9 -x indent 2>/dev/null
 
-if grep -q "thanks for playing" "$LOG" || grep -q "opened" "$LOG"; then
+if grep -q "Snake finished" "$LOG"; then
   echo ""
   echo "FINAL: GUI SNAKE TEST PASSED"
   exit 0

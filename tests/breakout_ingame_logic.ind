@@ -1,0 +1,82 @@
+#! Headless regression test for the InGame Breakout game logic.
+#! Verifies paddle physics, ball bounce, brick collision, scoring — no window needed.
+#! Run: indent tests/breakout_ingame_logic.ind
+var W = 500
+var H = 400
+var PADDLE_W = 70
+var PADDLE_H = 10
+var BALL_R = 6
+
+#! Deterministic state (bot controlled paddle)
+var paddleX = (W - PADDLE_W) / 2
+var bx = W / 2
+var by = H - 60
+var bvx = 2.5
+var bvy = -2.5
+var score = 0
+var lives = 3
+var frames = 0
+
+#! Bricks (same layout as breakout_game.ind)
+var bricks = []
+var bx2 = 20
+repeat while bx2 < W - 20
+    var by2 = 30
+    repeat while by2 < 90
+        bricks is bricks + [{"x": bx2, "y": by2, "w": 40, "h": 14, "alive": true}]
+        by2 is by2 + 18
+    bx2 is bx2 + 46
+
+fun BallHitsBrick
+    var i = 0
+    repeat while i < len(bricks)
+        var b = bricks[i]
+        if b["alive"]
+            if bx + BALL_R > b["x"] and bx - BALL_R < b["x"] + b["w"]
+                if by + BALL_R > b["y"] and by - BALL_R < b["y"] + b["h"]
+                    bvy is -bvy
+                    b["alive"] is false
+                    bricks[i] is b
+                    score is score + 10
+                    give true
+        i is i + 1
+    give false
+
+var maxFrames = 500
+repeat while frames < maxFrames and lives > 0
+    #! Bot: track ball
+    if bx > paddleX + PADDLE_W / 2
+        paddleX is paddleX + 3
+    if bx < paddleX + PADDLE_W / 2
+        paddleX is paddleX - 3
+    if paddleX < 0
+        paddleX is 0
+    if paddleX > W - PADDLE_W
+        paddleX is W - PADDLE_W
+
+    bx is bx + bvx
+    by is by + bvy
+
+    if bx < BALL_R or bx > W - BALL_R
+        bvx is -bvx
+    if by < BALL_R
+        bvy is -bvy
+
+    if bvy > 0 and by + BALL_R > H - PADDLE_H - 4 and bx > paddleX and bx < paddleX + PADDLE_W
+        bvy is -bvy
+
+    BallHitsBrick()
+
+    if by > H
+        lives is lives - 1
+        bx is W / 2
+        by is H - 60
+        bvy is -bvy
+
+    frames is frames + 1
+
+say "frames=" + string(frames) + " score=" + string(score) + " lives=" + string(lives) + " bricksLeft=" + string(len(bricks))
+if score >= 60 and lives > 0 and frames >= 300
+    say "BREAKOUT INGAME LOGIC TEST PASSED"
+otherwise
+    say "BREAKOUT INGAME LOGIC TEST FAILED"

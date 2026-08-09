@@ -1,63 +1,87 @@
 #! ingame.ind
 #! InGame — PyGame-style 2D game framework for Indent.
 #!
-#! All game logic lives in Indent; a native window renders frames and reports
-#! input. Usage:
+#! Mirrors PyGame's API so game logic is written entirely in Indent:
+#!   init / display.set_mode / display.set_caption / display.flip
+#!   draw.rect / draw.circle / draw.line / draw.polygon / draw.text
+#!   event.get / key.get_pressed / mouse.get_pos
+#!   time.Clock / time.Clock.tick / quit
 #!
+#! Example:
 #!   get Init from ingame
-#!   get Clear from ingame
-#!   get Rect from ingame
-#!   get Circle from ingame
-#!   get Text from ingame
-#!   get Present from ingame
-#!   get Events from ingame
+#!   get SetMode from ingame
+#!   get DrawRect from ingame
+#!   get Flip from ingame
+#!   get GetEvents from ingame
 #!   get Quit from ingame
 #!
-#!   var game = Init(400, 400, "My Game")
+#!   Init()
+#!   var screen = SetMode(400, 400, "My Game")
 #!   repeat while running
-#!       for each event in Events() -> handle keys
-#!       Clear "#000000"
-#!       Rect x y w h "#39d353"
-#!       Text x y "Score: 10" "#ffffff" 14
-#!       Present "#000000"     #! flush frame to the window
-#!       time_sleep 0.05       #! ~20 fps
+#!       var events = GetEvents()
+#!       repeat e in events
+#!           if e["type"] == "quit"
+#!               running is false
+#!       DrawRect 10 10 50 50 "#39d353"
+#!       Flip "#000000"          #! draw + present frame
+#!       Tick 60                 #! ~60 fps
 
 #! --- Internal state ---
 var _workdir = ""
 var _shapes = []
 
-#! --- Initialize: spawn the native window and prep IPC files ---
-fun Init width height title
+#! --- pygame.init() — nothing to init (state is lazy) ---
+fun Init
+    give true
+
+#! --- pygame.display.set_mode(w, h, [title]) — spawn the native window ---
+fun SetMode width height title
     var dir = "/tmp/ingame-" + uuid()
     os_mkdir dir
     _workdir is dir
     file_write_text(dir + "/frame.json", "{\"clear\":\"#000000\",\"shapes\":[]}")
     file_write_text(dir + "/events.txt", "")
+    file_write_text(dir + "/keys.txt", "[]")
+    file_write_text(dir + "/mouse.txt", "[0,0]")
     var cmd = "indent-ingame " + dir + " \"" + title + "\" " + string(width) + " " + string(height) + " >/dev/null 2>&1 &"
     os_system cmd
     give dir
 
-#! --- Frame building ---
-fun Clear color
-    _shapes is []
+#! --- pygame.display.set_caption(title) — alias kept; title set at SetMode ---
+fun SetCaption title
+    give empty
 
-fun Rect x y w h color
+#! --- pygame.draw.rect ---
+fun DrawRect x y w h color
     _shapes is _shapes + [{"t": "rect", "x": x, "y": y, "w": w, "h": h, "c": color}]
 
-fun Circle cx cy r color
+#! --- pygame.draw.circle ---
+fun DrawCircle cx cy r color
     _shapes is _shapes + [{"t": "circle", "cx": cx, "cy": cy, "r": r, "c": color}]
 
-fun Text x y text color size
+#! --- pygame.draw.line ---
+fun DrawLine x1 y1 x2 y2 color width
+    _shapes is _shapes + [{"t": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "c": color, "w": width}]
+
+#! --- pygame.draw.polygon (points = list of [x, y]) ---
+fun DrawPolygon points color
+    _shapes is _shapes + [{"t": "polygon", "pts": points, "c": color}]
+
+#! --- pygame.font text ---
+fun DrawText x y text color size
     _shapes is _shapes + [{"t": "text", "x": x, "y": y, "s": text, "c": color, "size": size}]
 
-#! --- Flush the current frame to the window ---
-fun Present clear
+#! --- pygame.display.flip — flush frame to the window ---
+fun Flip clear
     var frame = {"clear": clear, "shapes": _shapes}
     file_write_text(_workdir + "/frame.json", json_dumps(frame))
+    _shapes is []
 
-#! --- Read (and clear) input events. Returns a list of dicts like
-#!    {"key":"ArrowUp","down":true} or {"type":"quit"} ---
-fun Events
+#! --- pygame.event.get — read + clear input events ---
+#! pygame.event.get — read + clear input events.
+#! Normalizes each event so it always has a "type": quit / keydown / keyup /
+#! mousemove / mousedown / mouseup. Key events get "key" (name) and "down" (bool).
+fun GetEvents
     var path = _workdir + "/events.txt"
     if not os_exists(path)
         give []
@@ -69,13 +93,92 @@ fun Events
     var lines = split(content, "\n")
     repeat line in lines
         if len(trim(line)) > 0
-            out is out + [json_loads(line)]
+            var e = json_loads(line)
+            if not has_key(e, "type")
+                if has_key(e, "key")
+                    if e["down"] == true
+                        e["type"] is "keydown"
+                    otherwise
+                        e["type"] is "keyup"
+                or has_key(e, "mousemove")
+                    e["type"] is "mousemove"
+                or has_key(e, "mousedown")
+                    e["type"] is "mousedown"
+                or has_key(e, "mouseup")
+                    e["type"] is "mouseup"
+                otherwise
+                    e["type"] is "other"
+            out is out + [e]
     give out
 
-#! --- Signal the window to close ---
+#! --- pygame.key.get_pressed — list of currently held keys ---
+fun GetKeys
+    var path = _workdir + "/keys.txt"
+    if not os_exists(path)
+        give []
+    do:
+        give json_loads(file_read_text(path))
+    catch as e:
+        give []
+
+#! --- pygame.mouse.get_pos — [x, y] ---
+fun GetMouse
+    var path = _workdir + "/mouse.txt"
+    if not os_exists(path)
+        give [0, 0]
+    do:
+        give json_loads(file_read_text(path))
+    catch as e:
+        give [0, 0]
+
+#! --- pygame.time.Clock.tick(fps) — sleep to target frame rate ---
+var _lastTick = 0
+fun Tick fps
+    var now = time_perf_counter()
+    var target = div_int 1000000 fps
+    if _lastTick > 0
+        var elapsed = now - _lastTick
+        var remaining = target - elapsed
+        if remaining > 0
+            time_sleep(remaining / 1000000)
+    _lastTick is now
+    give empty
+
+#! --- pygame.quit() — close the window ---
 fun Quit
     if len(_workdir) == 0
         give empty
     file_write_text(_workdir + "/quit.flag", "quit")
     os_system("pkill -f " + _workdir + " 2>/dev/null")
     give empty
+
+#! --- Compatibility aliases (older snake used these names) ---
+fun Clear color
+    _shapes is []
+
+fun Rect x y w h color
+    DrawRect x y w h color
+
+fun Circle cx cy r color
+    DrawCircle cx cy r color
+
+fun Line x1 y1 x2 y2 color width
+    DrawLine x1 y1 x2 y2 color width
+
+fun Polygon points color
+    DrawPolygon points color
+
+fun Text x y text color size
+    DrawText x y text color size
+
+fun Present clear
+    Flip clear
+
+fun Events
+    give GetEvents()
+
+fun Keys
+    give GetKeys()
+
+fun Mouse
+    give GetMouse()

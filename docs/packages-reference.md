@@ -298,37 +298,52 @@ air install markdown yaml logger
 
 ## `ingame` — PyGame-style 2D game framework (v1.5.0)
 
-All game logic lives in Indent; a native window (WebKitGTK canvas) renders frames and reports input.
+**InGame** mirrors PyGame's API so games are written entirely in Indent — a native WebKitGTK canvas window (`indent-ingame`) just renders frames and reports input. All movement, collision, physics, scoring, and rendering logic lives in Indent.
 
-| Function | Description |
-|---|---|
-| `Init(w, h, title)` | Spawn the native window, prep IPC files, return workdir |
-| `Clear(color)` | Reset the current frame's shape list |
-| `Rect(x, y, w, h, color)` | Add a rectangle to the frame |
-| `Circle(cx, cy, r, color)` | Add a circle to the frame |
-| `Text(x, y, str, color, size)` | Add text to the frame |
-| `Present(clear)` | Flush the frame to the window |
-| `Events()` | Read + clear input events (list of `{"key","down"}` / `{"type":"quit"}`) |
-| `Quit()` | Close the window and exit |
+| Function | PyGame equivalent | Description |
+|---|---|---|
+| `Init()` | `pygame.init()` | Initialize (state is lazy; no-op) |
+| `SetMode(w, h, title)` | `pygame.display.set_mode()` | Spawn the native window, prep IPC files, return workdir |
+| `SetCaption(title)` | `pygame.display.set_caption()` | Window title (kept for compatibility; title is set at `SetMode`) |
+| `DrawRect(x, y, w, h, color)` | `pygame.draw.rect()` | Add a rectangle to the frame |
+| `DrawCircle(cx, cy, r, color)` | `pygame.draw.circle()` | Add a circle to the frame |
+| `DrawLine(x1, y1, x2, y2, color, w)` | `pygame.draw.line()` | Add a line to the frame |
+| `DrawPolygon(points, color)` | `pygame.draw.polygon()` | Add a polygon (`points` = list of `[x, y]`) |
+| `DrawText(x, y, str, color, size)` | `pygame.font` | Add text to the frame |
+| `Flip(clear)` | `pygame.display.flip()` | Flush the frame to the window and reset shapes |
+| `GetEvents()` | `pygame.event.get()` | Read + clear events; each has a `"type"`: `quit` / `keydown` / `keyup` / `mousemove` / `mousedown` / `mouseup` |
+| `GetKeys()` | `pygame.key.get_pressed()` | List of currently held key names |
+| `GetMouse()` | `pygame.mouse.get_pos()` | `[x, y]` mouse position |
+| `Tick(fps)` | `pygame.time.Clock.tick()` | Sleep to target frame rate |
+| `Quit()` | `pygame.quit()` | Close the window and exit |
+
+Compatibility aliases are kept: `Clear`, `Rect`, `Circle`, `Line`, `Polygon`, `Text`, `Present`, `Events`, `Keys`, `Mouse`.
 
 ```indent
 get Init from ingame
-get Rect from ingame
-get Present from ingame
-get Events from ingame
+get SetMode from ingame
+get DrawRect from ingame
+get DrawCircle from ingame
+get Flip from ingame
+get GetEvents from ingame
+get Quit from ingame
 
-var win = Init(400, 400, "My Game")
+Init()
+var win = SetMode(400, 400, "My Game")
 repeat while running
-    repeat e in Events()
+    repeat e in GetEvents()
         if e["type"] == "quit"
             running is false
-    Rect 10 10 50 50 "#39d353"
-    Present "#000000"
+        if e["type"] == "keydown"
+            #! handle key
+    DrawRect 10 10 50 50 "#39d353"
+    DrawCircle 200 200 20 "#f85149"
+    Flip "#000000"          #! clear color = background
     time_sleep 0.05
 Quit()
 ```
 
-Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + gtk3 + webkit2gtk). See `examples/snake_game.ind` for a complete game.
+Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + gtk3 + webkit2gtk). See `examples/snake_game.ind` and `examples/breakout_game.ind` for complete games.
 
 ## Web & More
 

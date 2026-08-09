@@ -163,19 +163,29 @@ say data["response"]    # → "The answer to 2+2 is 4."
 Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, `python_run_file`).
 
 ### InGame — PyGame-style games in pure Indent
-[`std/ingame.ind`](std/ingame.ind) is a native 2D game framework: **all game logic lives in Indent** (movement, collision, scoring, rendering), while a native window just draws frames and reports input — just like PyGame but in Indent.
+[`std/ingame.ind`](std/ingame.ind) is a native 2D game framework that **mirrors PyGame's API**: `Init` (init), `SetMode` (display.set_mode), `DrawRect`/`DrawCircle`/`DrawLine`/`DrawPolygon`/`DrawText` (draw.*), `Flip` (display.flip), `GetEvents` (event.get), `GetKeys` (key.get_pressed), `GetMouse` (mouse.get_pos), `Tick` (time.Clock.tick), `Quit`. **All game logic lives in Indent** (movement, collision, physics, scoring, rendering); a native window just draws frames and reports input — like PyGame, but entirely in Indent.
 ```indent
 get Init from ingame
-get Rect from ingame
-get Present from ingame
-get Events from ingame
+get SetMode from ingame
+get DrawRect from ingame
+get DrawCircle from ingame
+get Flip from ingame
+get GetEvents from ingame
+get Quit from ingame
 
-var win = Init(400, 400, "My Game")
+Init()
+var win = SetMode(400, 400, "My Game")   #! display.set_mode
 repeat while running
-    repeat e in Events()          #! arrow keys, quit
-        ...
-    Rect x y w h "#39d353"        #! draw
-    Present "#000000"             #! flush frame
+    repeat e in GetEvents()              #! event.get
+        if e["type"] == "quit"
+            running is false
+        if e["type"] == "keydown"
+            ...
+    DrawRect x y w h "#39d353"           #! draw.rect
+    DrawCircle cx cy r "#f85149"         #! draw.circle
+    Flip "#000000"                       #! display.flip (flush frame)
+    Tick 60                              #! ~60 fps
+Quit()
 ```
 Works via `indent-ingame` (a native WebKitGTK canvas helper, built by `install.sh`). `air install ingame` also works.
 
@@ -186,8 +196,15 @@ INDENT_SNAKE_BOT=1 indent examples/snake_game.ind   # auto-play bot
 ```
 Snake is written 100% in Indent using InGame — the bot AI, wall/self collision, growth, and scoring are all Indent logic. `INDENT_SNAKE_BOT=1` makes it play itself (verified: scores 80, snake grows to 11 segments).
 
+#### Playable GUI game: Breakout
+```bash
+indent examples/breakout_game.ind              # play (arrow keys)
+INDENT_BREAKOUT_BOT=1 indent examples/breakout_game.ind   # auto-play bot
+```
+Breakout is written 100% in Indent: paddle physics, ball bounce, brick collision, scoring, and HUD all in Indent. The bot autoplay verifies the full loop headlessly.
+
 ### Examples
-Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop, InGame Snake.
+Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop, InGame Snake, InGame Breakout.
 
 ---
 

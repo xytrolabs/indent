@@ -1,17 +1,25 @@
 /*
  * indent-ingame — native canvas game window for Indent's InGame framework.
  *
- * Indent drives a game loop and writes each frame as JSON to <workdir>/frame.json:
+ * PyGame-style: Indent drives the game loop; this window draws JSON frames
+ * and reports input.
+ *
+ * Indent writes each frame to <workdir>/frame.json:
  *   {"clear":"#000000","shapes":[
  *     {"t":"rect","x":0,"y":0,"w":20,"h":20,"c":"#39d353"},
  *     {"t":"circle","cx":10,"cy":10,"r":5,"c":"#f85149"},
+ *     {"t":"line","x1":0,"y1":0,"x2":100,"y2":100,"c":"#58a6ff","w":2},
+ *     {"t":"polygon","pts":[[0,0],[10,0],[5,10]],"c":"#d29922"},
  *     {"t":"text","x":4,"y":12,"s":"Score: 10","c":"#fff","size":14}]}
  *
- * This helper polls frame.json; on change it renders the frame to a canvas via
- * a WebKitGTK JS bridge. Keyboard input is appended as JSON lines to
- * <workdir>/events.txt:
+ * This helper polls frame.json; on change it renders via a WebKitGTK JS bridge.
+ * Input is reported to <workdir>/events.txt as JSON lines:
  *   {"key":"ArrowUp","down":true}
+ *   {"mousemove":true,"x":123,"y":45}
+ *   {"mousedown":true,"button":1,"x":123,"y":45}
  *   {"type":"quit"}
+ * Current held-key state is written to <workdir>/keys.txt (JSON list) and the
+ * mouse position to <workdir>/mouse.txt (JSON [x, y]) on every change.
  *
  * Usage: indent-ingame <workdir> <title> <width> <height>
  */
@@ -22,11 +30,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 
 static char *workdir = NULL;
 static GtkWidget *webview = NULL;
 static char *last_frame = NULL;
+static GHashTable *pressed = NULL;   // keyval -> gpointer
+static int mouse_x = 0, mouse_y = 0;
+static guint mouse_buttons = 0;
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "r");
@@ -49,6 +59,37 @@ static void append_event(const char *line) {
     FILE *f = fopen(path, "a");
     if (!f) return;
     fputs(line, f);
+    fclose(f);
+}
+
+static void write_keys(void) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/keys.txt", workdir);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fputs("[", f);
+    GList *keys = g_hash_table_get_keys(pressed);
+    GList *it = keys;
+    int first = 1;
+    while (it) {
+        if (!first) fputs(",", f);
+        fputs("\"", f);
+        fputs((char *)it->data, f);
+        fputs("\"", f);
+        first = 0;
+        it = it->next;
+    }
+    fputs("]", f);
+    fclose(f);
+    g_list_free(keys);
+}
+
+static void write_mouse(void) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/mouse.txt", workdir);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "[%d,%d]", mouse_x, mouse_y);
     fclose(f);
 }
 
@@ -78,6 +119,10 @@ static const char *key_name(guint keyval) {
 static gboolean on_key_press(GtkWidget *w, GdkEventKey *e, gpointer d) {
     const char *kn = key_name(e->keyval);
     if (kn) {
+        if (!g_hash_table_contains(pressed, kn)) {
+            g_hash_table_add(pressed, g_strdup(kn));
+            write_keys();
+        }
         char line[512];
         snprintf(line, sizeof line, "{\"key\":\"%s\",\"down\":true}\n", kn);
         append_event(line);
@@ -88,10 +133,38 @@ static gboolean on_key_press(GtkWidget *w, GdkEventKey *e, gpointer d) {
 static gboolean on_key_release(GtkWidget *w, GdkEventKey *e, gpointer d) {
     const char *kn = key_name(e->keyval);
     if (kn) {
+        if (g_hash_table_contains(pressed, kn)) {
+            g_hash_table_remove(pressed, kn);
+            write_keys();
+        }
         char line[512];
         snprintf(line, sizeof line, "{\"key\":\"%s\",\"down\":false}\n", kn);
         append_event(line);
     }
+    return FALSE;
+}
+
+static gboolean on_motion(GtkWidget *w, GdkEventMotion *e, gpointer d) {
+    mouse_x = (int)e->x;
+    mouse_y = (int)e->y;
+    write_mouse();
+    char line[512];
+    snprintf(line, sizeof line, "{\"mousemove\":true,\"x\":%d,\"y\":%d}\n", mouse_x, mouse_y);
+    append_event(line);
+    return FALSE;
+}
+
+static gboolean on_button(GtkWidget *w, GdkEventButton *e, gpointer d) {
+    mouse_x = (int)e->x;
+    mouse_y = (int)e->y;
+    write_mouse();
+    char line[512];
+    if (e->type == GDK_BUTTON_PRESS) {
+        snprintf(line, sizeof line, "{\"mousedown\":true,\"button\":%d,\"x\":%d,\"y\":%d}\n", e->button, mouse_x, mouse_y);
+    } else {
+        snprintf(line, sizeof line, "{\"mouseup\":true,\"button\":%d,\"x\":%d,\"y\":%d}\n", e->button, mouse_x, mouse_y);
+    }
+    append_event(line);
     return FALSE;
 }
 
@@ -109,8 +182,6 @@ static gboolean poll_frame(gpointer data) {
     if (frame) {
         int changed = (!last_frame) || strcmp(frame, last_frame) != 0;
         if (changed) {
-            // Pass the JSON object to the page's draw() function.
-            // JSON is valid JS, so wrap it as draw(<json>).
             GString *js = g_string_new("draw(");
             g_string_append(js, frame);
             g_string_append(js, ");");
@@ -124,14 +195,13 @@ static gboolean poll_frame(gpointer data) {
             free(frame);
         }
     }
-    return TRUE; // keep polling
+    return TRUE;
 }
 
 static void on_load_changed(WebKitWebView *wv, WebKitLoadEvent ev, gpointer d) {
-    // Start polling once the page is loaded.
     static guint timer_id = 0;
     if (ev == WEBKIT_LOAD_FINISHED && timer_id == 0) {
-        timer_id = g_timeout_add(33, poll_frame, NULL); // ~30 fps poll
+        timer_id = g_timeout_add(33, poll_frame, NULL);
     }
 }
 
@@ -145,6 +215,8 @@ int main(int argc, char **argv) {
     int width = atoi(argv[3]);
     int height = atoi(argv[4]);
 
+    pressed = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
     gtk_init(&argc, &argv);
 
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -153,11 +225,16 @@ int main(int argc, char **argv) {
     g_signal_connect(window, "destroy", G_CALLBACK(on_destroy), NULL);
     g_signal_connect(window, "key-press-event", G_CALLBACK(on_key_press), NULL);
     g_signal_connect(window, "key-release-event", G_CALLBACK(on_key_release), NULL);
+    g_signal_connect(window, "motion-notify-event", G_CALLBACK(on_motion), NULL);
+    g_signal_connect(window, "button-press-event", G_CALLBACK(on_button), NULL);
+    g_signal_connect(window, "button-release-event", G_CALLBACK(on_button), NULL);
+
+    gtk_widget_add_events(window, GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
 
     webview = webkit_web_view_new();
     gtk_container_add(GTK_CONTAINER(window), webview);
 
-    // Page with a canvas and a draw() function that renders Indent's frame JSON.
+    // Canvas page: draw() renders Indent's frame JSON (rect/circle/line/polygon/text).
     const char *page =
         "<!DOCTYPE html><html><body style='margin:0;background:#000'>"
         "<canvas id='c'></canvas>"
@@ -177,6 +254,12 @@ int main(int argc, char **argv) {
         "    if(s.t==='rect'){ctx.fillStyle=s.c;ctx.fillRect(s.x,s.y,s.w,s.h);}"
         "    else if(s.t==='circle'){ctx.fillStyle=s.c;ctx.beginPath();"
         "      ctx.arc(s.cx,s.cy,s.r,0,Math.PI*2);ctx.fill();}"
+        "    else if(s.t==='line'){ctx.strokeStyle=s.c;ctx.lineWidth=s.w||2;"
+        "      ctx.beginPath();ctx.moveTo(s.x1,s.y1);ctx.lineTo(s.x2,s.y2);ctx.stroke();}"
+        "    else if(s.t==='polygon'){ctx.fillStyle=s.c;ctx.beginPath();"
+        "      var p=s.pts;ctx.moveTo(p[0][0],p[0][1]);"
+        "      for(var k=1;k<p.length;k++){ctx.lineTo(p[k][0],p[k][1]);}"
+        "      ctx.closePath();ctx.fill();}"
         "    else if(s.t==='text'){ctx.fillStyle=s.c;"
         "      ctx.font=(s.size||14)+'px monospace';ctx.fillText(s.s,s.x,s.y);}"
         "  }"
