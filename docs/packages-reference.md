@@ -298,6 +298,8 @@ air install markdown yaml logger
 
 ## `ai` — AI assistant package (like Python's `openai` SDK) (v1.1)
 
+> Full guide: [`docs/ai-package.md`](ai-package.md)
+
 An **OpenAI-native** client that talks to *any* OpenAI-compatible API — works with **real OpenAI** *and* a **local Ollama** server (which exposes the same OpenAI API at `/v1`). Mirrors the OpenAI Python SDK surface: chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent.
 
 ```indent
@@ -354,6 +356,8 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins (n
 ---
 
 ## `ingame` — PyGame-style 2D game framework (v1.5.0)
+
+> Full guide: [`docs/ingame-package.md`](ingame-package.md)
 
 **InGame** mirrors PyGame's API so games are written entirely in Indent — a native WebKitGTK canvas window (`indent-ingame`) just renders frames and reports input. All movement, collision, physics, scoring, and rendering logic lives in Indent.
 
@@ -423,13 +427,23 @@ Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + g
 | `HexToRGB(hex)` / `RGBToHex(r,g,b)` | Conversion |
 
 ### `agame` — 2D game helpers
+> Full guide: [`docs/agame-package.md`](agame-package.md)
+
 | Function | Description |
 |---|---|
 | `Lerp` / `Clamp` / `Distance` / `Wrap` | Math |
 | `NewEntity` / `Move` / `Collides` | Entities |
 | `TileToWorld` / `WorldToTile` | Tile math |
 
-### `discord` — Discord bot library
+### `discord` — Discord bot library (v6.0)
+> Full guide: [`docs/discord-package.md`](discord-package.md)
+
 | Function | Description |
 |---|---|
-| (see `docs/discord-package.md`) | Bots, commands, slash commands |
+| `Bot` / `Command` / `Ready` / `Message` / `Start` | v6.0 production bot API (minimal boilerplate) |
+| `CtxSend` / `CtxReply` / `CtxEmbed` / `CtxEphemeral` | Ctx helpers |
+| `QuickBot` / `QuickStart` / `BotFromEnv` | Easy entry points |
+| `AddSlash` / `SyncSlash` / `SlashWithUser` | Slash commands |
+| `SetupAudit` / `Audit` | Audit log & monitoring |
+| `LoadPuzzles` / `RegisterCog` | Puzzle/cog system |
+| `Send` / `Kick` / `Ban` / `Timeout` / `AddRole` | REST actions |

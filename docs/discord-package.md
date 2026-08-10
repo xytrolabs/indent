@@ -1,9 +1,11 @@
-# discord.ind 3.0 — The Discord Bot Library for Indent
+# discord.ind 6.0 — The Discord Bot Library for Indent
 
 A standalone Discord library (like discord.py) providing REST API, WebSocket
 Gateway, command routing, event system, puzzle/cog loader, a discord.py-style
-`ctx` system, clean block-style helpers, **message monitoring, and a built-in
-audit log** (since 3.0).  Import it and write your bot.
+`ctx` system, clean block-style helpers, message monitoring, a built-in audit
+log, slash commands, permissions, modals, paginators, voice, **and a
+production-grade minimal-boilerplate Bot API (since 6.0)**. Import it and write
+your bot.
 
 > **Note**: Aether `.ath` files are the same language as Indent `.ind` — you can
 > just rename them.  `discord` is a single package available as `discord.ind`.
@@ -39,6 +41,84 @@ start bot
 
 ---
 
+## 🚀 v6.0 Bot API — the recommended way (minimal boilerplate)
+
+Discord 6.0 adds a production-grade Bot API: built-in `ping`/`help`, error
+handling, audit logging, health tracking, and slash+prefix commands — all
+registered through tiny `ctx`-based handlers.
+
+```indent
+get Bot from discord
+get Command from discord
+get Ready from discord
+get Message from discord
+get Start from discord
+get CtxSend from discord
+
+var bot dynamic = Bot "YOUR_TOKEN" "!"
+
+Command bot "ping" "Check latency" "onPing"     #! prefix + slash command
+Ready bot "onReady"
+Message bot "onMsg"
+
+fun onPing ctx
+    CtxSend ctx "Pong!"
+fun onReady bot
+    say "Online as " + bot.user.username
+fun onMsg bot msg
+    CtxSend msg "Got a message!"
+
+Start bot
+```
+
+### v6.0 registration functions (all return the modified bot — reassign)
+
+| Function | Params | Description |
+|---|---|---|
+| `Bot` | `token, prefix` | Create the bot: `QuickBot` + built-in `ping`/`help` + error handler + health timers. |
+| `Command` | `bot, name, desc, handlerName` | Register a **prefix + slash** command with a ctx handler. |
+| `Ready` | `bot, handlerName` | Register a READY handler. |
+| `Message` | `bot, handlerName` | Register a message handler. |
+| `Interaction` | `bot, handlerName` | Register an interaction (buttons/menus) handler. |
+| `MemberJoin` | `bot, handlerName` | Register a member-join handler. |
+| `MemberLeave` | `bot, handlerName` | Register a member-leave handler. |
+| `Audit` | `bot, channelId` | Enable the audit log (alias for `SetupAudit`). |
+| `Start` | `bot` | Sync slash commands then connect and run (blocking). |
+
+### v6.0 handler signatures
+
+| Registered by | Handler signature | Example |
+|---|---|---|
+| `Command bot "x" "d" "onPing"` | `fun onPing ctx` | `CtxSend ctx "Pong!"` |
+| `Ready bot "onReady"` | `fun onReady bot` | `say bot.user.username` |
+| `Message bot "onMsg"` | `fun onMsg bot msg` | `CtxSend msg "Hello!"` |
+| `Interaction bot "onBtn"` | `fun onBtn bot interaction` | `CtxSend interaction "Clicked!"` |
+| `MemberJoin bot "onJoin"` | `fun onJoin bot data` | (member-add payload) |
+| `MemberLeave bot "onLeave"` | `fun onLeave bot data` | (member-remove payload) |
+
+### Ctx helpers (available inside ctx-based handlers)
+
+| Function | Params | Description |
+|---|---|---|
+| `CtxSend` | `ctx, content` | Send to the ctx channel. |
+| `CtxReply` | `ctx, content` | Reply to the source (message or interaction). |
+| `CtxEmbed` | `ctx, embed` | Send an embed to the channel. |
+| `CtxEphemeral` | `ctx, content` | Ephemeral interaction reply. |
+| `CtxEdit` | `ctx, content` | Edit the original interaction response. |
+| `CtxUserId` | `ctx` | Author's user id. |
+| `CtxUserName` | `ctx` | Author's username. |
+| `CtxGuildId` | `ctx` | Guild id (empty in DMs). |
+| `CtxChannelId` | `ctx` | Channel id. |
+| `CtxIsInteraction` | `ctx` | True if the source is an interaction. |
+| `CtxAuthorMention` | `ctx` | `"<@id>"` mention. |
+| `CtxChannelMention` | `ctx` | `"<#id>"` mention. |
+| `CtxFollowup` | `ctx, content` | Interaction follow-up message. |
+| `CtxComponents` | `ctx, content, rows` | Send message with component rows. |
+| `CtxEphemeralComponents` | `ctx, content, rows` | Ephemeral reply with components. |
+| `CtxReplyEmbed` | `ctx, embed` | Embed reply. |
+
+---
+
 ## 0. The Absolute Easiest Bot (2 lines)
 
 Put `DISCORD_TOKEN="..."` in a `.glo` file, put any `command "name" "desc" "reply"`
@@ -67,6 +147,11 @@ see the Ctx System in section 4b — handlers are just `fun name ctx args`.
 
 | Task | Function | Signature |
 |---|---|---|
+| **v6.0 production bot** | `Bot` + `Command`/`Ready`/`Message` + `Start` ★ | `Bot token prefix` |
+| Register v6.0 command (prefix+slash) | `Command` ★ | `bot, name, desc, handlerName` |
+| Register v6.0 event | `Ready` / `Message` / `Interaction` / `MemberJoin` / `MemberLeave` ★ | `bot, handlerName` |
+| Enable audit log | `Audit` ★ | `bot, channelId` |
+| Ctx reply | `CtxSend` ★ | `ctx, content` |
 | Easiest bot (env + puzzles) | `QuickStart` ★ | `()` |
 | Create bot from env | `MakeBot` / `BotFromEnv` ★ | `→ bot dict` |
 | Create bot | `NewBot` | `token, prefix → bot dict` |

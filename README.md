@@ -224,7 +224,17 @@ Working programs in [`examples/`](examples/): AI package demo (`ai_pkg.ind`), AI
 | [`docs/builtins-reference.md`](docs/builtins-reference.md) | All built-in functions |
 | [`docs/learn/01-quickstart.md`](docs/learn/01-quickstart.md) | 15-minute quickstart |
 | [`docs/learn/COURSE_INDEX.md`](docs/learn/COURSE_INDEX.md) | Full course (11 lessons) |
+| [`docs/packages-reference.md`](docs/packages-reference.md) | Registry package reference |
 | [`CHANGELOG.md`](CHANGELOG.md) | Version history |
+
+### First-party package docs (Xytro-maintained)
+
+| Package | Doc | What |
+|---|---|---|
+| `discord` | [`docs/discord-package.md`](docs/discord-package.md) | Discord bot library (v6.0) |
+| `ai` | [`docs/ai-package.md`](docs/ai-package.md) | OpenAI-native AI assistant |
+| `ingame` | [`docs/ingame-package.md`](docs/ingame-package.md) | PyGame-style 2D game framework |
+| `agame` | [`docs/agame-package.md`](docs/agame-package.md) | 2D game helper math/entities |
 
 ---
 
