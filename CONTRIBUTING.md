@@ -27,7 +27,7 @@ HTTP helpers, game frameworks, Discord bots, CLI tools, etc.
 
 ### How to submit
 
-1. Join the [Indent Discord](https://discord.gg/pG7aCwCy44)
+1. Join the [Xytro Discord](https://discord.gg/pG7aCwCy44)
 2. Share your package idea or code in `#contributions`
 3. We'll review it and add it to the registry
 
