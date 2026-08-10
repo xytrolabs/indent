@@ -35,6 +35,15 @@ Dedicated reference docs for every first-party package (linked from `docs/packag
 - `docs/discord-package.md` — updated to **v6.0**: new production Bot API (`Bot`/`Command`/`Ready`/`Message`/`Start`), ctx helpers, handler signatures, refreshed Quick Reference
 - Registry `discord` package synced to v6.0 (was 3.0) — xytrolabs/air 5b4b02e
 
+### 🛡️ `ai` package → v1.2 robust (never crashes on transient errors)
+Hardened after a 5000-iteration API loop (`api.sh`) crashed on intermittent server errors (`Dictionary key not found: choices`, `json_loads failed`):
+- Safe `_PostJson`/`_GetJson` helpers — check HTTP ok/status, catch connection errors, parse JSON defensively (`do/catch`), never throw
+- All calls (`Chat`/`Ask`/`Embed`/`EmbedMany`/`Models`/`Search`) guard indexing with `has_key` and return `empty`/`[]` gracefully on failure
+- Automatic retry with backoff — `SetRetries(n)` (default 2)
+- Diagnostics — `GetLastError()` / `GetLastStatus()` / `WasError()`
+- Fixed `Models()` to use GET `/models` (was POST → 405)
+- Verified: success, 404 model error, connection failure, empty body, 20-call stress test, and the real remote (`ai.xytro.site`) all handled without crashing
+
 ### 🤖 `ai` package → v1.1 OpenAI-native (works with real OpenAI)
 The `ai` package now uses the **native OpenAI API format** (`POST /v1/chat/completions`, `/v1/embeddings`, `GET /v1/models`), which both real OpenAI and a local Ollama (at `/v1`) speak — so the same code hits either:
 - `AI.SetBase("https://api.openai.com/v1")` + `AI.SetApiKey("sk-...")` → **real OpenAI**

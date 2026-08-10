@@ -5,6 +5,12 @@ works with **real OpenAI** *and* a **local Ollama** server (which exposes the
 same OpenAI API at `/v1`). Chat completions, embeddings, model listing, cosine
 similarity, and semantic search — all in pure Indent, no Python needed.
 
+> **🛡️ Robust (v1.2)**: never crashes on transient server errors. Every call
+> checks the HTTP response, parses JSON defensively, guards indexing, retries
+> with backoff, and returns `empty`/`[]` gracefully on failure instead of
+> throwing. Inspect failures with `GetLastError()` / `GetLastStatus()` /
+> `WasError()`, or configure retries with `SetRetries(n)`.
+
 > Install: `air install ai` — import with `get ai as AI` (namespace, `AI.Chat`)
 > or per-function: `get Chat from ai`.
 
@@ -33,6 +39,10 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 | `SetDefaultModel` | `name` | Default chat model (default `qwen2.5:0.5b`). |
 | `SetDefaultEmbedModel` | `name` | Default embedding model (default `nomic-embed-text`). |
 | `GetBase` | — | Return the current base URL. |
+| `SetRetries(n)` | `int` | Retry a failed request up to `n` times with backoff (default 2; 0 disables). |
+| `GetLastError()` | — | Last error message (`""` = success). |
+| `GetLastStatus()` | — | Last HTTP status (0 = no response). |
+| `WasError()` | — | True if the most recent call failed. |
 
 ---
 
@@ -94,8 +104,21 @@ repeat pair in ranked
   (768-dim embeddings) work out of the box, no key needed.
 - **Real OpenAI**: `SetBase("https://api.openai.com/v1")` + `SetApiKey("sk-...")`.
   Model names like `gpt-4o-mini`, `text-embedding-3-small`.
-- **Errors**: on a bad request the underlying HTTP call still returns
-  `{"ok","status","body"}`; parse the JSON body for the API error message.
+- **Errors never crash the program.** `Chat`/`Ask` return `empty`, `Embed`/
+  `EmbedMany`/`Models`/`Search` return `[]`, and `Similarity` returns `0` when a
+  request fails. Check `WasError()` / `GetLastError()` to see what happened, or
+  rely on the automatic retry (`SetRetries n`) to ride out transient blips
+  (rate limits, model reloads, connection resets).
+
+```indent
+get ai as AI
+var reply = AI.Chat("xael-nano", [{"role":"user","content":"hi"}])
+if AI.WasError()
+    say "AI call failed: " + AI.GetLastError() + " (status " + string(AI.GetLastStatus()) + ")"
+otherwise
+    say reply
+```
+
 - See also: `examples/ai_openai_api.ind`, `examples/ai_pkg.ind`, and the
   low-level `http_get` / `http_post_json` / `http_put_json` / `http_patch_json`
   / `http_delete` builtins for calling any REST API directly.

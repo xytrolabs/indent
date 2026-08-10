@@ -296,11 +296,11 @@ air install markdown yaml logger
 ---
 
 
-## `ai` — AI assistant package (like Python's `openai` SDK) (v1.1)
+## `ai` — AI assistant package (like Python's `openai` SDK) (v1.2)
 
 > Full guide: [`docs/ai-package.md`](ai-package.md)
 
-An **OpenAI-native** client that talks to *any* OpenAI-compatible API — works with **real OpenAI** *and* a **local Ollama** server (which exposes the same OpenAI API at `/v1`). Mirrors the OpenAI Python SDK surface: chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent.
+An **OpenAI-native** client that talks to *any* OpenAI-compatible API — works with **real OpenAI** *and* a **local Ollama** server (which exposes the same OpenAI API at `/v1`). Mirrors the OpenAI Python SDK surface: chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent. **Robust (v1.2): never crashes on transient errors — retries with backoff and exposes `GetLastError()`/`GetLastStatus()`/`WasError()`.**
 
 ```indent
 get ai as AI
@@ -327,6 +327,10 @@ var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
 | `SetDefaultModel(name)` | client config | Default chat model (default `qwen2.5:0.5b`) |
 | `SetDefaultEmbedModel(name)` | client config | Default embedding model (default `nomic-embed-text`) |
 | `GetBase()` | — | Return the current base URL |
+| `SetRetries(n)` | — | Retry failed requests `n` times with backoff (default 2) |
+| `GetLastError()` | — | Last error message (`""` = success) |
+| `GetLastStatus()` | — | Last HTTP status (0 = no response) |
+| `WasError()` | — | True if the last call failed |
 
 Two import styles — dot-call namespace or per-function:
 ```indent

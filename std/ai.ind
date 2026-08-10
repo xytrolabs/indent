@@ -1,11 +1,18 @@
 #! =============================================================================
-#! ai.ind 1.1 — OpenAI-native AI assistant package for Indent
+#! ai.ind 1.2 — OpenAI-native AI assistant package for Indent
 #! =============================================================================
 #!
 #! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
 #! Ollama server (which exposes the same OpenAI API at /v1):
 #!   - Local Ollama:  SetBase("http://localhost:11434/v1")  (no key needed)
 #!   - Real OpenAI:   SetBase("https://api.openai.com/v1") + SetApiKey("sk-...")
+#!
+#! v1.2: ROBUST — never crashes on transient server errors. Every call:
+#!   - checks the HTTP response (ok / status)
+#!   - parses JSON defensively (do/catch)
+#!   - guards all indexing with has_key
+#!   - retries with backoff (SetRetries)
+#!   - records the last error (GetLastError) and returns empty on failure
 #!
 #! Mirror of the OpenAI Python SDK surface, adapted for Indent:
 #!   Chat      → openai client.chat.completions.create
@@ -16,6 +23,7 @@
 #!   Similarity → cosine similarity between two embeddings
 #!   Search    → semantic search: rank docs by similarity to a query
 #!   SetBase / SetApiKey / SetDefaultModel / SetDefaultEmbedModel → config
+#!   SetRetries / SetTimeout / GetLastError / WasError → robustness
 #!
 #! Two import styles:
 #!   get ai as AI
@@ -29,6 +37,9 @@ var _base = "http://localhost:11434/v1"
 var _apiKey = ""
 var _defaultModel = "qwen2.5:0.5b"
 var _defaultEmbedModel = "nomic-embed-text"
+var _retries = 2
+var _lastError = ""
+var _lastStatus = 0
 
 #! --- client config (like openai.OpenAI(base_url=..., api_key=...)) ---
 fun SetBase url
@@ -46,59 +57,201 @@ fun SetDefaultEmbedModel name
 fun GetBase
     give _base
 
+#! How many times to retry a failed request (default 2). Set 0 to disable.
+fun SetRetries n
+    _retries is n
+
+#! Last error message from the most recent failed call ("" = success).
+fun GetLastError
+    give _lastError
+
+#! Last HTTP status code from the most recent call (0 = no response).
+fun GetLastStatus
+    give _lastStatus
+
+#! Was the most recent call an error?
+fun WasError
+    if len(_lastError) == 0
+        give false
+    give true
+
 #! Authorization header: empty when no key (local Ollama), else "Bearer <key>"
 fun AuthHeader
     if len(_apiKey) == 0
         give ""
     give "Bearer " + _apiKey
 
+#! --- internal: safe POST JSON with retry + error capture ---
+#! Returns {"ok", "status", "data"} where data is the parsed body (or empty).
+#! Never throws. On failure sets _lastError / _lastStatus.
+fun _PostJson path payload
+    var attempt = 0
+    var ok = false
+    var status = 0
+    var body = ""
+    var data = empty
+    repeat while attempt <= _retries and not ok
+        attempt is attempt + 1
+        var resp = empty
+        do:
+            resp is http_post_json(_base + path, payload, AuthHeader())
+        catch as e:
+            resp is empty
+        if type_of(resp) == "dict"
+            if has_key resp "ok"
+                ok is resp["ok"]
+            if has_key resp "status"
+                status is resp["status"]
+            if has_key resp "body"
+                body is resp["body"]
+        if ok
+            if len(body) == 0
+                ok is false
+                _lastError is "empty response body"
+            otherwise
+                var parsed = empty
+                do:
+                    parsed is json_loads(body)
+                catch as e:
+                    parsed is empty
+                    _lastError is "invalid JSON: " + string(e)
+                if type_of(parsed) == "dict"
+                    data is parsed
+                or type_of(parsed) == "list"
+                    data is parsed
+                otherwise
+                    ok is false
+        if not ok and attempt <= _retries
+            time_sleep(0.3 * attempt)
+    if not ok
+        if len(_lastError) == 0
+            _lastError is "request failed (status " + string(status) + ")"
+        _lastStatus is status
+        give {"ok": false, "status": status, "data": empty}
+    _lastError is ""
+    _lastStatus is status
+    give {"ok": true, "status": status, "data": data}
+
+#! --- internal: safe GET JSON with retry + error capture ---
+#! Same contract as _PostJson (never throws).
+fun _GetJson path
+    var attempt = 0
+    var ok = false
+    var status = 0
+    var body = ""
+    var data = empty
+    repeat while attempt <= _retries and not ok
+        attempt is attempt + 1
+        var resp = empty
+        do:
+            resp is http_get(_base + path, AuthHeader())
+        catch as e:
+            resp is empty
+        if type_of(resp) == "dict"
+            if has_key resp "ok"
+                ok is resp["ok"]
+            if has_key resp "status"
+                status is resp["status"]
+            if has_key resp "body"
+                body is resp["body"]
+        if ok
+            if len(body) == 0
+                ok is false
+                _lastError is "empty response body"
+            otherwise
+                var parsed = empty
+                do:
+                    parsed is json_loads(body)
+                catch as e:
+                    parsed is empty
+                    _lastError is "invalid JSON: " + string(e)
+                if type_of(parsed) == "dict"
+                    data is parsed
+                or type_of(parsed) == "list"
+                    data is parsed
+                otherwise
+                    ok is false
+        if not ok and attempt <= _retries
+            time_sleep(0.3 * attempt)
+    if not ok
+        if len(_lastError) == 0
+            _lastError is "request failed (status " + string(status) + ")"
+        _lastStatus is status
+        give {"ok": false, "status": status, "data": empty}
+    _lastError is ""
+    _lastStatus is status
+    give {"ok": true, "status": status, "data": data}
+
 #! --- openai client.models.list() ---
 fun Models
-    var resp = http_get(_base + "/models", AuthHeader())
-    var data = json_loads(resp["body"])
-    var out dynamic = []
-    repeat m in data["data"]
-        out is out + [m["id"]]
-    give out
+    var r = _GetJson("/models")
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "data"
+            var out dynamic = []
+            repeat m in data["data"]
+                if has_key m "id"
+                    out is out + [m["id"]]
+            give out
+    give []
 
 #! --- openai client.chat.completions.create(model, messages) ---
 #! messages = list of {"role":"user|assistant|system","content":"..."}
-#! Returns the assistant reply text (openai: choices[0].message.content).
+#! Returns the assistant reply text, or empty on error (see GetLastError).
 fun Chat model messages
     var payload = {"model": model, "messages": messages}
-    var resp = http_post_json(_base + "/chat/completions", payload, AuthHeader())
-    var data = json_loads(resp["body"])
-    give data["choices"][0]["message"]["content"]
+    var r = _PostJson("/chat/completions", payload)
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "choices"
+            var choices = data["choices"]
+            if len(choices) > 0
+                var first = choices[0]
+                if has_key first "message"
+                    var msg = first["message"]
+                    if has_key msg "content"
+                        give msg["content"]
+    give empty
 
 #! --- single-prompt chat completion ---
 fun Ask model prompt
     var msgs = [{"role": "user", "content": prompt}]
-    var payload = {"model": model, "messages": msgs}
-    var resp = http_post_json(_base + "/chat/completions", payload, AuthHeader())
-    var data = json_loads(resp["body"])
-    give data["choices"][0]["message"]["content"]
+    give Chat(model, msgs)
 
 #! --- openai client.embeddings.create(model, input) ---
-#! Single text → embedding vector (list of floats).
+#! Single text → embedding vector (list of floats), or [] on error.
 fun Embed model text
     var payload = {"model": model, "input": text}
-    var resp = http_post_json(_base + "/embeddings", payload, AuthHeader())
-    var data = json_loads(resp["body"])
-    give data["data"][0]["embedding"]
+    var r = _PostJson("/embeddings", payload)
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "data"
+            var rows = data["data"]
+            if len(rows) > 0
+                var first = rows[0]
+                if has_key first "embedding"
+                    give first["embedding"]
+    give []
 
 #! --- openai client.embeddings.create(model, input=[...]) ---
-#! Batch: list of texts → list of embedding vectors.
+#! Batch: list of texts → list of embedding vectors, or [] on error.
 fun EmbedMany model texts
     var payload = {"model": model, "input": texts}
-    var resp = http_post_json(_base + "/embeddings", payload, AuthHeader())
-    var data = json_loads(resp["body"])
-    var out dynamic = []
-    repeat item in data["data"]
-        out is out + [item["embedding"]]
-    give out
+    var r = _PostJson("/embeddings", payload)
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "data"
+            var out dynamic = []
+            repeat item in data["data"]
+                if has_key item "embedding"
+                    out is out + [item["embedding"]]
+            give out
+    give []
 
 #! --- cosine similarity between two embedding vectors ---
 fun Similarity a b
+    if len(a) == 0 or len(b) == 0
+        give 0
     var dot = 0
     var i = 0
     repeat while i < len(a)
@@ -117,12 +270,15 @@ fun Similarity a b
     give dot / denom
 
 #! --- semantic search: rank docs (list of strings) by similarity to query ---
-#! Returns list of [similarity, doc] sorted best-first.
+#! Returns list of [similarity, doc] sorted best-first, or [] on error.
 fun Search query docs
     var q = Embed(_defaultEmbedModel, query)
+    if len(q) == 0
+        give []
     var scored dynamic = []
     repeat d in docs
         var v = Embed(_defaultEmbedModel, d)
-        var sim = Similarity(q, v)
-        scored is scored + [[sim, d]]
+        if len(v) > 0
+            var sim = Similarity(q, v)
+            scored is scored + [[sim, d]]
     give reverse(sort(scored))
