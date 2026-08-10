@@ -1,6 +1,6 @@
 # Indent Package Registry — Reference
 
-> 47 packages available via the [AIR registry](https://github.com/xytrolabs/air).
+> 50 packages available via the [AIR registry](https://github.com/xytrolabs/air).
 > Install with `air install <package>`, then import with `get <Function> from <package>`.
 
 ```bash
@@ -295,6 +295,51 @@ air install markdown yaml logger
 
 ---
 
+
+## `ai` — AI assistant package (like Python's `openai` SDK) (v1.0)
+
+A clean client for local AI servers (Ollama by default at `http://localhost:11434`). Mirrors the OpenAI Python SDK surface, adapted for Indent — chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent.
+
+| Function | OpenAI SDK equivalent | Description |
+|---|---|---|
+| `Chat(model, messages)` | `client.chat.completions.create()` | Chat completion; `messages` = list of `{"role","content"}`; returns assistant reply text |
+| `Ask(model, prompt)` | `client.completions.create()` | Simple single-prompt completion; returns generated text |
+| `Embed(model, text)` | `client.embeddings.create()` | Single text → embedding vector (list of floats) |
+| `EmbedMany(model, texts)` | `client.embeddings.create()` | Batch: list of texts → list of vectors |
+| `Models()` | `client.models.list()` | List model names from the server |
+| `Similarity(a, b)` | — | Cosine similarity between two embeddings |
+| `Search(query, docs)` | — | Semantic search: rank `docs` by similarity to `query`, best-first |
+| `SetBase(url)` | `OpenAI(base_url=...)` | Set server base URL (default `http://localhost:11434`) |
+| `SetDefaultModel(name)` | client config | Default chat/generate model (default `qwen2.5:0.5b`) |
+| `SetDefaultEmbedModel(name)` | client config | Default embedding model (default `nomic-embed-text`) |
+| `GetBase()` | — | Return the current base URL |
+
+Two import styles — dot-call namespace or per-function:
+```indent
+#! Style 1: namespace (get ai as AI → AI.Chat)
+get ai as AI
+var reply = AI.Chat("qwen2.5:0.5b", [{"role":"user","content":"Hello"}])
+say reply
+
+#! Style 2: per-function import
+get Chat from ai
+get Embed from ai
+var reply2 = Chat("qwen2.5:0.5b", [{"role":"user","content":"2+2?"}])
+var vec = Embed("nomic-embed-text", "Indent programming")
+```
+
+Semantic search:
+```indent
+get ai as AI
+var docs = ["Python is a language", "Cats are pets"]
+var ranked = AI.Search("programming languages", docs)
+repeat pair in ranked
+    say string(pair[0]) + "  " + string(pair[1])   #! similarity + doc
+```
+
+Requires a local [Ollama](https://ollama.com) server. See `examples/ai_chat.ind` and `examples/ai_semantic_search.ind` for standalone programs (now simplified via this package).
+
+---
 
 ## `ingame` — PyGame-style 2D game framework (v1.5.0)
 

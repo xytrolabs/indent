@@ -132,7 +132,7 @@ get Write from fs          # file system
 Modules: `strings`, `math`, `collections`, `fs`, `json`, `os`, `io`, `time`, `datetime`, `random`, `regex`, `path`, `hash`, `base64`, `sys`, `testing`, `net`. Std functions are PascalCase so they never clash with the (lowercase) builtins.
 
 ### Package Manager (AIR)
-AIR is Indent's pip — install packages from the [registry](https://github.com/xytrolabs/air) (47 packages and growing):
+AIR is Indent's pip — install packages from the [registry](https://github.com/xytrolabs/air) (50 packages and growing):
 ```bash
 air install stats          # Install from registry
 air install slug           # Install another
@@ -143,7 +143,7 @@ air list                   # Show installed
 air info math              # Package details
 ```
 
-Popular packages: `stats`, `matrix`, `markdown`, `yaml`, `args`, `logger`, `url`, `cookie`, `slug`, `textwrap`, `diff`, `fraction`, `semver`, `asciitable`, `colors`, `agame`, `discord`. AIR auto-detects and installs `get X from Y` dependencies. Installed packages resolve automatically from `~/.local/share/indent/air-packages/`.
+Popular packages: `ai`, `stats`, `matrix`, `markdown`, `yaml`, `args`, `logger`, `url`, `cookie`, `slug`, `textwrap`, `diff`, `fraction`, `semver`, `asciitable`, `colors`, `agame`, `ingame`, `discord`. AIR auto-detects and installs `get X from Y` dependencies. Installed packages resolve automatically from `~/.local/share/indent/air-packages/`.
 
 ### GUI
 Indent can open native windows with `gui_show_html(html, [title], [w], [h])` — a WebKitGTK window rendering HTML:
@@ -153,13 +153,17 @@ gui_show_html("<h1>Hello</h1>", "My App", 800, 600)
 The `indent-gui` helper builds automatically during install (needs `gcc`, `gtk3`, `webkit2gtk`). See `indent-native/indent-gui.c`.
 
 ### AI
-Indent talks to Ollama over HTTP — chat, embeddings, and more, all natively:
+The `ai` package is like Python's `openai` SDK — a clean client for a local Ollama server (`air install ai`, then `get ai as AI`):
 ```indent
-var payload = {"model": "qwen2.5:0.5b", "prompt": "What is 2+2?", "stream": false}
-var resp = http_post_json("http://localhost:11434/api/generate", payload)
-var data = json_loads(resp["body"])
-say data["response"]    # → "The answer to 2+2 is 4."
+get ai as AI
+var reply = AI.Chat("qwen2.5:0.5b", [{"role":"user","content":"What is 2+2?"}])
+say reply                    # → "4"
+
+var vec = AI.Embed("nomic-embed-text", "Indent programming")   # → 768-dim vector
+var ranked = AI.Search("programming languages", docs)          # → semantic ranking
 ```
+Functions: `AI.Chat` (chat completions), `AI.Ask` (single prompt), `AI.Embed` / `AI.EmbedMany` (embeddings), `AI.Models` (list models), `AI.Similarity` (cosine), `AI.Search` (semantic search), plus `AI.SetBase` / `AI.SetDefaultModel` config. Under the hood it uses Indent's native HTTP — no Python needed. See `examples/ai_chat.ind`, `examples/ai_embeddings.ind`, `examples/ai_semantic_search.ind`.
+
 Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, `python_run_file`).
 
 ### InGame — PyGame-style games in pure Indent
@@ -204,7 +208,7 @@ INDENT_BREAKOUT_BOT=1 indent examples/breakout_game.ind   # auto-play bot
 Breakout is written 100% in Indent: paddle physics, ball bounce, brick collision, scoring, and HUD all in Indent. The bot autoplay verifies the full loop headlessly.
 
 ### Examples
-Working programs in [`examples/`](examples/): AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop, InGame Snake, InGame Breakout.
+Working programs in [`examples/`](examples/): AI package demo (`ai_pkg.ind`), AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop, InGame Snake, InGame Breakout.
 
 ---
 

@@ -12,6 +12,18 @@ New native 2D game framework that **mirrors PyGame's API**: all game logic lives
 - `examples/breakout_game.ind` — **NEW**: paddle physics, ball bounce, brick collision, scoring, HUD all in Indent. `INDENT_BREAKOUT_BOT=1` auto-plays (verified: 300 frames, score 50).
 - `air install ingame` — updated in the registry to the PyGame-style API (48 packages)
 
+### 🤖 `ai` package — Python `openai`-style SDK for Indent
+New registry package `std/ai.ind` — a clean client for a local Ollama server that mirrors the OpenAI Python SDK surface, all in pure Indent:
+- `AI.Chat(model, messages)` — chat completions (→ `client.chat.completions.create`)
+- `AI.Ask(model, prompt)` — single-prompt completion (→ `client.completions.create`)
+- `AI.Embed(model, text)` / `AI.EmbedMany(model, texts)` — embeddings (→ `client.embeddings.create`)
+- `AI.Models()` — list models (→ `client.models.list`)
+- `AI.Similarity(a, b)` — cosine similarity; `AI.Search(query, docs)` — semantic ranking
+- `AI.SetBase` / `AI.SetDefaultModel` / `AI.SetDefaultEmbedModel` — client config
+- Two import styles: `get ai as AI` (dot-call namespace) or `get Chat from ai` (per-function)
+- `air install ai` — added to the registry (50 packages). Verified live: chat, generate, single/batch embeddings, model listing, cosine similarity, and semantic ranking.
+- `examples/ai_pkg.ind` — demo of the full API
+
 ### 🐛 Bug fix: `and` / `or` now short-circuit
 `and`/`or` previously evaluated **both** operands eagerly, so guards like `e["type"] == "key" and e["down"] == true` errored on dicts lacking `down`. Now Python-style short-circuit: RHS is only evaluated when needed. Found via the InGame input loop. All 13 tests pass.
 
