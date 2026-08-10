@@ -296,21 +296,33 @@ air install markdown yaml logger
 ---
 
 
-## `ai` — AI assistant package (like Python's `openai` SDK) (v1.0)
+## `ai` — AI assistant package (like Python's `openai` SDK) (v1.1)
 
-A clean client for local AI servers (Ollama by default at `http://localhost:11434`). Mirrors the OpenAI Python SDK surface, adapted for Indent — chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent.
+An **OpenAI-native** client that talks to *any* OpenAI-compatible API — works with **real OpenAI** *and* a **local Ollama** server (which exposes the same OpenAI API at `/v1`). Mirrors the OpenAI Python SDK surface: chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent.
+
+```indent
+get ai as AI
+#! Local Ollama (default, no key):
+var reply = AI.Chat("qwen2.5:0.5b", [{"role":"user","content":"hi"}])
+
+#! Real OpenAI — just point base + key:
+AI.SetBase("https://api.openai.com/v1")
+AI.SetApiKey("sk-...")          #! from platform.openai.com
+var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
+```
 
 | Function | OpenAI SDK equivalent | Description |
 |---|---|---|
 | `Chat(model, messages)` | `client.chat.completions.create()` | Chat completion; `messages` = list of `{"role","content"}`; returns assistant reply text |
-| `Ask(model, prompt)` | `client.completions.create()` | Simple single-prompt completion; returns generated text |
+| `Ask(model, prompt)` | `client.completions.create()` | Single-prompt completion; returns generated text |
 | `Embed(model, text)` | `client.embeddings.create()` | Single text → embedding vector (list of floats) |
 | `EmbedMany(model, texts)` | `client.embeddings.create()` | Batch: list of texts → list of vectors |
 | `Models()` | `client.models.list()` | List model names from the server |
 | `Similarity(a, b)` | — | Cosine similarity between two embeddings |
 | `Search(query, docs)` | — | Semantic search: rank `docs` by similarity to `query`, best-first |
-| `SetBase(url)` | `OpenAI(base_url=...)` | Set server base URL (default `http://localhost:11434`) |
-| `SetDefaultModel(name)` | client config | Default chat/generate model (default `qwen2.5:0.5b`) |
+| `SetBase(url)` | `OpenAI(base_url=...)` | Set API base (default `http://localhost:11434/v1`) |
+| `SetApiKey(key)` | `OpenAI(api_key=...)` | Set `Authorization: Bearer <key>` (empty = no auth, for local Ollama) |
+| `SetDefaultModel(name)` | client config | Default chat model (default `qwen2.5:0.5b`) |
 | `SetDefaultEmbedModel(name)` | client config | Default embedding model (default `nomic-embed-text`) |
 | `GetBase()` | — | Return the current base URL |
 
@@ -337,7 +349,7 @@ repeat pair in ranked
     say string(pair[0]) + "  " + string(pair[1])   #! similarity + doc
 ```
 
-Requires a local [Ollama](https://ollama.com) server. See `examples/ai_chat.ind` and `examples/ai_semantic_search.ind` for standalone programs (now simplified via this package).
+Under the hood it uses Indent's native `http_post_json` / `http_get` builtins (no Python needed) — see `examples/ai_openai_api.ind` for both the package API and the raw low-level way to call any REST API. Local target: [Ollama](https://ollama.com) at `http://localhost:11434/v1`.
 
 ---
 

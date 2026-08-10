@@ -153,16 +153,19 @@ gui_show_html("<h1>Hello</h1>", "My App", 800, 600)
 The `indent-gui` helper builds automatically during install (needs `gcc`, `gtk3`, `webkit2gtk`). See `indent-native/indent-gui.c`.
 
 ### AI
-The `ai` package is like Python's `openai` SDK — a clean client for a local Ollama server (`air install ai`, then `get ai as AI`):
+The `ai` package is like Python's `openai` SDK — an OpenAI-native client that works with **real OpenAI** or a **local Ollama** server (`air install ai`, then `get ai as AI`):
 ```indent
 get ai as AI
+#! Local Ollama (default, no key):
 var reply = AI.Chat("qwen2.5:0.5b", [{"role":"user","content":"What is 2+2?"}])
 say reply                    # → "4"
 
-var vec = AI.Embed("nomic-embed-text", "Indent programming")   # → 768-dim vector
-var ranked = AI.Search("programming languages", docs)          # → semantic ranking
+#! Real OpenAI — same API, just point base + key:
+# AI.SetBase("https://api.openai.com/v1")
+# AI.SetApiKey("sk-...")
+# var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
 ```
-Functions: `AI.Chat` (chat completions), `AI.Ask` (single prompt), `AI.Embed` / `AI.EmbedMany` (embeddings), `AI.Models` (list models), `AI.Similarity` (cosine), `AI.Search` (semantic search), plus `AI.SetBase` / `AI.SetDefaultModel` config. Under the hood it uses Indent's native HTTP — no Python needed. See `examples/ai_chat.ind`, `examples/ai_embeddings.ind`, `examples/ai_semantic_search.ind`.
+Functions: `AI.Chat` (chat completions), `AI.Ask` (single prompt), `AI.Embed` / `AI.EmbedMany` (embeddings), `AI.Models` (list models), `AI.Similarity` (cosine), `AI.Search` (semantic search), plus `AI.SetBase` / `AI.SetApiKey` / `AI.SetDefaultModel` config. Under the hood it uses Indent's native `http_post_json` / `http_get` builtins — no Python needed. See `examples/ai_openai_api.ind` for the package API *and* the raw low-level way to call any REST API.
 
 Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, `python_run_file`).
 

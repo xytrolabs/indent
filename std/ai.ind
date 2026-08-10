@@ -1,17 +1,21 @@
 #! =============================================================================
-#! ai.ind 1.0 — The Indent AI assistant package (like Python's `openai` SDK)
+#! ai.ind 1.1 — OpenAI-native AI assistant package for Indent
 #! =============================================================================
 #!
-#! A clean client for local AI servers (Ollama by default). Mirror of the
-#! OpenAI Python SDK surface, adapted for Indent:
-#!   Chat    → openai client.chat.completions.create
-#!   Ask     → openai client.completions.create (single prompt)
-#!   Embed   → openai client.embeddings.create (single input)
+#! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
+#! Ollama server (which exposes the same OpenAI API at /v1):
+#!   - Local Ollama:  SetBase("http://localhost:11434/v1")  (no key needed)
+#!   - Real OpenAI:   SetBase("https://api.openai.com/v1") + SetApiKey("sk-...")
+#!
+#! Mirror of the OpenAI Python SDK surface, adapted for Indent:
+#!   Chat      → openai client.chat.completions.create
+#!   Ask       → openai client.chat.completions.create (single prompt)
+#!   Embed     → openai client.embeddings.create (single input)
 #!   EmbedMany → openai client.embeddings.create (batch input)
-#!   Models  → openai client.models.list
+#!   Models    → openai client.models.list
 #!   Similarity → cosine similarity between two embeddings
-#!   Search  → semantic search: rank docs by similarity to a query
-#!   SetBase / SetDefaultModel / SetDefaultEmbedModel → client config
+#!   Search    → semantic search: rank docs by similarity to a query
+#!   SetBase / SetApiKey / SetDefaultModel / SetDefaultEmbedModel → config
 #!
 #! Two import styles:
 #!   get ai as AI
@@ -19,18 +23,19 @@
 #!
 #!   get Chat from ai
 #!   var reply = Chat("qwen2.5:0.5b", [{"role":"user","content":"hi"}])
-#!
-#! Requires a local Ollama server (default http://localhost:11434).
-#! Models: qwen2.5:0.5b (chat/generate), nomic-embed-text (embeddings).
 
 #! --- Configuration (module-level state) ---
-var _base = "http://localhost:11434"
+var _base = "http://localhost:11434/v1"
+var _apiKey = ""
 var _defaultModel = "qwen2.5:0.5b"
 var _defaultEmbedModel = "nomic-embed-text"
 
 #! --- client config (like openai.OpenAI(base_url=..., api_key=...)) ---
 fun SetBase url
     _base is url
+
+fun SetApiKey key
+    _apiKey is key
 
 fun SetDefaultModel name
     _defaultModel is name
@@ -41,47 +46,56 @@ fun SetDefaultEmbedModel name
 fun GetBase
     give _base
 
+#! Authorization header: empty when no key (local Ollama), else "Bearer <key>"
+fun AuthHeader
+    if len(_apiKey) == 0
+        give ""
+    give "Bearer " + _apiKey
+
 #! --- openai client.models.list() ---
 fun Models
-    var resp = http_get(_base + "/api/tags")
+    var resp = http_get(_base + "/models", AuthHeader())
     var data = json_loads(resp["body"])
     var out dynamic = []
-    repeat m in data["models"]
-        out is out + [m["name"]]
+    repeat m in data["data"]
+        out is out + [m["id"]]
     give out
 
 #! --- openai client.chat.completions.create(model, messages) ---
 #! messages = list of {"role":"user|assistant|system","content":"..."}
 #! Returns the assistant reply text (openai: choices[0].message.content).
 fun Chat model messages
-    var payload = {"model": model, "messages": messages, "stream": false}
-    var resp = http_post_json(_base + "/api/chat", payload)
+    var payload = {"model": model, "messages": messages}
+    var resp = http_post_json(_base + "/chat/completions", payload, AuthHeader())
     var data = json_loads(resp["body"])
-    give data["message"]["content"]
+    give data["choices"][0]["message"]["content"]
 
-#! --- openai client.completions.create(model, prompt) ---
-#! Simple single-prompt completion; returns the generated text.
+#! --- single-prompt chat completion ---
 fun Ask model prompt
-    var payload = {"model": model, "prompt": prompt, "stream": false}
-    var resp = http_post_json(_base + "/api/generate", payload)
+    var msgs = [{"role": "user", "content": prompt}]
+    var payload = {"model": model, "messages": msgs}
+    var resp = http_post_json(_base + "/chat/completions", payload, AuthHeader())
     var data = json_loads(resp["body"])
-    give data["response"]
+    give data["choices"][0]["message"]["content"]
 
 #! --- openai client.embeddings.create(model, input) ---
 #! Single text → embedding vector (list of floats).
 fun Embed model text
-    var payload = {"model": model, "prompt": text}
-    var resp = http_post_json(_base + "/api/embeddings", payload)
+    var payload = {"model": model, "input": text}
+    var resp = http_post_json(_base + "/embeddings", payload, AuthHeader())
     var data = json_loads(resp["body"])
-    give data["embedding"]
+    give data["data"][0]["embedding"]
 
 #! --- openai client.embeddings.create(model, input=[...]) ---
 #! Batch: list of texts → list of embedding vectors.
 fun EmbedMany model texts
     var payload = {"model": model, "input": texts}
-    var resp = http_post_json(_base + "/api/embed", payload)
+    var resp = http_post_json(_base + "/embeddings", payload, AuthHeader())
     var data = json_loads(resp["body"])
-    give data["embeddings"]
+    var out dynamic = []
+    repeat item in data["data"]
+        out is out + [item["embedding"]]
+    give out
 
 #! --- cosine similarity between two embedding vectors ---
 fun Similarity a b
