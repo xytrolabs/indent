@@ -12,6 +12,21 @@ New native 2D game framework that **mirrors PyGame's API**: all game logic lives
 - `examples/breakout_game.ind` — **NEW**: paddle physics, ball bounce, brick collision, scoring, HUD all in Indent. `INDENT_BREAKOUT_BOT=1` auto-plays (verified: 300 frames, score 50).
 - `air install ingame` — updated in the registry to the PyGame-style API (48 packages)
 
+### 🎮 InGame 2.0 — agame merged in + game-dev APIs (RPG/Minecraft-style)
+`std/ingame.ind` v2.0 unifies the game packages and adds the APIs needed to build RPGs, tile worlds, and action games entirely in Indent:
+- **agame merged into ingame** — `Clamp`/`Lerp`/`Distance`/`Wrap`, `NewEntity`/`Move`/`Collides`, `TileToWorld`/`WorldToTile` now live in ingame. `agame` kept as a compat shim (old `get X from agame` still works).
+- **Camera**: `SetCamera`/`GetCamera`/`ScreenX`/`ScreenY` — camera-follow world scrolling
+- **Tilemaps**: `MakeTilemap`/`SetTile`/`GetTile`/`IsSolidAt`/`DrawTilemap` (camera-culled, string-keyed legend with color or emoji tiles)
+- **Sprites**: `DrawSprite(x,y,w,h,glyph)` — emoji sprites, zero asset files
+- **New shapes**: `DrawEllipse`, `DrawArc` (pie slices), `DrawRectRot` (rotated rects)
+- **Physics**: `StepPhysics(entity, g)` and `MoveInMap(entity, dx, dy, map, tileSize, legend)` — per-axis AABB tile collision with `hitX`/`hitY` flags
+- **Input**: `IsKeyDown(key)`
+- `indent-native/indent-ingame.c` renderer extended: ellipse, arc, sprite, rotated rect
+- `examples/rpg_demo.ind` — tilemap RPG (procedural world, camera-follow, collision, emoji sprites); `INDENT_RPG_BOT=1` auto-walks
+- `tests/rpg_ingame_logic.ind` — headless regression (world gen, collision, bot movement) PASSES
+- Registry updated: `ingame` 2.0 + `agame` shim (xytrolabs/air 714949f)
+- Docs: `ingame-package.md` rewritten (full v2.0 API), `agame-package.md` merge notice, site synced
+
 ### 📚 Docs for all Xytro-maintained packages
 Dedicated reference docs for every first-party package (linked from `docs/packages-reference.md` and the README):
 - `docs/ai-package.md` — OpenAI-native AI assistant (config, chat/embed/search API, examples)

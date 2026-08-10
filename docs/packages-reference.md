@@ -355,30 +355,46 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins (n
 
 ---
 
-## `ingame` — PyGame-style 2D game framework (v1.5.0)
+## `ingame` — PyGame-style 2D game framework (v2.0)
 
 > Full guide: [`docs/ingame-package.md`](ingame-package.md)
 
-**InGame** mirrors PyGame's API so games are written entirely in Indent — a native WebKitGTK canvas window (`indent-ingame`) just renders frames and reports input. All movement, collision, physics, scoring, and rendering logic lives in Indent.
+**InGame** ("Indent Game") mirrors PyGame's API so games are written entirely in Indent — movement, physics, collision, AI, tilemaps, and rendering all live in Indent. **v2.0 merges the old `agame` package and adds game-dev APIs** (camera, tilemaps, sprites, collision) for building RPGs, tile worlds, and action games.
 
 | Function | PyGame equivalent | Description |
 |---|---|---|
 | `Init()` | `pygame.init()` | Initialize (state is lazy; no-op) |
 | `SetMode(w, h, title)` | `pygame.display.set_mode()` | Spawn the native window, prep IPC files, return workdir |
-| `SetCaption(title)` | `pygame.display.set_caption()` | Window title (kept for compatibility; title is set at `SetMode`) |
-| `DrawRect(x, y, w, h, color)` | `pygame.draw.rect()` | Add a rectangle to the frame |
-| `DrawCircle(cx, cy, r, color)` | `pygame.draw.circle()` | Add a circle to the frame |
-| `DrawLine(x1, y1, x2, y2, color, w)` | `pygame.draw.line()` | Add a line to the frame |
-| `DrawPolygon(points, color)` | `pygame.draw.polygon()` | Add a polygon (`points` = list of `[x, y]`) |
-| `DrawText(x, y, str, color, size)` | `pygame.font` | Add text to the frame |
-| `Flip(clear)` | `pygame.display.flip()` | Flush the frame to the window and reset shapes |
-| `GetEvents()` | `pygame.event.get()` | Read + clear events; each has a `"type"`: `quit` / `keydown` / `keyup` / `mousemove` / `mousedown` / `mouseup` |
-| `GetKeys()` | `pygame.key.get_pressed()` | List of currently held key names |
-| `GetMouse()` | `pygame.mouse.get_pos()` | `[x, y]` mouse position |
+| `DrawRect(x, y, w, h, color)` | `pygame.draw.rect()` | Rectangle |
+| `DrawRectRot(x, y, w, h, color, rot)` | `transform.rotate()` | Rotated rectangle |
+| `DrawCircle(cx, cy, r, color)` | `pygame.draw.circle()` | Circle |
+| `DrawEllipse(cx, cy, rx, ry, color)` | `pygame.draw.ellipse()` | Ellipse |
+| `DrawArc(cx, cy, r, a1, a2, color)` | `pygame.draw.arc()` | Pie slice (health/cooldown wheels) |
+| `DrawLine(x1, y1, x2, y2, color, w)` | `pygame.draw.line()` | Line |
+| `DrawPolygon(points, color)` | `pygame.draw.polygon()` | Polygon |
+| `DrawSprite(x, y, w, h, glyph)` | `pygame.image` | Emoji/glyph sprite (no asset files) |
+| `DrawText(x, y, str, color, size)` | `pygame.font` | Text |
+| `Flip(clear)` | `pygame.display.flip()` | Flush frame to window, reset shapes |
+| `GetEvents()` | `pygame.event.get()` | Read + clear events (`quit`/`keydown`/`keyup`/`mousemove`/`mousedown`/`mouseup`) |
+| `GetKeys()` | `pygame.key.get_pressed()` | Held key names |
+| `IsKeyDown(key)` | — | Is a key held? |
+| `GetMouse()` | `pygame.mouse.get_pos()` | `[x, y]` cursor |
 | `Tick(fps)` | `pygame.time.Clock.tick()` | Sleep to target frame rate |
-| `Quit()` | `pygame.quit()` | Close the window and exit |
+| `Quit()` | `pygame.quit()` | Close window and exit |
 
-Compatibility aliases are kept: `Clear`, `Rect`, `Circle`, `Line`, `Polygon`, `Text`, `Present`, `Events`, `Keys`, `Mouse`.
+**v2.0 game-dev APIs** (merged from `agame` + new):
+
+| Function | Description |
+|---|---|
+| `SetCamera(x, y)` / `GetCamera()` | Camera / world scrolling (camera-follow) |
+| `MakeTilemap(rows, cols)` / `SetTile` / `GetTile` / `IsSolidAt` | Grid tile worlds |
+| `DrawTilemap(map, tileSize, legend, w, h)` | Camera-culled tile rendering |
+| `NewEntity(x, y, w, h)` / `Move` / `Collides` | Entities + AABB overlap |
+| `StepPhysics(entity, g)` / `MoveInMap(entity, dx, dy, map, tileSize, legend)` | Velocity, gravity, tile collision |
+| `Clamp` / `Lerp` / `Distance` / `Wrap` | Math helpers |
+| `TileToWorld` / `WorldToTile` | Tile ↔ pixel conversion |
+
+Compatibility aliases kept: `Clear`, `Rect`, `Circle`, `Line`, `Polygon`, `Text`, `Sprite`, `Ellipse`, `Present`, `Events`, `Keys`, `Mouse`.
 
 ```indent
 get Init from ingame
@@ -426,14 +442,16 @@ Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + g
 | `Red` ... `Navy` | 16 named color constants |
 | `HexToRGB(hex)` / `RGBToHex(r,g,b)` | Conversion |
 
-### `agame` — 2D game helpers
+### `agame` — 2D game helpers (merged into ingame v2.0)
 > Full guide: [`docs/agame-package.md`](agame-package.md)
+
+**Merged into `ingame` in v2.0.** `agame` remains as a compatibility shim re-exporting from ingame — old `get X from agame` code still works. **New code should `get X from ingame`.**
 
 | Function | Description |
 |---|---|
 | `Lerp` / `Clamp` / `Distance` / `Wrap` | Math |
-| `NewEntity` / `Move` / `Collides` | Entities |
-| `TileToWorld` / `WorldToTile` | Tile math |
+| `NewEntity` / `Move` / `Collides` / `StepPhysics` / `MoveInMap` | Entities + physics |
+| `TileToWorld` / `WorldToTile` / `MakeTilemap` / `DrawTilemap` | Tiles |
 
 ### `discord` — Discord bot library (v6.0)
 > Full guide: [`docs/discord-package.md`](discord-package.md)

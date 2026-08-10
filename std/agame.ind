@@ -1,0 +1,68 @@
+#! =============================================================================
+#! agame.ind 2.0 — compatibility shim (was "Aether Game")
+#! =============================================================================
+#!
+#! agame has been MERGED into ingame (Indent Game) in v2.0. This file keeps old
+#! `get X from agame` code working by re-exporting every function from ingame.
+#!
+#! NEW CODE SHOULD USE ingame instead:
+#!   get Clamp, Lerp, NewEntity, MoveInMap, DrawTilemap, ... from ingame
+#!
+#! Old code keeps working unchanged:
+#!   get Clamp from agame
+#!   get NewEntity from agame
+#!   get Collides from agame
+
+#! --- re-export math helpers ---
+get Clamp from ingame as _ig_Clamp
+fun Clamp value low high
+    give _ig_Clamp(value, low, high)
+get Lerp from ingame as _ig_Lerp
+fun Lerp a b t
+    give _ig_Lerp(a, b, t)
+get Distance from ingame as _ig_Distance
+fun Distance x1 y1 x2 y2
+    give _ig_Distance(x1, y1, x2, y2)
+get Wrap from ingame as _ig_Wrap
+fun Wrap value min max
+    give _ig_Wrap(value, min, max)
+
+#! --- re-export entity helpers ---
+get NewEntity from ingame as _ig_NewEntity
+fun NewEntity x y w h
+    give _ig_NewEntity(x, y, w, h)
+get Move from ingame as _ig_Move
+fun Move entity dx dy
+    give _ig_Move(entity, dx, dy)
+get Collides from ingame as _ig_Collides
+fun Collides a b
+    give _ig_Collides(a, b)
+get StepPhysics from ingame as _ig_StepPhysics
+fun StepPhysics entity g
+    give _ig_StepPhysics(entity, g)
+get MoveInMap from ingame as _ig_MoveInMap
+fun MoveInMap entity dx dy map tileSize legend
+    give _ig_MoveInMap(entity, dx, dy, map, tileSize, legend)
+
+#! --- re-export tile helpers ---
+get TileToWorld from ingame as _ig_TileToWorld
+fun TileToWorld tileX tileY tileSize
+    give _ig_TileToWorld(tileX, tileY, tileSize)
+get WorldToTile from ingame as _ig_WorldToTile
+fun WorldToTile x y tileSize
+    give _ig_WorldToTile(x, y, tileSize)
+get MakeTilemap from ingame as _ig_MakeTilemap
+fun MakeTilemap rows cols
+    give _ig_MakeTilemap(rows, cols)
+get SetTile from ingame as _ig_SetTile
+fun SetTile map col row id
+    give _ig_SetTile(map, col, row, id)
+get GetTile from ingame as _ig_GetTile
+fun GetTile map col row
+    give _ig_GetTile(map, col, row)
+get IsSolidAt from ingame as _ig_IsSolidAt
+fun IsSolidAt map col row legend
+    give _ig_IsSolidAt(map, col, row, legend)
+get DrawTilemap from ingame as _ig_DrawTilemap
+fun DrawTilemap map tileSize legend screenW screenH
+    _ig_DrawTilemap(map, tileSize, legend, screenW, screenH)

@@ -1,0 +1,187 @@
+#! =============================================================================
+#! Indent RPG demo — a small tilemap RPG written 100% in Indent using InGame 2.0
+#! =============================================================================
+#! Demonstrates the merged agame + ingame APIs:
+#!   MakeTilemap / SetTile / DrawTilemap (world gen + camera culling)
+#!   NewEntity / MoveInMap (AABB tile collision)
+#!   DrawSprite (emoji sprites: player, trees, rocks, flowers)
+#!   SetCamera (camera follows player)
+#!   DrawText / DrawArc / GetEvents / Tick
+#!
+#! Controls: WASD or arrow keys to move. Close window to quit.
+#! Bot mode (headless): INDENT_RPG_BOT=1 auto-walks toward a random goal.
+get Init from ingame as IgInit
+get SetMode from ingame as IgSetMode
+get DrawTilemap from ingame as IgDrawMap
+get DrawSprite from ingame as IgSprite
+get DrawText from ingame as IgText
+get DrawRect from ingame as IgRect
+get DrawArc from ingame as IgArc
+get Flip from ingame as IgFlip
+get GetEvents from ingame as IgEvents
+get NewEntity from ingame as IgNewEnt
+get MoveInMap from ingame as IgMoveMap
+get SetCamera from ingame as IgSetCam
+get GetCamera from ingame as IgGetCam
+get MakeTilemap from ingame as IgMakeMap
+get SetTile from ingame as IgSetTile
+get GetTile from ingame as IgGetTile
+get Tick from ingame as IgTick
+get Quit from ingame as IgQuit
+get Clamp from ingame as IgClamp
+get Distance from ingame as IgDist
+
+#! --- World config ---
+var TILE = 24
+var COLS = 60
+var ROWS = 40
+var W = 720
+var H = 480
+
+#! --- Tile legend: "1"=grass(no solid), "2"=tree(solid emoji), "3"=rock, "4"=flower ---
+var legend = {}
+legend["1"] is {"c": "2d6a2d"}
+legend["2"] is {"solid": true, "s": "🌲"}
+legend["3"] is {"solid": true, "s": "🪨"}
+legend["4"] is {"s": "🌼"}
+
+#! --- Procedural world gen (deterministic-ish via random_int) ---
+var world = IgMakeMap(ROWS, COLS)
+var r = 0
+repeat while r < ROWS
+    var c = 0
+    repeat while c < COLS
+        var tile = "1"
+        var roll = random_int(1, 100)
+        if roll < 8
+            tile is "2"
+        or roll < 13
+            tile is "3"
+        or roll < 18
+            tile is "4"
+        world is IgSetTile(world, c, r, tile)
+        c is c + 1
+    r is r + 1
+
+#! --- Player (spawn on a clear tile near the start) ---
+var spawnCol = 5
+var spawnRow = 5
+var freeTile = false
+repeat while not freeTile
+    if IgGetTile(world, spawnCol, spawnRow) == "1"
+        freeTile is true
+    otherwise
+        spawnCol is spawnCol + 1
+        if spawnCol >= COLS
+            spawnCol is 1
+            spawnRow is spawnRow + 1
+var player = IgNewEnt(spawnCol * TILE + 2, spawnRow * TILE + 2, TILE - 4, TILE - 4)
+player["speed"] is 120.0
+player["facing"] is "down"
+var steps = 0
+
+#! --- Bot goal (headless test) ---
+var BOT = false
+var botEnv = os_getenv("INDENT_RPG_BOT", "")
+if botEnv == "1"
+    BOT is true
+var goalX = (spawnCol + 6) * TILE
+var goalY = (spawnRow + 6) * TILE
+
+#! --- Main ---
+say "=== Indent RPG demo (InGame 2.0) ==="
+IgInit()
+IgSetMode(W, H, "Indent RPG — InGame 2.0")
+var frames = 0
+var maxFrames = 1200
+var running = true
+
+repeat while running and frames < maxFrames
+    #! --- Input ---
+    var dx = 0
+    var dy = 0
+    var evts = IgEvents()
+    repeat e in evts
+        if e["type"] == "quit"
+            running is false
+        if e["type"] == "keydown"
+            if e["key"] == "w" or e["key"] == "ArrowUp"
+                dy is -1
+            if e["key"] == "s" or e["key"] == "ArrowDown"
+                dy is 1
+            if e["key"] == "a" or e["key"] == "ArrowLeft"
+                dx is -1
+            if e["key"] == "d" or e["key"] == "ArrowRight"
+                dx is 1
+
+    #! --- Bot: walk toward goal, wall-slide (headless verification) ---
+    if BOT
+        var px = player.x
+        var py = player.y
+        if px < goalX
+            dx is 1
+        or px > goalX + TILE
+            dx is -1
+        if py < goalY
+            dy is 1
+        or py > goalY + TILE
+            dy is -1
+        #! If the preferred direction is blocked, try the other axis
+        var tryX = dx
+        var tryY = dy
+        if tryX != 0 and tryY == 0
+            var mx = IgMoveMap(player, tryX * 2.0, 0, world, TILE, legend)
+            if mx.hitX == true
+                dy is 1
+                if py > goalY + TILE
+                    dy is -1
+                dx is 0
+        if tryY != 0 and tryX == 0
+            var my = IgMoveMap(player, 0, tryY * 2.0, world, TILE, legend)
+            if my.hitY == true
+                dx is 1
+                if px > goalX + TILE
+                    dx is -1
+                dy is 0
+
+    #! --- Move with collision (normalize diagonal) ---
+    if dx != 0 and dy != 0
+        dx is dx * 0.7071
+        dy is dy * 0.7071
+    var m = IgMoveMap(player, dx * 2.0, dy * 2.0, world, TILE, legend)
+    player is m
+    if m.hitX == true
+        steps is steps + 1
+
+    #! --- Camera follows player (clamped to world) ---
+    var camX = player.x - W / 2
+    var camY = player.y - H / 2
+    camX is IgClamp(camX, 0, COLS * TILE - W)
+    camY is IgClamp(camY, 0, ROWS * TILE - H)
+    IgSetCam(camX, camY)
+
+    #! --- Draw ---
+    IgDrawMap(world, TILE, legend, W, H)
+
+    #! Player sprite (facing indicator via small triangle arc above)
+    var sx = player.x - camX
+    var sy = player.y - camY
+    IgSprite(sx, sy, TILE, TILE, "🧙")
+    IgArc(sx + TILE/2, sy - 4, 4, 0, 360, "#ffd700")
+
+    #! HUD
+    var px = div_int player.x TILE
+    var py = div_int player.y TILE
+    IgText(10, 18, "Indent RPG  ·  steps " + string(steps) + "  ·  tile " + string(px) + "," + string(py), "#ffffff", 13)
+    IgText(10, H - 8, "WASD/arrows to move", "#8b949e", 11)
+
+    IgFlip("#10231a")
+    frames is frames + 1
+    IgTick(60)
+
+say "RPG frames=" + string(frames) + " steps=" + string(steps)
+var ptx = div_int(player.x, TILE)
+var pty = div_int(player.y, TILE)
+say "player tile=" + string(ptx) + "," + string(pty)
+IgQuit()
+say "RPG DEMO COMPLETE"

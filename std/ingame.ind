@@ -1,34 +1,42 @@
-#! ingame.ind
-#! InGame — PyGame-style 2D game framework for Indent.
+#! =============================================================================
+#! ingame.ind 2.0 — InGame: PyGame-style 2D game framework for Indent
+#! =============================================================================
 #!
-#! Mirrors PyGame's API so game logic is written entirely in Indent:
-#!   init / display.set_mode / display.set_caption / display.flip
-#!   draw.rect / draw.circle / draw.line / draw.polygon / draw.text
-#!   event.get / key.get_pressed / mouse.get_pos
-#!   time.Clock / time.Clock.tick / quit
+#! InGame = "Indent Game". Mirrors PyGame's API so games are written ENTIRELY
+#! in Indent — movement, physics, collision, AI, tilemaps, and rendering all
+#! live in Indent code. A native window (indent-ingame) just draws frames and
+#! reports input.
 #!
-#! Example:
-#!   get Init from ingame
-#!   get SetMode from ingame
-#!   get DrawRect from ingame
-#!   get Flip from ingame
-#!   get GetEvents from ingame
-#!   get Quit from ingame
+#! v2.0 MERGES the old `agame` package ("Aether Game") into InGame:
+#!   Clamp / Lerp / Distance / Wrap, NewEntity / Move / Collides,
+#!   TileToWorld / WorldToTile are now part of ingame.
+#! `air install agame` still works (it now just re-exports ingame) but new
+#! code should `get X from ingame`.
 #!
-#!   Init()
-#!   var screen = SetMode(400, 400, "My Game")
-#!   repeat while running
-#!       var events = GetEvents()
-#!       repeat e in events
-#!           if e["type"] == "quit"
-#!               running is false
-#!       DrawRect 10 10 50 50 "#39d353"
-#!       Flip "#000000"          #! draw + present frame
-#!       Tick 60                 #! ~60 fps
+#! v2.0 ADDS game-dev APIs for building RPGs, tile worlds, and action games:
+#!   Camera  : SetCamera / GetCamera / camX / camY  (scroll the world)
+#!   Tilemap : MakeTilemap / SetTile / GetTile / IsSolid / DrawTilemap
+#!   Sprites : DrawSprite (emoji/glyph sprites — zero asset files)
+#!   Shapes  : DrawEllipse / DrawArc / rotated rects
+#!   Physics : MoveEntity / MoveInMap (AABB tile collision)
+#!   Input   : IsKeyDown helper
+#!
+#! API map (PyGame):
+#!   Init → pygame.init
+#!   SetMode → display.set_mode
+#!   DrawRect/DrawCircle/DrawEllipse/DrawLine/DrawPolygon/DrawSprite/DrawText → draw.*
+#!   Flip → display.flip
+#!   GetEvents → event.get
+#!   GetKeys → key.get_pressed
+#!   GetMouse → mouse.get_pos
+#!   Tick → time.Clock.tick
+#!   Quit → pygame.quit
 
 #! --- Internal state ---
 var _workdir = ""
 var _shapes = []
+var _camX = 0
+var _camY = 0
 
 #! --- pygame.init() — nothing to init (state is lazy) ---
 fun Init
@@ -47,40 +55,56 @@ fun SetMode width height title
     os_system cmd
     give dir
 
-#! --- pygame.display.set_caption(title) — alias kept; title set at SetMode ---
+#! --- pygame.display.set_caption(title) — kept for compatibility ---
 fun SetCaption title
     give empty
 
-#! --- pygame.draw.rect ---
+#! ---------- DRAWING (queued; flushed by Flip) ----------
+
+#! pygame.draw.rect (rot: degrees clockwise, optional)
 fun DrawRect x y w h color
     _shapes is _shapes + [{"t": "rect", "x": x, "y": y, "w": w, "h": h, "c": color}]
 
-#! --- pygame.draw.circle ---
+fun DrawRectRot x y w h color rot
+    _shapes is _shapes + [{"t": "rect", "x": x, "y": y, "w": w, "h": h, "c": color, "rot": rot}]
+
+#! pygame.draw.circle
 fun DrawCircle cx cy r color
     _shapes is _shapes + [{"t": "circle", "cx": cx, "cy": cy, "r": r, "c": color}]
 
-#! --- pygame.draw.line ---
+#! ellipse (rx/ry radii)
+fun DrawEllipse cx cy rx ry color
+    _shapes is _shapes + [{"t": "ellipse", "cx": cx, "cy": cy, "rx": rx, "ry": ry, "c": color}]
+
+#! arc / pie slice (a1, a2 = degrees)
+fun DrawArc cx cy r a1 a2 color
+    _shapes is _shapes + [{"t": "arc", "cx": cx, "cy": cy, "r": r, "a1": a1, "a2": a2, "c": color}]
+
+#! pygame.draw.line
 fun DrawLine x1 y1 x2 y2 color width
     _shapes is _shapes + [{"t": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "c": color, "w": width}]
 
-#! --- pygame.draw.polygon (points = list of [x, y]) ---
+#! pygame.draw.polygon (points = list of [x, y])
 fun DrawPolygon points color
     _shapes is _shapes + [{"t": "polygon", "pts": points, "c": color}]
 
-#! --- pygame.font text ---
+#! Sprite (emoji/glyph) — centered in a box. Zero asset files needed.
+fun DrawSprite x y w h glyph
+    _shapes is _shapes + [{"t": "sprite", "x": x, "y": y, "w": w, "h": h, "s": glyph, "size": h}]
+
+#! pygame.font text
 fun DrawText x y text color size
     _shapes is _shapes + [{"t": "text", "x": x, "y": y, "s": text, "c": color, "size": size}]
 
-#! --- pygame.display.flip — flush frame to the window ---
+#! pygame.display.flip — flush frame to the window
 fun Flip clear
     var frame = {"clear": clear, "shapes": _shapes}
     file_write_text(_workdir + "/frame.json", json_dumps(frame))
     _shapes is []
 
-#! --- pygame.event.get — read + clear input events ---
-#! pygame.event.get — read + clear input events.
-#! Normalizes each event so it always has a "type": quit / keydown / keyup /
-#! mousemove / mousedown / mouseup. Key events get "key" (name) and "down" (bool).
+#! ---------- INPUT ----------
+
+#! pygame.event.get — read + clear events (normalized types)
 fun GetEvents
     var path = _workdir + "/events.txt"
     if not os_exists(path)
@@ -111,7 +135,7 @@ fun GetEvents
             out is out + [e]
     give out
 
-#! --- pygame.key.get_pressed — list of currently held keys ---
+#! pygame.key.get_pressed — list of currently held keys
 fun GetKeys
     var path = _workdir + "/keys.txt"
     if not os_exists(path)
@@ -121,7 +145,15 @@ fun GetKeys
     catch as e:
         give []
 
-#! --- pygame.mouse.get_pos — [x, y] ---
+#! Convenience: is a key currently held?
+fun IsKeyDown key
+    var keys = GetKeys()
+    repeat k in keys
+        if k == key
+            give true
+    give false
+
+#! pygame.mouse.get_pos — [x, y]
 fun GetMouse
     var path = _workdir + "/mouse.txt"
     if not os_exists(path)
@@ -131,7 +163,7 @@ fun GetMouse
     catch as e:
         give [0, 0]
 
-#! --- pygame.time.Clock.tick(fps) — sleep to target frame rate ---
+#! pygame.time.Clock.tick(fps) — sleep to target frame rate
 var _lastTick = 0
 fun Tick fps
     var now = time_perf_counter()
@@ -144,7 +176,7 @@ fun Tick fps
     _lastTick is now
     give empty
 
-#! --- pygame.quit() — close the window ---
+#! pygame.quit() — close the window
 fun Quit
     if len(_workdir) == 0
         give empty
@@ -152,7 +184,214 @@ fun Quit
     os_system("pkill -f " + _workdir + " 2>/dev/null")
     give empty
 
-#! --- Compatibility aliases (older snake used these names) ---
+#! ---------- CAMERA (world scrolling) ----------
+#! Set the camera so world (camX, camY) appears at screen (0,0).
+fun SetCamera x y
+    _camX is x
+    _camY is y
+
+fun GetCamera
+    give [_camX, _camY]
+
+#! world coords → screen coords (subtract camera)
+fun ScreenX wx
+    give wx - _camX
+
+fun ScreenY wy
+    give wy - _camY
+
+#! ---------- MATH HELPERS (merged from agame) ----------
+fun Clamp value low high
+    if value < low
+        give low
+    or value > high
+        give high
+    otherwise
+        give value
+
+fun Lerp a b t
+    give a + (b - a) * t
+
+fun Distance x1 y1 x2 y2
+    var dx = x2 - x1
+    var dy = y2 - y1
+    give math_sqrt(dx * dx + dy * dy)
+
+fun Wrap value min max
+    var range = max - min
+    var result = value - min
+    result is result % range
+    if result < 0
+        result is result + range
+    give result + min
+
+#! ---------- ENTITIES (merged from agame) ----------
+#! Entity = dict {"x","y","w","h"[, "vx","vy"]}
+fun NewEntity x y w h
+    give {"x": x, "y": y, "w": w, "h": h}
+
+fun Move entity dx dy
+    entity["x"] is entity["x"] + dx
+    entity["y"] is entity["y"] + dy
+    give entity
+
+#! AABB overlap test
+fun Collides a b
+    if a["x"] < b["x"] + b["w"] and a["x"] + a["w"] > b["x"]
+        if a["y"] < b["y"] + b["h"] and a["y"] + a["h"] > b["y"]
+            give true
+    give false
+
+#! Apply velocity + gravity; returns updated entity (reassign)
+fun StepPhysics entity g
+    entity["x"] is entity["x"] + entity["vx"]
+    entity["y"] is entity["y"] + entity["vy"]
+    entity["vy"] is entity["vy"] + g
+    give entity
+
+#! Move entity by (dx, dy) with AABB collision against a tilemap.
+#! map: list of rows of tile IDs (0 = empty); legend: dict "id" → {"solid":true} (string keys).
+#! Returns the entity with adjusted x/y (and "hitX"/"hitY" flags).
+fun MoveInMap entity dx dy map tileSize legend
+    var newX = entity["x"] + dx
+    var newY = entity["y"] + dy
+    entity["hitX"] is false
+    entity["hitY"] is false
+
+    #! X axis
+    var x1 = newX
+    var x2 = newX + entity["w"]
+    var y1 = entity["y"]
+    var y2 = entity["y"] + entity["h"]
+    var colA = div_int(x1, tileSize)
+    var colB = div_int((x2 - 1), tileSize)
+    var rowA = div_int(y1, tileSize)
+    var rowB = div_int((y2 - 1), tileSize)
+    var blockedX = false
+    var r = rowA
+    repeat while r <= rowB
+        var c = colA
+        repeat while c <= colB
+            if IsSolidAt map c r legend
+                blockedX is true
+            c is c + 1
+        r is r + 1
+    if blockedX
+        entity["hitX"] is true
+    otherwise
+        entity["x"] is newX
+
+    #! Y axis
+    x1 is entity["x"]
+    x2 is entity["x"] + entity["w"]
+    y1 is newY
+    y2 is newY + entity["h"]
+    colA is div_int(x1, tileSize)
+    colB is div_int((x2 - 1), tileSize)
+    rowA is div_int(y1, tileSize)
+    rowB is div_int((y2 - 1), tileSize)
+    var blockedY = false
+    r is rowA
+    repeat while r <= rowB
+        var c2 = colA
+        repeat while c2 <= colB
+            if IsSolidAt map c2 r legend
+                blockedY is true
+            c2 is c2 + 1
+        r is r + 1
+    if blockedY
+        entity["hitY"] is true
+    otherwise
+        entity["y"] is newY
+    give entity
+
+#! ---------- TILEMAP (merged + extended from agame) ----------
+#! Tilemap = list of rows; each row = list of tile IDs (0 = empty).
+fun MakeTilemap rows cols
+    var map dynamic = []
+    var r = 0
+    repeat while r < rows
+        var row dynamic = []
+        var c = 0
+        repeat while c < cols
+            row is row + [0]
+            c is c + 1
+        map is map + [row]
+        r is r + 1
+    give map
+
+fun TileWidth map
+    give len(map[0])
+
+fun TileHeight map
+    give len(map)
+
+fun SetTile map col row id
+    if row >= 0 and row < len(map)
+        var r2 = map[row]
+        if col >= 0 and col < len(r2)
+            r2[col] is id
+            map[row] is r2
+    give map
+
+fun GetTile map col row
+    if row < 0 or row >= len(map)
+        give 0
+    var r2 = map[row]
+    if col < 0 or col >= len(r2)
+        give 0
+    give r2[col]
+
+#! Is a tile solid? Only tiles with {"solid": true} are solid.
+#! legend: dict "id" → {"solid": true} (string keys); everything else is walkable.
+fun IsSolidAt map col row legend
+    var id = GetTile map col row
+    if id == 0
+        give false
+    var key = string(id)
+    if has_key legend key
+        var spec = legend[key]
+        if has_key spec "solid"
+            give spec["solid"]
+    give false
+
+#! Draw visible tiles. legend: dict "id" → {"c":"hex"} (color) or {"s":"emoji"} (string keys).
+#! Only tiles within the camera viewport are drawn.
+fun DrawTilemap map tileSize legend screenW screenH
+    var startCol = div_int(_camX, tileSize)
+    var startRow = div_int(_camY, tileSize)
+    var endCol = div_int((_camX + screenW), tileSize) + 1
+    var endRow = div_int((_camY + screenH), tileSize) + 1
+    var row = startRow
+    repeat while row <= endRow
+        var col = startCol
+        repeat while col <= endCol
+            var id = GetTile map col row
+            var key = string(id)
+            if id != 0
+                if has_key legend key
+                    var spec = legend[key]
+                    var px = col * tileSize - _camX
+                    var py = row * tileSize - _camY
+                    if has_key spec "s"
+                        DrawSprite px py tileSize tileSize spec["s"]
+                    otherwise
+                        var colr = "#" + spec["c"]
+                        DrawRect px py tileSize tileSize colr
+            col is col + 1
+        row is row + 1
+    give empty
+
+#! Tile coords ↔ world/pixel coords (merged from agame)
+fun TileToWorld tileX tileY tileSize
+    give {"x": tileX * tileSize, "y": tileY * tileSize}
+
+fun WorldToTile x y tileSize
+    var tx = div_int(x, tileSize)
+    var ty = div_int(y, tileSize)
+    give {"x": tx, "y": ty}
+
+#! ---------- COMPATIBILITY ALIASES (older snake/game names) ----------
 fun Clear color
     _shapes is []
 
@@ -170,6 +409,12 @@ fun Polygon points color
 
 fun Text x y text color size
     DrawText x y text color size
+
+fun Sprite x y w h glyph
+    DrawSprite x y w h glyph
+
+fun Ellipse cx cy rx ry color
+    DrawEllipse cx cy rx ry color
 
 fun Present clear
     Flip clear

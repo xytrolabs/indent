@@ -1,0 +1,81 @@
+#! Headless regression test for the InGame RPG demo logic.
+#! Verifies: world gen, spawn-on-clear-tile, tile collision, bot movement.
+#! Run: indent tests/rpg_ingame_logic.ind
+get MakeTilemap from ingame as M
+get SetTile from ingame as S
+get GetTile from ingame as G
+get NewEntity from ingame as E
+get MoveInMap from ingame as MV
+
+var TILE = 24
+var COLS = 60
+var ROWS = 40
+var legend = {}
+legend["1"] is {"c": "2d6a2d"}
+legend["2"] is {"solid": true, "s": "🌲"}
+legend["3"] is {"solid": true, "s": "🪨"}
+legend["4"] is {"s": "🌼"}
+
+var world = M(ROWS, COLS)
+var r = 0
+repeat while r < ROWS
+    var c = 0
+    repeat while c < COLS
+        var tile = "1"
+        var roll = random_int(1, 100)
+        if roll < 8
+            tile is "2"
+        or roll < 13
+            tile is "3"
+        or roll < 18
+            tile is "4"
+        world is S(world, c, r, tile)
+        c is c + 1
+    r is r + 1
+
+var spawnCol = 5
+var spawnRow = 5
+var freeTile = false
+repeat while not freeTile
+    if G(world, spawnCol, spawnRow) == "1"
+        freeTile is true
+    otherwise
+        spawnCol is spawnCol + 1
+        if spawnCol >= COLS
+            spawnCol is 1
+            spawnRow is spawnRow + 1
+var player = E(spawnCol * TILE + 2, spawnRow * TILE + 2, TILE - 4, TILE - 4)
+
+var goalX = (spawnCol + 6) * TILE
+var goalY = (spawnRow + 6) * TILE
+var frames = 0
+repeat while frames < 500 and (player.x < goalX - 4 or player.y < goalY - 4)
+    var dx = 0
+    var dy = 0
+    if player.x < goalX
+        dx is 1
+    if player.y < goalY
+        dy is 1
+    var tryX = dx
+    var tryY = dy
+    if tryX != 0 and tryY == 0
+        var mx = MV(player, tryX * 2.0, 0, world, TILE, legend)
+        if mx.hitX == true
+            dy is 1
+            dx is 0
+    if tryY != 0 and tryX == 0
+        var my = MV(player, 0, tryY * 2.0, world, TILE, legend)
+        if my.hitY == true
+            dx is 1
+            dy is 0
+    var m2 = MV(player, dx * 2.0, dy * 2.0, world, TILE, legend)
+    player is m2
+    frames is frames + 1
+
+var endX = div_int(player.x, TILE)
+var endY = div_int(player.y, TILE)
+say "frames=" + string(frames) + " endTile=" + string(endX) + "," + string(endY)
+if endX > spawnCol and endY > spawnRow and endX < COLS and endY < ROWS
+    say "RPG INGAME LOGIC TEST PASSED"
+otherwise
+    say "RPG INGAME LOGIC TEST FAILED"

@@ -1,103 +1,69 @@
-# agame.ind — Starter 2D Game Helper API for Indent
+# agame.ind — Merged into InGame (compatibility shim)
 
-A small, dependency-free helper library for 2D games written in Indent: math
-helpers, simple game entities, AABB collision, and tile↔world conversion.
-Pairs well with the [`ingame`](ingame-package.md) rendering framework.
+> **⚠️ agame is now merged into [`ingame`](ingame-package.md)** (v2.0). The
+> `agame` package is kept only as a **compatibility shim** that re-exports the
+> merged functions so old `get X from agame` code keeps working.
+>
+> **New code should use `ingame`:** `get Clamp, Lerp, NewEntity, MoveInMap,
+> DrawTilemap, ... from ingame`
 
-> Install: `air install agame` — import with `get X from agame`.
-> All functions are pure/stateless (entities are plain dicts) — no global state,
-> nothing to initialize.
+---
+
+## Migration
+
+| Old (`agame`) | New (`ingame`) |
+|---|---|
+| `get Clamp from agame` | `get Clamp from ingame` |
+| `get NewEntity from agame` | `get NewEntity from ingame` |
+| `get Collides from agame` | `get Collides from ingame` |
+| `get TileToWorld from agame` | `get TileToWorld from ingame` |
+| ... | ... |
+
+All agame functions still exist in `ingame` (unchanged), **plus** the v2.0
+game-dev additions: `MakeTilemap`/`DrawTilemap`, `MoveInMap`, `SetCamera`,
+`DrawSprite`, `DrawEllipse`, `DrawArc`, `StepPhysics`, `IsKeyDown`, and more.
 
 ```indent
+#! OLD code — still works:
 get Clamp from agame
-get Lerp from agame
-get Collides from agame
 get NewEntity from agame
+var health = Clamp(150, 0, 100)   # → 100
 
-var player = NewEntity(10, 20, 32, 32)
-var wall   = NewEntity(50, 50, 16, 16)
-if Collides(player, wall)
-    say "hit!"
+#! NEW code — use ingame:
+get Clamp from ingame
+get NewEntity from ingame
+get MoveInMap from ingame
 ```
 
 ---
 
-## Math helpers
+## Still available via agame (re-exported from ingame)
 
-| Function | Params | Returns | Description |
-|---|---|---|---|
-| `Clamp` | `value, low, high` | number | Clamp `value` into `[low, high]`. |
-| `Lerp` | `a, b, t` | number | Linear interpolation: `a + (b - a) * t` (t in 0..1). |
-| `Distance` | `x1, y1, x2, y2` | number | Euclidean distance between two points. |
-| `Wrap` | `value, min, max` | number | Wrap `value` into `[min, max)` (modular, supports negatives). |
-
-```indent
-var health = Clamp(150, 0, 100)     # → 100
-var mid    = Lerp(0, 10, 0.5)       # → 5
-var d      = Distance(0, 0, 3, 4)   # → 5
-var angle  = Wrap(370, 0, 360)      # → 10
-```
-
----
-
-## Entities
-
-Entities are simple dicts: `{"x", "y", "w", "h"}`.
-
-| Function | Params | Returns | Description |
-|---|---|---|---|
-| `NewEntity` | `x, y, w, h` | entity dict | Create `{"x","y","w","h"}`. |
-| `Move` | `entity, dx, dy` | entity | Return the entity shifted by `(dx, dy)` — **reassign** the result. |
-| `Collides` | `a, b` | bool | AABB overlap test between two entities. |
-
-```indent
-var box = NewEntity(0, 0, 10, 10)
-box is Move(box, 5, 5)              # now at (5,5)
-var other = NewEntity(8, 8, 4, 4)
-say Collides(box, other)            # → TRUE (overlap)
-```
-
-> `Collides` uses axis-aligned bounding boxes: overlap requires both
-> `a.x < b.x + b.w and a.x + a.w > b.x` and the same for `y`.
+| Function | Description |
+|---|---|
+| `Clamp(value, low, high)` | Clamp `value` into `[low, high]`. |
+| `Lerp(a, b, t)` | Linear interpolation: `a + (b - a) * t`. |
+| `Distance(x1, y1, x2, y2)` | Euclidean distance. |
+| `Wrap(value, min, max)` | Wrap into `[min, max)`. |
+| `NewEntity(x, y, w, h)` | Entity dict `{"x","y","w","h"}`. |
+| `Move(entity, dx, dy)` | Return entity shifted by `(dx, dy)`. |
+| `Collides(a, b)` | AABB overlap test. |
+| `StepPhysics(entity, g)` | Apply velocity + gravity. |
+| `MoveInMap(entity, dx, dy, map, tileSize, legend)` | AABB tile collision. |
+| `TileToWorld(tileX, tileY, tileSize)` | Tile coords → pixels. |
+| `WorldToTile(x, y, tileSize)` | Pixels → tile coords. |
+| `MakeTilemap(rows, cols)` | Create an empty tilemap. |
+| `SetTile(map, col, row, id)` | Set a tile. |
+| `GetTile(map, col, row)` | Get a tile. |
+| `IsSolidAt(map, col, row, legend)` | Tile solidity check. |
+| `DrawTilemap(map, tileSize, legend, screenW, screenH)` | Camera-culled tile drawing. |
 
 ---
 
-## Tile math
+## Why the merge?
 
-For tile-based games (grid ↔ pixel conversion).
-
-| Function | Params | Returns | Description |
-|---|---|---|---|
-| `TileToWorld` | `tileX, tileY, tileSize` | `{"x","y"}` | Tile coordinates → pixel position. |
-| `WorldToTile` | `x, y, tileSize` | `{"x","y"}` | Pixel position → tile coordinates (integer division). |
-
-```indent
-var pos = TileToWorld(3, 2, 32)     # → {"x":96, "y":64}
-var tile = WorldToTile(100, 70, 32) # → {"x":3, "y":2}
-```
-
----
-
-## Full example
-
-```indent
-get Clamp from agame
-get Collides from agame
-get NewEntity from agame
-get Move from agame
-get TileToWorld from agame
-
-var tileSize = 32
-var player = NewEntity(0, 0, 30, 30)
-var wall   = NewEntity(TileToWorld(2, 0, tileSize).x, 0, 32, 32)
-
-#! arrow-key movement clamped to a 10x8-tile world
-player is Move(player, 1, 0)
-player.x is Clamp(player.x, 0, 10 * tileSize - 30)
-
-if Collides(player, wall)
-    say "blocked by wall"
-```
-
-> **Note**: Indent passes arguments by value — `Move` returns the moved entity,
-> so always reassign: `player is Move(player, dx, dy)`.
+`agame` was "Aether Game"; `ingame` is "Indent Game". Both served the same
+purpose — building games in Indent — so v2.0 unifies them into one package.
+`air install ingame` now provides everything (math, entities, tiles, camera,
+sprites, physics, rendering, input). See the
+[`ingame` guide](ingame-package.md) for the full API and examples.

@@ -6,10 +6,13 @@
  *
  * Indent writes each frame to <workdir>/frame.json:
  *   {"clear":"#000000","shapes":[
- *     {"t":"rect","x":0,"y":0,"w":20,"h":20,"c":"#39d353"},
+ *     {"t":"rect","x":0,"y":0,"w":20,"h":20,"c":"#39d353","rot":45},
  *     {"t":"circle","cx":10,"cy":10,"r":5,"c":"#f85149"},
+ *     {"t":"ellipse","cx":10,"cy":10,"rx":8,"ry":4,"c":"#58a6ff"},
+ *     {"t":"arc","cx":50,"cy":50,"r":20,"a1":0,"a2":120,"c":"#d29922"},
  *     {"t":"line","x1":0,"y1":0,"x2":100,"y2":100,"c":"#58a6ff","w":2},
  *     {"t":"polygon","pts":[[0,0],[10,0],[5,10]],"c":"#d29922"},
+ *     {"t":"sprite","x":4,"y":4,"w":20,"h":20,"s":"\u26ab","size":16},
  *     {"t":"text","x":4,"y":12,"s":"Score: 10","c":"#fff","size":14}]}
  *
  * This helper polls frame.json; on change it renders via a WebKitGTK JS bridge.
@@ -251,15 +254,30 @@ int main(int argc, char **argv) {
         "  var sh=d.shapes||[];"
         "  for(var i=0;i<sh.length;i++){"
         "    var s=sh[i];"
-        "    if(s.t==='rect'){ctx.fillStyle=s.c;ctx.fillRect(s.x,s.y,s.w,s.h);}"
+        "    if(s.t==='rect'){"
+        "      ctx.save();ctx.translate(s.x+s.w/2,s.y+s.h/2);"
+        "      if(s.rot)ctx.rotate(s.rot*Math.PI/180);"
+        "      ctx.fillStyle=s.c;ctx.fillRect(-s.w/2,-s.h/2,s.w,s.h);"
+        "      ctx.restore();}"
         "    else if(s.t==='circle'){ctx.fillStyle=s.c;ctx.beginPath();"
         "      ctx.arc(s.cx,s.cy,s.r,0,Math.PI*2);ctx.fill();}"
+        "    else if(s.t==='ellipse'){ctx.fillStyle=s.c;ctx.beginPath();"
+        "      ctx.ellipse(s.cx,s.cy,s.rx,s.ry,0,0,Math.PI*2);ctx.fill();}"
+        "    else if(s.t==='arc'){ctx.fillStyle=s.c;ctx.beginPath();"
+        "      ctx.moveTo(s.cx,s.cy);"
+        "      ctx.arc(s.cx,s.cy,s.r,(s.a1||0)*Math.PI/180,(s.a2||360)*Math.PI/180);"
+        "      ctx.closePath();ctx.fill();}"
         "    else if(s.t==='line'){ctx.strokeStyle=s.c;ctx.lineWidth=s.w||2;"
         "      ctx.beginPath();ctx.moveTo(s.x1,s.y1);ctx.lineTo(s.x2,s.y2);ctx.stroke();}"
         "    else if(s.t==='polygon'){ctx.fillStyle=s.c;ctx.beginPath();"
         "      var p=s.pts;ctx.moveTo(p[0][0],p[0][1]);"
         "      for(var k=1;k<p.length;k++){ctx.lineTo(p[k][0],p[k][1]);}"
         "      ctx.closePath();ctx.fill();}"
+        "    else if(s.t==='sprite'){ctx.fillStyle=s.c||'#fff';"
+        "      ctx.font=(s.size||s.h||16)+'px serif';"
+        "      ctx.textAlign='center';ctx.textBaseline='middle';"
+        "      ctx.fillText(s.s,s.x+(s.w||0)/2,s.y+(s.h||0)/2);"
+        "      ctx.textAlign='start';ctx.textBaseline='alphabetic';}"
         "    else if(s.t==='text'){ctx.fillStyle=s.c;"
         "      ctx.font=(s.size||14)+'px monospace';ctx.fillText(s.s,s.x,s.y);}"
         "  }"
