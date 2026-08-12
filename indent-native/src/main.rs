@@ -385,7 +385,7 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
             Value::List(_) => "list",
-            Value::Set(_) => "set",
+            Value::Set(_) => "group",
             Value::Dict(_) => "dict",
             Value::Func(_) => "function",
             Value::Module(_) => "module",
@@ -3837,7 +3837,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Bool(_) => "boolean",
                 Value::Str(_) => "string",
                 Value::List(_) => "list",
-                Value::Set(_) => "set",
+                Value::Set(_) => "group",
                 Value::Dict(_) => "dict",
                 Value::Func(_) => "function",
                 Value::Object { .. } => "object",
@@ -5909,7 +5909,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
             Value::List(_) => Ok(value),
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to list")),
         },
-        "set" => match value {
+        "group" | "set" => match value {
             Value::Set(_) => Ok(value),
             Value::List(v) => {
                 let mut seen: HashSet<String> = HashSet::new();
@@ -5922,7 +5922,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
                 }
                 Ok(Value::Set(unique))
             }
-            _ => Err(format!("Line {line}: variable '{name}' cannot be converted to set")),
+            _ => Err(format!("Line {line}: variable '{name}' cannot be converted to group")),
         },
         "dictionary" | "dict" => match value {
             Value::Dict(_) => Ok(value),
@@ -10606,19 +10606,19 @@ otherwise
         fs::create_dir_all(&dir).expect("create temp dir");
         let main_file = dir.join("main.ind");
         // Filtered list comprehension must parse (previously mis-parsed as a
-        // ternary because `if` was consumed by parse_or), and set() must
-        // build a unique ordered collection.
+        // ternary because `if` was consumed by parse_or). `group` is the
+        // builtin for unique ordered collections; `type_of` reports "group".
         let src = r#"
 var nums = [1, 2, 3, 4, 5, 6]
 var evens = [x for x in nums if x % 2 == 0]
 if len(evens) == 3 and evens[0] == 2
     say "compr-ok"
-var s = set([1, 2, 2, 3])
-if len(s) == 3 and type_of(s) == "set"
-    say "set-ok"
-var g = group([1, 1, 2])
-if len(g) == 2
-    say "group-alias-ok"
+var g = group([1, 2, 2, 3])
+if len(g) == 3 and type_of(g) == "group"
+    say "group-ok"
+var s = set([1, 1, 2])
+if len(s) == 2
+    say "set-alias-ok"
 "#;
         fs::write(&main_file, src).expect("write main file");
 

@@ -1,12 +1,13 @@
 # Indent Built-in Functions — API Reference (v1.3.0)
 
 > Complete reference for every built-in function available in Indent 1.3.0.
-> **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `set`
-> **🆕 v1.4**: Set type (`set([...])`), type conversion (`set varname type`), set methods
+> **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v1.4**: Group type (`group([...])`), type conversion (`set varname type`), group methods
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
 >
-> **Note on sets:** unique ordered collections are called **sets** — created with
-> `set([1, 2, 2, 3])`. The legacy `group [...]` keyword still works as an alias.
+> **Note on groups:** unique ordered collections are called **groups** — created
+> with the `group` builtin: `group([1, 2, 2, 3])`. The `set` keyword is reserved
+> for type conversion (`set varname type`) and does **not** build a group.
 
 ---
 
@@ -105,28 +106,29 @@ var age int = ask("int", "Age: ")
 
 ---
 
-## Set Functions
+## Group Functions
 
-> Sets are unique, ordered collections. Create them with `set([...])` (the legacy
-> `group [...]` keyword also works). Methods mutate by returning a **new** set;
-> reassign the result to keep the change.
+> Groups are unique, ordered collections. Create them with the `group` builtin.
+> Methods mutate by returning a **new** group; reassign the result to keep the
+> change. (The `set` keyword, by contrast, only performs type conversion.)
 
 | Function / Method | Returns | Description |
 |---|---|---|
-| `set(list)` | set | Build a set, deduplicating while preserving order |
-| `s.add(x)` | set | **New** set with `x` added (no-op if present) |
-| `s.remove(x)` | set | **New** set without `x` |
-| `s.contains(x)` | boolean | Is `x` in the set? (alias: `s.has(x)`) |
-| `len(s)` | int | Number of unique elements |
-| `s + s2` | set | Union of two sets |
-| `is_missing(s)` | boolean | TRUE if the set is empty |
+| `group(list)` | group | Build a group, deduplicating while preserving order |
+| `g.add(x)` | group | **New** group with `x` added (no-op if present) |
+| `g.remove(x)` | group | **New** group without `x` |
+| `g.contains(x)` | boolean | Is `x` in the group? (alias: `g.has(x)`) |
+| `len(g)` | int | Number of unique elements |
+| `g + g2` | group | Union of two groups |
+| `is_missing(g)` | boolean | TRUE if the group is empty |
 
 ```indent
-var s = set([1, 2, 2, 3])   # → {1, 2, 3}
+var s = group([1, 2, 2, 3])   # → {1, 2, 3}
 var t = s.add(4)            # → {1, 2, 3, 4}
 var u = t.remove(2)         # → {1, 3, 4}
 u.contains(3)               # → TRUE
 contains(u, 9)              # → FALSE
+type_of(s)                  # → "group"
 ```
 
 ---

@@ -241,57 +241,58 @@ var merged dict = dict_update base updates
 
 ---
 
-## Sets (unique ordered collections)
+## Groups (unique ordered collections)
 
-A **set** holds unique values while keeping insertion order. It deduplicates
+A **group** holds unique values while keeping insertion order. It deduplicates
 automatically — handy for removing duplicates or tracking "seen" items.
 
 ```indent
-var s = set([1, 2, 2, 3])    # → {1, 2, 3}  (the duplicate 2 is dropped)
+var s = group([1, 2, 2, 3])  # → {1, 2, 3}  (the duplicate 2 is dropped)
 say len(s)                   # → 3
-say type_of(s)               # → "set"
+say type_of(s)               # → "group"
 ```
 
-> 💡 In version 1.4 the keyword is **`set`**. Older code and docs used
-> `group [...]`; `group` still works as an alias for backward compatibility.
+> 💡 Use the **`group`** builtin to build a group. The `set` keyword is reserved
+> for **type conversion** (`set varname type`), not for building groups.
 
-### Set operations
+### Group operations
 
-Methods return a **new** set — reassign to keep the change (just like lists
+Methods return a **new** group — reassign to keep the change (just like lists
 and dicts):
 
 ```indent
-var s = set([1, 2, 3])
+var s = group([1, 2, 3])
 var t = s.add(4)             # → {1, 2, 3, 4}  (no-op if already present)
 var u = t.remove(2)          # → {1, 3, 4}
 u.contains(1)                # → TRUE
 u.contains(9)                # → FALSE
 
-# Union combines two sets
-var a = set(["red", "blue"])
-var b = set(["blue", "green"])
+# Union combines two groups
+var a = group(["red", "blue"])
+var b = group(["blue", "green"])
 var all = a + b              # → {"red", "blue", "green"}
 ```
 
-### Iterating and testing sets
+### Iterating and testing groups
 
 ```indent
-var tags = set(["rust", "indent", "go"])
+var tags = group(["rust", "indent", "go"])
 repeat tag in tags
     say tag                  # prints each unique tag once
 
-is_missing(set([]))          # → TRUE (empty set)
+is_missing(group([]))        # → TRUE (empty group)
 is_missing(tags)             # → FALSE
 ```
 
-### When to use a set
+### When to use a group
 
-- Removing duplicates from a list: `var unique = set(data)`
-- Membership checks: `set(data).contains(target)`
+- Removing duplicates from a list: `var unique = group(data)`
+- Membership checks: `group(data).contains(target)`
 - Combining tags / IDs without duplicates.
+- Converting a list in place: `set data group`.
 
-> ⚠️ Sets are **ordered** in Indent (unlike Python). They keep the order in
-> which elements were first inserted.
+> ⚠️ Groups are **ordered** in Indent (unlike Python's set). They keep the
+> order in which elements were first inserted.
 
 ---
 
@@ -312,10 +313,10 @@ var evens = [x for x in nums if x % 2 == 0]  # → [2, 4]
 var big = [x * 10 for x in nums if x > 2]    # → [30, 40, 50]
 ```
 
-Comprehensions also work over **sets**:
+Comprehensions also work over **groups**:
 
 ```indent
-var s = set([1, 2, 3])
+var s = group([1, 2, 3])
 var doubled = [x * 2 for x in s]          # → [2, 4, 6]
 ```
 
@@ -337,9 +338,9 @@ var labels = [p[0] + "=" + string(p[1]) for p in pairs]
 
 1. Create a list of 10 numbers and print only the even ones using slicing.
 2. Build a dictionary representing a book (title, author, year, genres as a list).
-3. Write a function that takes a list of numbers and returns a new list with duplicates removed (**hint**: use `set`).
+3. Write a function that takes a list of numbers and returns a new list with duplicates removed (**hint**: use `group`).
 4. Create a phonebook dictionary and add functions to look up, add, and remove contacts.
-5. **(Challenge)** Use a comprehension to compute the squares of all odd numbers from 1 to 20, then put the result in a set.
+5. **(Challenge)** Use a comprehension to compute the squares of all odd numbers from 1 to 20, then put the result in a group.
 
 ---
 

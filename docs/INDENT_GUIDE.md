@@ -1,6 +1,6 @@
 # Your Journey with Indent 1.4
 
-> Indent 1.4 adds **Set type**, **type conversion** (`set varname type`), compound assignment, and type inference — all with the same simple, lovable syntax.
+> Indent 1.4 adds **Group type**, **type conversion** (`set varname type`), compound assignment, and type inference — all with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
@@ -8,14 +8,14 @@
 
 ## What's New in 1.4.1
 
-> 💡 **Indent calls unique collections *sets*.** They are created with `set([...])`. The older `group [...]` keyword is still accepted as an alias for backward compatibility, but new code should use `set`. Note the difference:
-> - `set x string` — *type conversion* (no parens)
-> - `set([1, 2, 2, 3])` — *builds a set* (parens)
+> 💡 Unique ordered collections are called **groups** — created with the `group` builtin: `group([1, 2, 2, 3])`. The keyword `set` is reserved for **type conversion** (`set varname type`), so it is not used to build groups. Note the difference:
+> - `set x string` — *type conversion* (the `set` keyword)
+> - `group([1, 2, 2, 3])` — *builds a group* (the `group` builtin)
 
-- **Set type**: `set([1,2,2,3])` → `{1, 2, 3}` — unique ordered collections
+- **Group type**: `group([1,2,2,3])` → `{1, 2, 3}` — unique ordered collections
 - **Type conversion**: `set name string`, `set x int` — clean type casting
-- **Set union**: `s1 + s2` — combine sets
-- **Set iteration & comprehension**: `repeat item in s`, `[x*2 for x in s]`
+- **Group union**: `s1 + s2` — combine groups
+- **Group iteration & comprehension**: `repeat item in s`, `[x*2 for x in s]`
 
 ## What's New in 1.3.0
 
@@ -76,7 +76,7 @@ indent run hello.ind
 
 ## 2. Variables & Types
 
-Indent has eight types: `string`, `int`, `float`, `boolean`, `list`, `set`, `dict`, `dynamic`, and `empty`.
+Indent has eight types: `string`, `int`, `float`, `boolean`, `list`, `group`, `dict`, `dynamic`, and `empty`.
 
 ```indent
 # Type inference — preferred style!
@@ -112,14 +112,14 @@ var z = 0
 set z boolean               # → FALSE (0→false, non-zero→true)
 
 var data = [1, 2, 2, 3]
-set data set                # → {1, 2, 3} (deduplicated)
+set data group              # → {1, 2, 3} (deduplicated)
 ```
 
-### Sets (unique ordered collections)
+### Groups (unique ordered collections)
 
 ```indent
-var colors = set(["red", "blue", "red"])  # → {"red", "blue"}
-var more = set(["green", "blue"])
+var colors = group(["red", "blue", "red"])  # → {"red", "blue"}
+var more = group(["green", "blue"])
 var all = colors + more                  # Union: {"red", "blue", "green"}
 contains(colors, "red")                 # → TRUE
 len(colors)                              # → 2
@@ -175,7 +175,7 @@ match day:
 ```indent
 repeat 5                    # Counted loop
 repeat item in list         # Iterate list
-repeat item in my_set       # Iterate set
+repeat item in my_group     # Iterate group
 repeat until done           # Conditional
 
 stop    # break
@@ -200,9 +200,9 @@ person["name"]              # → "Ada"
 person.name                 # Dot notation
 keys(person)                # → ["name", "age"]
 
-# Sets
-var tags = set(["rust", "indent"])
-var more = set(["indent", "go"])
+# Groups
+var tags = group(["rust", "indent"])
+var more = group(["indent", "go"])
 tags + more                 # → {"rust", "indent", "go"}
 ```
 
@@ -268,7 +268,7 @@ lastly:
 
 Key categories:
 - **String**: `len`, `upper`, `lower`, `trim`, `replace`, `split`, `join`, `contains`, `slice`
-- **List/Dict/Set**: `sort`, `reverse`, `append`, `pop`, `keys`, `values`, `has_key`, `count`
+- **List/Dict/Group**: `sort`, `reverse`, `append`, `pop`, `keys`, `values`, `has_key`, `count`
 - **Math**: `abs`, `range`, `is_even`, `is_odd`, plus `math.*` module
 - **Type**: `type_of`, `string`, `int`, `float`, `bool`, `int_or`, `float_or`
 - **Time**: `time_now`, `time_format`, `time_parse`, `time_sleep`
@@ -319,5 +319,5 @@ indent --update              # Update Indent
 4. Type inference: `var x = 42` → int
 5. Compound assignment: `x += 5`
 6. Type conversion: `set x string`
-7. Sets: `set([1,2,3])` for unique collections
+7. Groups: `group([1,2,3])` for unique collections
 8. `indent --update` keeps you current

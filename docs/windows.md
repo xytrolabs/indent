@@ -135,9 +135,11 @@ open a fresh PowerShell.
 powershell -ExecutionPolicy Bypass -c "irm ... | iex"
 ```
 
-### Old scripts using `group [...]` fail
-`group` still works as an alias, but the official keyword is now `set`. New code
-should use `set`, e.g. `set([1, 1, 2])` → `{1, 2}`.
+### `group` / `set` confusion
+`group([1, 1, 2])` builds a unique ordered collection → `{1, 2}`. The `set`
+keyword is for **type conversion** (`set x string`) and does **not** build a
+collection. If an old script calls `set([...])` expecting a collection, it
+works as a compatibility alias, but new code should use `group([...])`.
 
 ---
 

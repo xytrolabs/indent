@@ -1,8 +1,8 @@
 # Indent Quick Reference (v1.4.1)
 
 > Complete syntax reference for the Indent programming language.
-> **New in 1.4**: Set type (`set` keyword), type conversion (`set varname type`), compound assignment, type inference.
-> 💡 Unique ordered collections are called **sets** — `set([1,2,3])`. `group(...)` is a legacy alias that still works. `set x string` (no parens) is the *type conversion* form; `set(...)` (with parens) builds a set.<｜end▁of▁thinking｜>## Basics
+> **New in 1.4**: Group type (`group` builtin), type conversion (`set varname type`), compound assignment, type inference.
+> 💡 Unique ordered collections are called **groups** — `group([1,2,3])`. The `set` keyword performs **type conversion** (`set x string`); only the `group` builtin builds a group.<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)
 say "Hello"                 # Print to stdout
@@ -111,7 +111,7 @@ match x:                    # Pattern matching
 ```indent
 repeat 5                    # Counted loop (Reps is 0-indexed)
 repeat item in list         # Iterate over list
-repeat item in my_set        # Iterate over a set
+repeat item in my_group     # Iterate over a group
 repeat until x == 10        # Conditional loop
 for x in list               # Alias for repeat
 
@@ -120,24 +120,25 @@ next                        # Continue
 reset                       # Restart loop
 ```
 
-## Sets (v1.4) — Unique Ordered Collections
+## Groups (v1.4) — Unique Ordered Collections
 
-> 💡 Unique collections are **sets** — `set([1, 2, 2, 3])`. Older code/docs used
-> `group [...]`; `group` is still accepted as an alias for backward compatibility.
+> 💡 Unique collections are **groups** — `group([1, 2, 2, 3])`. The keyword `set`
+> is reserved for type conversion (`set varname type`), so building a group uses
+> the `group` builtin.
 
 ```indent
-var s = set([1, 2, 2, 3])    # → {1, 2, 3} — deduplicated
-var s2 = set([3, 4, 5, 6])
+var s = group([1, 2, 2, 3])  # → {1, 2, 3} — deduplicated
+var s2 = group([3, 4, 5, 6])
 var u = s + s2              # Union: {1, 2, 3, 4, 5, 6}
 contains(s, 2)              # → TRUE
 len(s)                      # → 3
-type_of(s)                  # → "set"
+type_of(s)                  # → "group"
 repeat item in s            # Iteration
 [x * 2 for x in s]          # Comprehension: [2, 4, 6]
-is_missing(set([]))         # → TRUE (empty set)
+is_missing(group([]))       # → TRUE (empty group)
 
 # Adding / removing / checking membership (methods use bare values)
-var t = set([1, 2])
+var t = group([1, 2])
 var t2 = t.add(3)           # → {1, 2, 3}
 var t3 = t2.remove(2)       # → {1, 3}
 t3.contains(1)              # → TRUE
@@ -219,7 +220,7 @@ string(x) / int(x) / float(x) / bool(x)   # Conversion functions
 int_or(s, fallback) / float_or(s, fallback)  # Safe conversion
 
 # String operations
-len("hello")                # → 5 (also works on lists, sets, dicts)
+len("hello")                # → 5 (also works on lists, groups, dicts)
 upper(s) / lower(s) / trim(s)
 replace(s, from, to)
 split("a,b", ",") / join([1,2], ",")
@@ -397,6 +398,6 @@ Available modules:
 6. Compound assignment: `x += 5` instead of `x is x + 5`
 7. Reassign with `is`, not `=`: `x is 42`
 8. `set varname type` converts types: `set x string`
-9. `set([1,2,3])` creates a Set (unique collection); `group [...]` is a legacy alias
+9. `group([1,2,3])` creates a Group (unique collection); `set` is only for type conversion
 10. Imports resolve: same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
 11. `indent --update` keeps you on the latest version

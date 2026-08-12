@@ -64,7 +64,7 @@ Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdl
 
 #### 5. **Tuples & Sets** 🔴
 - Python: `(1, 2, 3)` tuples (immutable), `{1, 2, 3}` sets (unique, fast membership)
-- Current: Lists only (mutable), no sets
+- Current: Indent's `group([...])` gives ordered unique collections (dedup + membership via `.contains`), but no immutable tuples or hash-based sets.
 - Difficulty: Medium (new value types in runtime)
 - ROI: **High** – essential for correct semantics (e.g., dict keys must be hashable)
 

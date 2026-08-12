@@ -10,7 +10,7 @@ Make Indent a complete standalone language with a native-first runtime and ecosy
   - `Do / Catch / Otherwise / Lastly`
   - `flag:` for raising errors.
 - **Python-style type inference**: `var x = 42` infers `int`, `var name = "Ada"` infers `string`.
-- **Set type**: `set([1,2,3])` for unique collections (legacy alias: `group [...]`), union via `+`, iteration, comprehension
+- **Group type**: `group([1,2,3])` for unique collections (the `set` keyword is for type conversion), union via `+`, iteration, comprehension
 - **Type conversion**: `set varname type` for clean type casting
 - **Compound assignment operators**: `+=`, `-=`, `*=`, `/=`, `%=`.
 - **Default parameters**: `fun greet name = "World"`.
