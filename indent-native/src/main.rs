@@ -1543,6 +1543,40 @@ fn module_in_dir(dir: &Path, module_rel: &str) -> Option<PathBuf> {
     None
 }
 
+/// Split a path-list environment variable into its entries.
+/// Unix uses ':' as the separator; Windows uses ';'. Splitting on ':' on
+/// Windows would also mangle drive letters (e.g. C:\Users\...), so the
+/// separator must match the host OS.
+fn split_path_list(raw: &str) -> Vec<&str> {
+    #[cfg(target_os = "windows")]
+    let sep = ';';
+    #[cfg(not(target_os = "windows"))]
+    let sep = ':';
+    raw.split(sep).map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+/// Resolve the user's home directory. Unix sets HOME; Windows does not
+/// (it uses USERPROFILE). Fall back to the current dir if neither is set.
+fn home_dir() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    let candidates = ["USERPROFILE", "HOME", "HOMEDRIVE"];
+    #[cfg(not(target_os = "windows"))]
+    let candidates = ["HOME"];
+    for var in candidates {
+        if let Ok(v) = std::env::var(var) {
+            #[cfg(target_os = "windows")]
+            if var == "HOMEDRIVE" {
+                if let Ok(home_path) = std::env::var("HOMEPATH") {
+                    return Some(PathBuf::from(format!("{v}{home_path}")));
+                }
+                continue;
+            }
+            return Some(PathBuf::from(v));
+        }
+    }
+    None
+}
+
 fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
     let module_rel = module_name.replace('.', "/");
 
@@ -1561,7 +1595,7 @@ fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
     }
 
     if let Ok(raw_paths) = env::var("INDENT_PATH") {
-        for base in raw_paths.split(':').map(str::trim).filter(|s| !s.is_empty()) {
+        for base in split_path_list(&raw_paths) {
             if let Some(found) = module_in_dir(Path::new(base), &module_rel) {
                 return Some(found);
             }
@@ -1569,18 +1603,23 @@ fn find_module_file(current_dir: &Path, module_name: &str) -> Option<PathBuf> {
     }
 
     // Default site-packages (like Python's ~/.local/lib/python*/site-packages)
-    if let Ok(home) = env::var("HOME") {
-        let site_pkg = Path::new(&home).join(".local/share/indent/site-packages");
+    if let Some(home) = home_dir() {
+        let site_pkg = home.join(".local/share/indent/site-packages");
         if let Some(found) = module_in_dir(&site_pkg, &module_rel) {
             return Some(found);
         }
+        // Standard library folder (installers place std modules here).
+        let std_dir = home.join(".local/share/indent/std");
+        if let Some(found) = module_in_dir(&std_dir, &module_rel) {
+            return Some(found);
+        }
         // AIR-installed packages (air install <pkg>).
-        let air_pkg = Path::new(&home).join(".local/share/indent/air-packages");
+        let air_pkg = home.join(".local/share/indent/air-packages");
         if let Some(found) = module_in_dir(&air_pkg, &module_rel) {
             return Some(found);
         }
         // Legacy Aether global installs (aetherpkg --global) also resolve.
-        let legacy_pkg = Path::new(&home).join(".local/share/aether/site-packages");
+        let legacy_pkg = home.join(".local/share/aether/site-packages");
         if let Some(found) = module_in_dir(&legacy_pkg, &module_rel) {
             return Some(found);
         }
@@ -2248,6 +2287,27 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => return Some(Err(format!("len expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
             };
             Some(Ok(out))
+        }
+        // `group` is a deprecated alias for `set` (unique ordered collection).
+        // Kept so older Indent scripts that used `group [...]` keep working.
+        "group" => {
+            if positional.is_empty() || positional.len() > 1 {
+                return Some(Err("group expects exactly 1 argument: a list of values".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                Value::Set(v) => v.clone(),
+                _ => return Some(Err(format!("group expects a list, got {}", positional[0].type_name()))),
+            };
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut unique: Vec<Value> = Vec::new();
+            for item in items {
+                let key = format!("{}", item);
+                if seen.insert(key) {
+                    unique.push(item);
+                }
+            }
+            Some(Ok(Value::Set(unique)))
         }
         "set" => {
             if positional.is_empty() || positional.len() > 1 {
@@ -5652,7 +5712,7 @@ fn find_gui_binary() -> PathBuf {
     }
     // Check PATH manually
     if let Ok(path_var) = std::env::var("PATH") {
-        for dir in path_var.split(':') {
+        for dir in split_path_list(&path_var) {
             for name in &["indent-gui", "gui_window"] {
                 let p = Path::new(dir).join(name);
                 if p.exists() { return p; }
@@ -6865,6 +6925,29 @@ impl ExprParser {
         self.parse_or()
     }
 
+    /// Parse an expression but STOP at a top-level `if` keyword (used for the
+    /// iterable in `[x for x in xs if cond]`). Otherwise `parse_or` would treat
+    /// the filter `if` as the start of a ternary and demand an `else`.
+    fn parse_expr_stop_if(&mut self) -> Result<Expr, String> {
+        let mut node = self.parse_and()?;
+        loop {
+            if self.peek_ident("if") {
+                break;
+            }
+            if self.match_ident("or") {
+                let rhs = self.parse_and()?;
+                node = Expr::Binary {
+                    op: "or".to_string(),
+                    lhs: Box::new(node),
+                    rhs: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(node)
+    }
+
     fn parse_or(&mut self) -> Result<Expr, String> {
         let mut node = self.parse_and()?;
         loop {
@@ -7274,7 +7357,7 @@ impl ExprParser {
                     if !self.match_ident("in") {
                         return Err("Expected 'in' in comprehension".to_string());
                     }
-                    let iterable = self.parse_expr()?;
+                    let iterable = self.parse_expr_stop_if()?;
                     let condition = if self.match_ident("if") {
                         Some(self.parse_expr()?)
                     } else {
@@ -7326,7 +7409,7 @@ impl ExprParser {
                     if !self.match_ident("in") {
                         return Err("Expected 'in' in dict comprehension".to_string());
                     }
-                    let iterable = self.parse_expr()?;
+                    let iterable = self.parse_expr_stop_if()?;
                     let condition = if self.match_ident("if") {
                         Some(self.parse_expr()?)
                     } else {
@@ -10498,6 +10581,44 @@ if ranked[2][0] == 0.9
     say "ok"
 otherwise
     say "bad"
+"#;
+        fs::write(&main_file, src).expect("write main file");
+
+        let mut rt = Runtime::new(dir.clone());
+        let result = rt.run_file(&main_file);
+        assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn split_path_list_handles_windows_and_unix_separators() {
+        // On Unix we split on ':'; on Windows on ';'. The helper must drop
+        // empty entries and trim whitespace around each entry.
+        #[cfg(not(target_os = "windows"))]
+        let got = split_path_list("a:b:: c ");
+        #[cfg(target_os = "windows")]
+        let got = split_path_list("a;b;; c ");
+        assert_eq!(got, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn filtered_comprehension_and_sets() {
+        let dir = unique_dir("indent_test_compr_set");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let main_file = dir.join("main.ind");
+        // Filtered list comprehension must parse (previously mis-parsed as a
+        // ternary because `if` was consumed by parse_or), and set() must
+        // build a unique ordered collection.
+        let src = r#"
+var nums = [1, 2, 3, 4, 5, 6]
+var evens = [x for x in nums if x % 2 == 0]
+if len(evens) == 3 and evens[0] == 2
+    say "compr-ok"
+var s = set([1, 2, 2, 3])
+if len(s) == 3 and type_of(s) == "set"
+    say "set-ok"
+var g = group([1, 1, 2])
+if len(g) == 2
+    say "group-alias-ok"
 "#;
         fs::write(&main_file, src).expect("write main file");
 

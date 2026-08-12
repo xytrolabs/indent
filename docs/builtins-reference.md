@@ -1,9 +1,12 @@
 # Indent Built-in Functions — API Reference (v1.3.0)
 
 > Complete reference for every built-in function available in Indent 1.3.0.
-> **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`
-> **🆕 v1.4**: Group type, type conversion (`set varname type`)
+> **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `set`
+> **🆕 v1.4**: Set type (`set([...])`), type conversion (`set varname type`), set methods
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
+>
+> **Note on sets:** unique ordered collections are called **sets** — created with
+> `set([1, 2, 2, 3])`. The legacy `group [...]` keyword still works as an alias.
 
 ---
 
@@ -99,6 +102,32 @@ var age int = ask("int", "Age: ")
 | `len(dict)` | int | Number of keys |
 
 > ⚠️ Dicts are **copy-on-access**. Modifying a nested dict requires: get → modify → reassign.
+
+---
+
+## Set Functions
+
+> Sets are unique, ordered collections. Create them with `set([...])` (the legacy
+> `group [...]` keyword also works). Methods mutate by returning a **new** set;
+> reassign the result to keep the change.
+
+| Function / Method | Returns | Description |
+|---|---|---|
+| `set(list)` | set | Build a set, deduplicating while preserving order |
+| `s.add(x)` | set | **New** set with `x` added (no-op if present) |
+| `s.remove(x)` | set | **New** set without `x` |
+| `s.contains(x)` | boolean | Is `x` in the set? (alias: `s.has(x)`) |
+| `len(s)` | int | Number of unique elements |
+| `s + s2` | set | Union of two sets |
+| `is_missing(s)` | boolean | TRUE if the set is empty |
+
+```indent
+var s = set([1, 2, 2, 3])   # → {1, 2, 3}
+var t = s.add(4)            # → {1, 2, 3, 4}
+var u = t.remove(2)         # → {1, 3, 4}
+u.contains(3)               # → TRUE
+contains(u, 9)              # → FALSE
+```
 
 ---
 

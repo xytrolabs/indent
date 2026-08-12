@@ -78,7 +78,7 @@ Indent reads like English. `fun` defines a function. `give` returns a value. `re
 | `float` | `3.14` |
 | `boolean` | `true`, `false` |
 | `list` | `[1, 2, 3]` |
-| `group` | `group [1, 2, 2, 3]` → `{1, 2, 3}` |
+| `set` | `set([1, 2, 2, 3])` → `{1, 2, 3}` (legacy alias: `group [...]`) |
 | `dict` | `{"key": "val"}` |
 | `dynamic` | anything |
 | `empty` | nothing |

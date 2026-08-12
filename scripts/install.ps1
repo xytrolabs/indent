@@ -119,7 +119,8 @@ Write-Host "✓ Standard library installed" -ForegroundColor Green
 @"
 @echo off
 setlocal
-set "INDENT_PATH=$PkgDir;$IndentHome;%INDENT_PATH%"
+rem Include site-packages, packages, and std in INDENT_PATH (like Python's sys.path)
+set "INDENT_PATH=$PkgDir;$StdDir;$IndentHome\site-packages;%INDENT_PATH%"
 "$BinDir\indent.exe" %*
 endlocal
 "@ | Set-Content -Path (Join-Path $LauncherDir "indent.cmd")
@@ -127,7 +128,7 @@ endlocal
 @"
 @echo off
 setlocal
-set "INDENT_PATH=$PkgDir;$IndentHome;%INDENT_PATH%"
+set "INDENT_PATH=$PkgDir;$StdDir;$IndentHome\site-packages;%INDENT_PATH%"
 "$BinDir\indent.exe" --debug %*
 endlocal
 "@ | Set-Content -Path (Join-Path $LauncherDir "indent-debug.cmd")
