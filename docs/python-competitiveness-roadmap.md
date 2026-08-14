@@ -1,24 +1,38 @@
 # Indent → Python Competitiveness Roadmap
 
+> **🆕 Status update (2026-08):** Many items once listed as gaps are now
+> **implemented**. For an accurate, current side-by-side with Python, see
+> [**Indent vs Python — Side-by-Side Comparison**](indent-vs-python.md).
+> This roadmap keeps the remaining gaps and history, with ✅ marking what's
+> now shipped.
+
 ## Executive Summary
-Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdlib modules. To become a true competitor while staying simple, focus on **high-impact, commonly-used features** that solve real scripting problems.
+Indent is a small, readable language that already implements most of the
+high-impact Python scripting features: regex, string methods, comprehensions,
+ordered groups, glob, do/catch error handling, classes with inheritance,
+bitwise ops, formatting, and a reversible package manager (`air`). The
+remaining gaps vs Python are mostly breadth (stdlib size, async, decorators,
+tuples, YAML/TOML/CSV).
 
 ---
 
 ## Current State Analysis
 
 ### What Indent Has ✅
-**Built-in Functions (50+)**:
-- Data structures: len, range, slice, split, join, append, extend, insert, pop, remove, enumerate, zip
-- Numeric: int, float, abs, inc, dec, add_int, sub_int, mul_int, div_int, mod_int
-- String basics: starts_with, ends_with, contains, find
-- Collection ops: sort, reverse, sum, min, max, any, all, count
-- Dict ops: keys, values, has_key, items, dict_get, dict_set, dict_remove
-- Type checks: is_missing, bool, string, type_of
-- Utilities: assert, process_exit, clamp, default, coalesce
+**Built-in Functions (60+)**:
+- Data structures: len, range, slice, split, join, append, extend, insert, pop, remove, enumerate, zip, group, set
+- Numeric: int, float, abs, add_int, sub_int, mul_int, div_int, mod_int, min, max, sum
+- String: upper, lower, trim, capitalize, title, swapcase, replace, starts_with, ends_with, contains, find, count, format, sformat
+- Regex: regex_match, regex_search, regex_findall, regex_replace, regex_split
+- Collection ops: sort, reverse, map, filter, any, all, count, glob
+- Dict ops: keys, values, has_key, items, dict_get, dict_set, dict_remove, dict_update
+- Type checks: is_missing, bool, string, type_of, type_name
+- Utilities: assert, process_exit, clamp, default, coalesce, uuid, base64, hash_*
 
-**Modules (13)**:
-- discord, json, os, sys, time, random, math, http, path, colors, agame, datetime, builtins
+**Modules (25+)**:
+- std: io, math, strings, testing, time, random, json, os, sys, path, fs, hash,
+  base64, datetime, regex, net, collections, ai, ingame, agame, discord
+- Native builtins: http, colors, websocket, and many others
 
 **Runtime Features**:
 - Static typing with type annotations
@@ -36,50 +50,38 @@ Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdl
 
 ### Tier 1: Blocking / High-Priority (Most Asked For)
 
-#### 1. **Regex (re module) - CRITICAL** 🔴
-- Python: `import re; re.match(), re.search(), re.sub(), re.split()`
-- Impact: Text parsing, validation, log analysis, data extraction
-- Current workaround: split() + string operations (brittle)
-- Difficulty: Medium (need pattern compilation, captures)
-- ROI: **Very High** – regex is fundamental to scripting
+> ✅ **Implemented now:** regex, string methods, list/dict methods,
+> comprehensions, groups, exception handling (do/catch/lastly), classes with
+> inheritance, bitwise ops, string formatting, context-manager `open as`.
+> The remaining true gaps are called out below.
 
-#### 2. **String Methods (native on string type)** 🔴
-- Python: `.upper(), .lower(), .strip(), .lstrip(), .rstrip(), .replace(), .capitalize(), .title(), .swapcase(), .center(), .ljust(), .rjust(), .zfill()`
-- Current workaround: None (missing entirely)
-- Difficulty: Low (simple string operations)
-- ROI: **Very High** – used constantly in text processing
+#### ~~1. Regex (re module)~~ ✅ **Implemented**
+- Indent: `regex_match`, `regex_search`, `regex_findall`, `regex_replace`, `regex_split`
+- Impact: Text parsing, validation, log analysis, data extraction — now native
 
-#### 3. **List/Dict Methods (native on collection types)** 🔴
-- Python: `.copy(), .clear(), .index(), .count()` on lists; `.copy(), .clear(), .get(), .setdefault()` on dicts
-- Current: Functional style only (dict_get, append, etc.)
-- Difficulty: Low
-- ROI: **High** – ergonomic improvement
+#### ~~2. String Methods~~ ✅ **Implemented**
+- Indent: `.upper/.lower/.strip/.replace/.capitalize/.title/.swapcase` methods,
+  plus free functions `Upper/Lower/Trim/...` and `PadLeft/PadRight`
 
-#### 4. **List/Dict Comprehensions** 🔴
-- Python: `[x*2 for x in items if x > 0]`, `{k: v for k, v in pairs}`
-- Impact: Concise data transformation
-- Current workaround: repeat loops + append
-- Difficulty: Medium (parser/evaluator changes)
-- ROI: **High** – widely used, more readable
+#### ~~3. List/Dict Methods~~ ✅ **Implemented**
+- Indent: functional style `append/insert/pop/remove/dict_get/dict_set/...`
+  plus the `collections` module (`Append`, `DictGet`, `Filter`, `Map`, ...)
 
-#### 5. **Tuples & Sets** 🔴
-- Python: `(1, 2, 3)` tuples (immutable), `{1, 2, 3}` sets (unique, fast membership)
-- Current: Indent's `group([...])` gives ordered unique collections (dedup + membership via `.contains`), but no immutable tuples or hash-based sets.
-- Difficulty: Medium (new value types in runtime)
-- ROI: **High** – essential for correct semantics (e.g., dict keys must be hashable)
+#### ~~4. List/Dict Comprehensions~~ ✅ **Implemented**
+- Indent: `[x*2 for x in items if x > 0]` — list, filtered, and group comprehensions
 
-#### 6. **Filesystem Operations (glob, walk, pathlib-like)** 🔴
+#### 5. **Tuples** 🔴 (Groups ✅ done)
+- Python: `(1, 2, 3)` tuples (immutable)
+- Indent: `group([...])` gives **ordered** unique collections (dedup + `.contains`),
+  but there is no immutable tuple type or hash-based set yet.
+
+#### ~~6. Filesystem Operations~~ ✅ **Implemented (partially)**
 - Python: `glob.glob("*.txt")`, `os.walk()`, `Path.iterdir()`, `Path.glob()`
-- Current: `os_list_dir()` only (no recursion, no pattern matching)
-- Impact: File discovery, batch operations
-- Difficulty: Medium
-- ROI: **Very High** – common in file-based scripts
+- Indent: `glob(...)` now exists; a recursive `os.walk`-style API is still a gap.
 
-#### 7. **Exception Handling (try-except-finally)** 🔴
+#### ~~7. Exception Handling~~ ✅ **Implemented**
 - Python: `try: ... except ValueError: ... finally: ...`
-- Current: do-catch (basic), no exception types/hierarchy
-- Difficulty: Medium
-- ROI: **High** – critical for robustness
+- Indent: `do: / catch as e: / lastly:` plus `flag:` — type hierarchy still a gap.
 
 ---
 
@@ -106,11 +108,10 @@ Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdl
 - Difficulty: Hard (parser/evaluator changes)
 - ROI: **Medium** – nice-to-have for frameworks
 
-#### 11. **Classes & OOP (full support)** 🟡
-- Python: `class Foo: def __init__(): ...`
-- Current: Basic object model, no inheritance, no special methods
-- Difficulty: Hard (major runtime work)
-- ROI: **Medium** – powerful but not essential for scripting
+#### ~~11. Classes & OOP~~ ✅ **Implemented**
+- Indent: `class`, inheritance via `class C from P`, fields, methods — see
+  [Classes vs Python/JS](learn/11-classes.md)
+- Remaining gap: special methods (`__str__`, `__add__`)
 
 #### 12. **YAML/TOML Config Support** 🟡
 - Python: `yaml.load()`, `tomllib.loads()`
@@ -128,30 +129,19 @@ Indent currently has ~50 built-in functions and 13 modules. Python has ~200 stdl
 - Difficulty: Hard
 - ROI: **Low-Medium** – powerful but complex
 
-#### 14. **Type Hints with Runtime Checking** 🟢
-- Python: `def foo(x: int) -> str: ...`
-- Current: Type annotations syntax exists, but no runtime enforcement
-- Difficulty: Medium
-- ROI: **Low** – mostly for documentation
+#### ~~14. Type Hints with Runtime Checking~~ ✅ **Implemented**
+- Indent: typed `var name type = ...`, return types `fun f as int`, and `set varname type`
+  conversion — see INDENT_GUIDE. Runtime enforcement is minimal (hints/documentation).
 
-#### 15. **Context Managers (with statement)** 🟢
-- Python: `with open("file") as f: ...`
-- Current: try-finally required
-- Difficulty: Medium
-- ROI: **Low-Medium** – syntactic sugar
+#### ~~15. Context Managers~~ ✅ **Implemented**
+- Indent: `open "file.txt" for read as f:` / `for write as f:` / `for append as f:`
 
-#### 16. **String Formatting (f-strings, format())** 🟢
-- Python: `f"{x:.2f}"`, `"{0} {1}".format(a, b)`
-- Current: String interpolation exists via concatenation
-- Difficulty: Low
-- ROI: **Low** – concatenation works, less elegant
+#### ~~16. String Formatting~~ ✅ **Implemented**
+- Indent: `format(template, a, b)` (`{0}`, `{1}`) and `sformat(template, k, v)`
+  (`{key}`), plus `%name%` interpolation
 
-#### 17. **Bitwise Operations** 🟢
-- Python: `&, |, ^, <<, >>, ~`
-- Impact: Low-level ops, flags, bit manipulation
-- Current: None
-- Difficulty: Low
-- ROI: **Low** – niche use cases
+#### ~~17. Bitwise Operations~~ ✅ **Implemented**
+- Indent: `&, |, ^, <<, >>` operators (bitwise builtins) — see quick-reference
 
 ---
 

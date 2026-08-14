@@ -220,6 +220,7 @@ Working programs in [`examples/`](examples/): AI package demo (`ai_pkg.ind`), AI
 | Document | What |
 |---|---|
 | [`docs/INDENT_GUIDE.md`](docs/INDENT_GUIDE.md) | Full language guide |
+| [`docs/indent-vs-python.md`](docs/indent-vs-python.md) | Indent vs Python side-by-side |
 | [`docs/quick-reference.md`](docs/quick-reference.md) | Syntax cheat sheet |
 | [`docs/builtins-reference.md`](docs/builtins-reference.md) | All built-in functions |
 | [`docs/learn/01-quickstart.md`](docs/learn/01-quickstart.md) | 15-minute quickstart |
