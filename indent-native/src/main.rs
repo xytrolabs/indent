@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt;
@@ -9,13 +8,12 @@ use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::process;
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::{connect as ws_connect_blocking, Message as WsMessage};
 
 const DEBUGGER_STOP_MSG: &str = "Execution stopped by debugger";
-use std::rc::Rc;
 
 const INDENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,6 +24,17 @@ static WS_CLIENTS: LazyLock<Mutex<HashMap<i64, WsClient>>> =
 static WS_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 static RNG_STATE: AtomicI64 = AtomicI64::new(0x4d595df4d0f33173u64 as i64);
 static PERF_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+// ── Async task store ────────────────────────────────────────
+struct TaskState {
+    handle: Option<std::thread::JoinHandle<()>>,
+    done: Arc<AtomicBool>,
+    result: Arc<Mutex<Option<Value>>>,
+}
+
+static TASKS: LazyLock<Mutex<HashMap<i64, TaskState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static TASK_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
 #[derive(Debug, Clone)]
 struct SourceLine {
@@ -185,6 +194,7 @@ struct FunctionParam {
     name: String,
     ty: Option<String>,
     default_value: Option<String>,
+    is_varargs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +223,7 @@ struct ClassDef {
 #[derive(Debug, Clone)]
 enum Callable {
     Local(FunctionDef),
-    External { module: Rc<ModuleInstance>, name: String },
+    External { module: Arc<ModuleInstance>, name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -240,7 +250,7 @@ enum Value {
         methods: HashMap<String, FunctionDef>,
     },
     Func(String),
-    Module(Rc<ModuleInstance>),
+    Module(Arc<ModuleInstance>),
     Empty,
 }
 
@@ -534,9 +544,9 @@ struct Runtime {
     vars: HashMap<String, Value>,
     funcs: HashMap<String, FunctionDef>,
     callables: HashMap<String, Callable>,
-    modules: HashMap<String, Rc<ModuleInstance>>,
+    modules: HashMap<String, Arc<ModuleInstance>>,
     classes: HashMap<String, ClassDef>,
-    module_cache: Rc<RefCell<HashMap<PathBuf, Rc<ModuleInstance>>>>,
+    module_cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
     debugger: Option<Debugger>,
 }
 
@@ -555,12 +565,12 @@ impl Runtime {
             callables: HashMap::new(),
             modules: HashMap::new(),
             classes: HashMap::new(),
-            module_cache: Rc::new(RefCell::new(HashMap::new())),
+            module_cache: Arc::new(Mutex::new(HashMap::new())),
             debugger: None,
         }
     }
 
-    fn with_cache(module_dir: PathBuf, cache: Rc<RefCell<HashMap<PathBuf, Rc<ModuleInstance>>>>) -> Self {
+    fn with_cache(module_dir: PathBuf, cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>) -> Self {
         Self {
             module_dir,
             vars: default_color_vars(),
@@ -781,7 +791,7 @@ impl<'a> ExecContext<'a> {
         self.rt.vars.get(name).cloned()
     }
 
-    fn get_module(&self, name: &str) -> Option<Rc<ModuleInstance>> {
+    fn get_module(&self, name: &str) -> Option<Arc<ModuleInstance>> {
         self.rt.modules.get(name).cloned()
     }
 }
@@ -1495,14 +1505,14 @@ fn import_stmt(
     Ok(())
 }
 
-fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Rc<ModuleInstance>, String> {
+fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<ModuleInstance>, String> {
     let path = find_module_file(&ctx.rt.module_dir, module_name)
         .ok_or_else(|| format!("Cannot import module '{}': file not found", module_name))?;
     let canonical = path
         .canonicalize()
         .map_err(|_| format!("Cannot import module '{}': file not found", module_name))?;
 
-    if let Some(m) = ctx.rt.module_cache.borrow().get(&canonical) {
+    if let Some(m) = ctx.rt.module_cache.lock().unwrap().get(&canonical) {
         return Ok(m.clone());
     }
 
@@ -1514,7 +1524,7 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Rc<Module
         ctx.rt.module_cache.clone(),
     );
     module_runtime.run_file(&canonical)?;
-    let module = Rc::new(ModuleInstance {
+    let module = Arc::new(ModuleInstance {
         vars: module_runtime.vars,
         funcs: module_runtime.funcs,
         callables: module_runtime.callables,
@@ -1522,7 +1532,8 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Rc<Module
 
     ctx.rt
         .module_cache
-        .borrow_mut()
+        .lock()
+        .unwrap()
         .insert(canonical, module.clone());
     Ok(module)
 }
@@ -1687,6 +1698,25 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
                 invoke_external_function(module, &name, &func_args, &named, ctx)
             }
         };
+    }
+
+    // Handle spawn builtin — run a function on a background thread.
+    if callee == "spawn" {
+        if positional.is_empty() {
+            return Err("spawn expects at least 1 argument (function_name, args...)".to_string());
+        }
+        let fn_name = positional[0].to_string();
+        let task_args: Vec<Value> = positional[1..].to_vec();
+        return spawn_task_builtin(&fn_name, &task_args, ctx);
+    }
+
+    // Handle parallel builtin — run a function for each arg-list concurrently.
+    if callee == "parallel" {
+        if positional.len() != 2 {
+            return Err("parallel expects exactly 2 arguments (function, list_of_arglists)".to_string());
+        }
+        let fn_name = positional[0].to_string();
+        return parallel_builtin(&fn_name, &positional[1], ctx);
     }
 
     // User-defined and imported functions take precedence over builtins
@@ -1917,7 +1947,7 @@ fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, Str
 }
 
 fn invoke_external_function(
-    module: Rc<ModuleInstance>,
+    module: Arc<ModuleInstance>,
     name: &str,
     positional: &[Value],
     named: &HashMap<String, Value>,
@@ -1985,7 +2015,8 @@ fn invoke_function(
     ctx.push_frame();
 
     if !f.params.is_empty() {
-        if positional.len() > f.params.len() {
+        let has_varargs = f.params.last().map_or(false, |p| p.is_varargs);
+        if !has_varargs && positional.len() > f.params.len() {
             ctx.pop_frame();
             return Err(format!(
                 "Too many positional arguments: expected at most {}, got {}",
@@ -1995,6 +2026,22 @@ fn invoke_function(
         }
 
         for (idx, param) in f.params.iter().enumerate() {
+            if param.is_varargs {
+                // Collect all remaining positional args (and any unmatched named) into a list
+                let mut rest = Vec::new();
+                for (i, v) in positional.iter().enumerate() {
+                    if i >= idx {
+                        rest.push(v.clone());
+                    }
+                }
+                for (k, v) in named {
+                    if !f.params.iter().any(|p| p.name == *k) {
+                        rest.push(v.clone());
+                    }
+                }
+                ctx.define_local(&param.name, Value::List(rest));
+                continue;
+            }
             let raw_value = if let Some(v) = named.get(&param.name) {
                 v.clone()
             } else if let Some(v) = positional.get(idx) {
@@ -2098,6 +2145,25 @@ fn invoke_callable_expr(
 
     if let Some(target) = callee.strip_prefix("py.") {
         return python_prefixed_call_builtin(target, &positional, &HashMap::new());
+    }
+
+    // Handle spawn builtin — run a function on a background thread.
+    if callee == "spawn" {
+        if positional.is_empty() {
+            return Err("spawn expects at least 1 argument (function_name, args...)".to_string());
+        }
+        let fn_name = positional[0].to_string();
+        let task_args: Vec<Value> = positional[1..].to_vec();
+        return spawn_task_builtin(&fn_name, &task_args, ctx);
+    }
+
+    // Handle parallel builtin — run a function for each arg-list concurrently.
+    if callee == "parallel" {
+        if positional.len() != 2 {
+            return Err("parallel expects exactly 2 arguments (function, list_of_arglists)".to_string());
+        }
+        let fn_name = positional[0].to_string();
+        return parallel_builtin(&fn_name, &positional[1], ctx);
     }
 
     // User-defined and imported functions take precedence over builtins
@@ -4083,6 +4149,45 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(os_system_builtin(&positional[0].to_string()))
         }
+        "os_run" => {
+            if positional.len() != 1 {
+                return Some(Err("os_run expects exactly 1 argument (command)".to_string()));
+            }
+            Some(os_run_builtin(&positional[0].to_string()))
+        }
+        "os_copy" => {
+            if positional.len() != 2 {
+                return Some(Err("os_copy expects exactly 2 arguments (source, destination)".to_string()));
+            }
+            Some(os_copy_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        "os_move" => {
+            if positional.len() != 2 {
+                return Some(Err("os_move expects exactly 2 arguments (source, destination)".to_string()));
+            }
+            Some(os_move_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        "os_copy_tree" => {
+            if positional.len() != 2 {
+                return Some(Err("os_copy_tree expects exactly 2 arguments (source, destination)".to_string()));
+            }
+            Some(os_copy_tree_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        "file_size" => {
+            if positional.len() != 1 {
+                return Some(Err("file_size expects exactly 1 argument (path)".to_string()));
+            }
+            Some(file_size_builtin(&positional[0].to_string()))
+        }
         "os_exists" => {
             if positional.len() != 1 {
                 return Some(Err("os_exists expects exactly 1 argument (path)".to_string()));
@@ -4577,6 +4682,125 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let pattern = positional[0].to_string();
             Some(Ok(Value::List(simple_glob(&pattern))))
         }
+        // Recursive file walk (os.walk / glob ** style)
+        "walk" => {
+            if positional.len() != 1 {
+                return Some(Err("walk expects exactly 1 argument (path)".to_string()));
+            }
+            Some(walk_builtin(&positional[0].to_string()))
+        }
+        // ── CSV ──────────────────────────────────────────────
+        "csv_read" => {
+            if positional.len() != 1 {
+                return Some(Err("csv_read expects exactly 1 argument (path)".to_string()));
+            }
+            Some(csv_read_builtin(&positional[0].to_string()))
+        }
+        "csv_write" => {
+            if positional.len() != 2 {
+                return Some(Err("csv_write expects exactly 2 arguments (path, rows)".to_string()));
+            }
+            Some(csv_write_builtin(&positional[0].to_string(), &positional[1]))
+        }
+        // ── SQLite ───────────────────────────────────────────
+        "sqlite_exec" => {
+            if positional.len() != 2 {
+                return Some(Err("sqlite_exec expects exactly 2 arguments (path, sql)".to_string()));
+            }
+            Some(sqlite_exec_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        "sqlite_query" => {
+            if positional.len() != 2 {
+                return Some(Err("sqlite_query expects exactly 2 arguments (path, sql)".to_string()));
+            }
+            Some(sqlite_query_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        "sqlite_query_one" => {
+            if positional.len() != 2 {
+                return Some(Err("sqlite_query_one expects exactly 2 arguments (path, sql)".to_string()));
+            }
+            Some(sqlite_query_one_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        // ── Typed errors ─────────────────────────────────────
+        "error_type" => {
+            if positional.len() != 1 {
+                return Some(Err("error_type expects exactly 1 argument (error string)".to_string()));
+            }
+            Some(error_type_builtin(&positional[0].to_string()))
+        }
+        "error_message" => {
+            if positional.len() != 1 {
+                return Some(Err("error_message expects exactly 1 argument (error string)".to_string()));
+            }
+            Some(error_message_builtin(&positional[0].to_string()))
+        }
+        // ── Collections / utility ────────────────────────────
+        "counter" => {
+            if positional.len() != 1 {
+                return Some(Err("counter expects exactly 1 argument (list)".to_string()));
+            }
+            Some(counter_builtin(&positional[0]))
+        }
+        "log" => {
+            if positional.len() != 2 {
+                return Some(Err("log expects exactly 2 arguments (level, message)".to_string()));
+            }
+            Some(log_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
+        // ── TOML ──────────────────────────────────────────────
+        "toml_loads" => {
+            if positional.len() != 1 {
+                return Some(Err("toml_loads expects exactly 1 argument (text)".to_string()));
+            }
+            Some(toml_loads_builtin(&positional[0].to_string()))
+        }
+        "toml_dumps" => {
+            if positional.len() != 1 {
+                return Some(Err("toml_dumps expects exactly 1 argument (dict)".to_string()));
+            }
+            Some(toml_dumps_builtin(&positional[0]))
+        }
+        // ── Compression ───────────────────────────────────────
+        "gzip_compress" => {
+            if positional.len() != 1 {
+                return Some(Err("gzip_compress expects exactly 1 argument (text)".to_string()));
+            }
+            Some(gzip_compress_builtin(&positional[0].to_string()))
+        }
+        "gzip_decompress" => {
+            if positional.len() != 1 {
+                return Some(Err("gzip_decompress expects exactly 1 argument (base64)".to_string()));
+            }
+            Some(gzip_decompress_builtin(&positional[0].to_string()))
+        }
+        // ── Zip ──────────────────────────────────────────────
+        "zip_list" => {
+            if positional.len() != 1 {
+                return Some(Err("zip_list expects exactly 1 argument (path)".to_string()));
+            }
+            Some(zip_list_builtin(&positional[0].to_string()))
+        }
+        "zip_extract" => {
+            if positional.len() != 2 {
+                return Some(Err("zip_extract expects exactly 2 arguments (path, destination)".to_string()));
+            }
+            Some(zip_extract_builtin(
+                &positional[0].to_string(),
+                &positional[1].to_string(),
+            ))
+        }
         // ── Path helpers ───────────────────────────────────────
         "path_join" => {
             if positional.len() < 2 {
@@ -4652,6 +4876,50 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(Ok(Value::List(out)))
         }
+        // ── Async tasks ───────────────────────────────────────
+        "task_wait" => {
+            if positional.len() != 1 {
+                return Some(Err("task_wait expects exactly 1 argument (task id)".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(id) => Some(task_wait_builtin(*id)),
+                _ => Some(Err("task_wait expects an integer task id".to_string())),
+            }
+        }
+        "task_done" => {
+            if positional.len() != 1 {
+                return Some(Err("task_done expects exactly 1 argument (task id)".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(id) => Some(task_done_builtin(*id)),
+                _ => Some(Err("task_done expects an integer task id".to_string())),
+            }
+        }
+        "task_result" => {
+            if positional.len() != 1 {
+                return Some(Err("task_result expects exactly 1 argument (task id)".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(id) => Some(task_result_builtin(*id)),
+                _ => Some(Err("task_result expects an integer task id".to_string())),
+            }
+        }
+        "task_wait_all" => {
+            if positional.len() != 1 {
+                return Some(Err("task_wait_all expects exactly 1 argument (list of task ids)".to_string()));
+            }
+            Some(task_wait_all_builtin(&positional[0]))
+        }
+        "task_wait_timeout" => {
+            if positional.len() != 2 {
+                return Some(Err("task_wait_timeout expects exactly 2 arguments (task id, seconds)".to_string()));
+            }
+            match (&positional[0], &positional[1]) {
+                (Value::Int(id), Value::Float(secs)) => Some(task_wait_timeout_builtin(*id, *secs)),
+                (Value::Int(id), Value::Int(secs)) => Some(task_wait_timeout_builtin(*id, *secs as f64)),
+                _ => Some(Err("task_wait_timeout expects (int task id, number seconds)".to_string())),
+            }
+        }
         _ => None,
     }
 }
@@ -4717,6 +4985,71 @@ fn os_system_builtin(command: &str) -> Result<Value, String> {
 
     let status = status.map_err(|e| format!("os_system failed: {e}"))?;
     Ok(Value::Int(status.code().unwrap_or(1) as i64))
+}
+
+/// Run a shell command and capture its output — fills the `subprocess` gap.
+/// Returns a dict `{ok, status, stdout, stderr}`.
+fn os_run_builtin(command: &str) -> Result<Value, String> {
+    #[cfg(target_os = "windows")]
+    let output = Command::new("cmd").args(["/C", command]).output();
+    #[cfg(not(target_os = "windows"))]
+    let output = Command::new("sh").args(["-c", command]).output();
+
+    let output = output.map_err(|e| format!("os_run failed: {e}"))?;
+    let mut out = HashMap::new();
+    out.insert(
+        "ok".to_string(),
+        Value::Bool(output.status.success()),
+    );
+    out.insert(
+        "status".to_string(),
+        Value::Int(output.status.code().unwrap_or(1) as i64),
+    );
+    out.insert(
+        "stdout".to_string(),
+        Value::Str(String::from_utf8_lossy(&output.stdout).to_string()),
+    );
+    out.insert(
+        "stderr".to_string(),
+        Value::Str(String::from_utf8_lossy(&output.stderr).to_string()),
+    );
+    Ok(Value::Dict(out))
+}
+
+fn os_copy_builtin(src: &str, dst: &str) -> Result<Value, String> {
+    fs::copy(src, dst).map_err(|e| format!("os_copy failed: {e}"))?;
+    Ok(Value::Empty)
+}
+
+fn os_move_builtin(src: &str, dst: &str) -> Result<Value, String> {
+    fs::rename(src, dst).map_err(|e| format!("os_move failed: {e}"))?;
+    Ok(Value::Empty)
+}
+
+/// Recursively copy a directory tree (shutil.copytree equivalent).
+fn os_copy_tree_builtin(src: &str, dst: &str) -> Result<Value, String> {
+    fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            let to = dst.join(entry.file_name());
+            if ft.is_dir() {
+                copy_dir(&entry.path(), &to)?;
+            } else {
+                fs::copy(entry.path(), &to)?;
+            }
+        }
+        Ok(())
+    }
+    copy_dir(Path::new(src), Path::new(dst))
+        .map_err(|e| format!("os_copy_tree failed: {e}"))?;
+    Ok(Value::Empty)
+}
+
+fn file_size_builtin(path: &str) -> Result<Value, String> {
+    let meta = fs::metadata(path).map_err(|e| format!("file_size failed: {e}"))?;
+    Ok(Value::Int(meta.len() as i64))
 }
 
 fn find_python_command() -> Option<&'static str> {
@@ -5030,6 +5363,618 @@ fn file_append_text_builtin(path: &str, text: &str) -> Result<Value, String> {
     file.write_all(text.as_bytes())
         .map_err(|e| format!("file_append_text failed: {e}"))?;
     Ok(Value::Empty)
+}
+
+/// Recursively walk a directory tree, returning every file path
+/// (sorted depth-first, directories traversed in order). Mirrors
+/// Python's `os.walk` / `glob.glob("**/*")` use case.
+fn walk_builtin(path: &str) -> Result<Value, String> {
+    let root = PathBuf::from(path);
+    if !root.exists() {
+        return Err(format!("walk: path '{}' does not exist", path));
+    }
+    let mut results = Vec::new();
+    fn recurse(dir: &Path, out: &mut Vec<Value>) -> Result<(), String> {
+        let entries = fs::read_dir(dir).map_err(|e| format!("walk failed: {e}"))?;
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let p = entry.path();
+            if p.is_dir() {
+                recurse(&p, out)?;
+            } else {
+                out.push(Value::Str(p.to_string_lossy().to_string()));
+            }
+        }
+        Ok(())
+    }
+    recurse(&root, &mut results)?;
+    Ok(Value::List(results))
+}
+
+/// Read a CSV file into a list of rows, each row a list of cell strings.
+/// Handles quoted fields containing commas, escaped quotes, and newlines.
+fn csv_read_builtin(path: &str) -> Result<Value, String> {
+    let content = fs::read_to_string(path).map_err(|e| format!("csv_read failed: {e}"))?;
+    let mut rows = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        rows.push(Value::List(parse_csv_line(line)));
+    }
+    Ok(Value::List(rows))
+}
+
+fn parse_csv_line(line: &str) -> Vec<Value> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+        } else if c == ',' {
+            fields.push(Value::Str(current.trim().to_string()));
+            current.clear();
+        } else {
+            current.push(c);
+        }
+    }
+    fields.push(Value::Str(current.trim().to_string()));
+    fields
+}
+
+/// Write a list of rows (each a list) to a CSV file.
+/// Fields containing commas, quotes, or newlines are quoted/escaped.
+fn csv_write_builtin(path: &str, rows: &Value) -> Result<Value, String> {
+    let rows = match rows {
+        Value::List(rows) => rows,
+        _ => return Err("csv_write expects a list of rows (list of lists)".to_string()),
+    };
+    let mut content = String::new();
+    for row in rows {
+        let row_items = match row {
+            Value::List(items) => items.clone(),
+            _ => return Err("csv_write expects each row to be a list".to_string()),
+        };
+        let fields: Vec<String> = row_items
+            .iter()
+            .map(|v| {
+                let s = v.to_string();
+                if s.contains(',') || s.contains('"') || s.contains('\n') {
+                    format!("\"{}\"", s.replace('"', "\"\""))
+                } else {
+                    s
+                }
+            })
+            .collect();
+        content.push_str(&fields.join(","));
+        content.push('\n');
+    }
+    fs::write(path, content).map_err(|e| format!("csv_write failed: {e}"))?;
+    Ok(Value::Empty)
+}
+
+/// Convert a rusqlite SQL value into an Indent Value.
+fn sqlite_to_value(v: rusqlite::types::Value) -> Value {
+    match v {
+        rusqlite::types::Value::Null => Value::Empty,
+        rusqlite::types::Value::Integer(i) => Value::Int(i),
+        rusqlite::types::Value::Real(r) => Value::Float(r),
+        rusqlite::types::Value::Text(s) => Value::Str(s),
+        rusqlite::types::Value::Blob(b) => Value::Str(String::from_utf8_lossy(&b).to_string()),
+    }
+}
+
+/// Run a single non-query SQL statement (CREATE/INSERT/UPDATE/DELETE).
+/// Returns the number of affected rows.
+fn sqlite_exec_builtin(path: &str, sql: &str) -> Result<Value, String> {
+    let conn =
+        rusqlite::Connection::open(path).map_err(|e| format!("sqlite_exec: {e}"))?;
+    let changed =
+        conn.execute(sql, []).map_err(|e| format!("sqlite_exec: {e}"))?;
+    Ok(Value::Int(changed as i64))
+}
+
+/// Run a SELECT and return all rows as a list of lists (each cell an Indent value).
+fn sqlite_query_builtin(path: &str, sql: &str) -> Result<Value, String> {
+    let conn =
+        rusqlite::Connection::open(path).map_err(|e| format!("sqlite_query: {e}"))?;
+    let mut stmt =
+        conn.prepare(sql).map_err(|e| format!("sqlite_query: {e}"))?;
+    let col_count = stmt.column_count();
+    let mut rows = Vec::new();
+    let mut query = stmt
+        .query([])
+        .map_err(|e| format!("sqlite_query: {e}"))?;
+    while let Some(row) = query
+        .next()
+        .map_err(|e| format!("sqlite_query: {e}"))?
+    {
+        let mut cells = Vec::with_capacity(col_count);
+        for i in 0..col_count {
+            let cell = row
+                .get::<_, rusqlite::types::Value>(i)
+                .map_err(|e| format!("sqlite_query: {e}"))?;
+            cells.push(sqlite_to_value(cell));
+        }
+        rows.push(Value::List(cells));
+    }
+    Ok(Value::List(rows))
+}
+
+/// Run a SELECT and return only the first row (list), or `empty` if none.
+fn sqlite_query_one_builtin(path: &str, sql: &str) -> Result<Value, String> {
+    let conn =
+        rusqlite::Connection::open(path).map_err(|e| format!("sqlite_query_one: {e}"))?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("sqlite_query_one: {e}"))?;
+    let col_count = stmt.column_count();
+    let mut query = stmt
+        .query([])
+        .map_err(|e| format!("sqlite_query_one: {e}"))?;
+    if let Some(row) = query
+        .next()
+        .map_err(|e| format!("sqlite_query_one: {e}"))?
+    {
+        let mut cells = Vec::with_capacity(col_count);
+        for i in 0..col_count {
+            let cell = row
+                .get::<_, rusqlite::types::Value>(i)
+                .map_err(|e| format!("sqlite_query_one: {e}"))?;
+            cells.push(sqlite_to_value(cell));
+        }
+        Ok(Value::List(cells))
+    } else {
+        Ok(Value::Empty)
+    }
+}
+
+/// Classify an error string into an error code, mirroring the codes produced
+/// by `format_error_with_source` (E000–E012).
+fn classify_error_code(err: &str) -> &'static str {
+    if err.contains("division by zero") {
+        "E007"
+    } else if err.contains("index out of range") || err.contains("index out of bounds") {
+        "E008"
+    } else if err.contains("key not found") || err.contains("has no key")
+        || err.contains("no key")
+    {
+        "E009"
+    } else if err.contains("file not found") || err.contains("no such file")
+        || err.contains("Cannot open")
+    {
+        "E010"
+    } else if err.contains("JSON") || err.contains("Invalid JSON") {
+        "E011"
+    } else if err.contains("connection") || err.contains("network")
+        || err.contains("timeout") || err.contains("refused")
+    {
+        "E012"
+    } else if err.contains("expects") || err.contains("Cannot convert")
+        || err.contains("Cannot add") || err.contains("Cannot subtract")
+        || err.contains("Cannot multiply")
+    {
+        "E001"
+    } else if err.contains("no function") || err.contains("has no function")
+        || err.contains("is not callable")
+    {
+        "E002"
+    } else if err.contains("import") || err.contains("Cannot import")
+        || err.contains("Cannot load")
+    {
+        "E003"
+    } else if err.contains("syntax") || err.contains("expected")
+        || err.contains("unexpected")
+    {
+        "E004"
+    } else if err.contains("unwrap") {
+        "E005"
+    } else if err.contains("variable") || err.contains("undefined")
+        || err.contains("not defined")
+    {
+        "E006"
+    } else {
+        "E000"
+    }
+}
+
+fn error_code_to_name(code: &str) -> &'static str {
+    match code {
+        "E001" => "type_error",
+        "E002" => "undefined_function",
+        "E003" => "import_error",
+        "E004" => "syntax_error",
+        "E005" => "unwrap_error",
+        "E006" => "undefined_variable",
+        "E007" => "division_by_zero",
+        "E008" => "index_error",
+        "E009" => "key_error",
+        "E010" => "file_not_found",
+        "E011" => "json_error",
+        "E012" => "network_error",
+        _ => "runtime_error",
+    }
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for x in chars.by_ref() {
+                if x == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Return a human-readable error type name (e.g. "key_error", "type_error")
+/// for an error string captured by `catch as err:`.
+fn error_type_builtin(err: &str) -> Result<Value, String> {
+    let cleaned = strip_ansi(err);
+    // If an explicit `error[EXXX]` code is present, use it directly.
+    if let Some(start) = cleaned.find("error[") {
+        if let Some(end) = cleaned[start..].find(']') {
+            let code = &cleaned[start + 6..start + end];
+            return Ok(Value::Str(error_code_to_name(code).to_string()));
+        }
+    }
+    let code = classify_error_code(&cleaned);
+    Ok(Value::Str(error_code_to_name(code).to_string()))
+}
+
+/// Return just the message portion of an error string (strips the
+/// `error[EXXX]: ` prefix and any ANSI codes).
+fn error_message_builtin(err: &str) -> Result<Value, String> {
+    let cleaned = strip_ansi(err);
+    let msg = if let Some(idx) = cleaned.find("]: ") {
+        cleaned[idx + 3..].trim().to_string()
+    } else {
+        cleaned.trim().to_string()
+    };
+    Ok(Value::Str(msg))
+}
+
+/// Count occurrences of each element in a list → dict `{element: count}`.
+fn counter_builtin(list: &Value) -> Result<Value, String> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err("counter expects a list".to_string()),
+    };
+    let mut out = HashMap::new();
+    for it in items {
+        let e = out.entry(it.to_string()).or_insert(Value::Int(0));
+        if let Value::Int(n) = e {
+            *n += 1;
+        }
+    }
+    Ok(Value::Dict(out))
+}
+
+/// Write a log line `[LEVEL] message` to stderr.
+fn log_builtin(level: &str, msg: &str) -> Result<Value, String> {
+    eprintln!("[{}] {}", level.to_uppercase(), msg);
+    Ok(Value::Empty)
+}
+
+fn toml_to_value(v: &toml::Value) -> Value {
+    match v {
+        toml::Value::String(s) => Value::Str(s.clone()),
+        toml::Value::Integer(i) => Value::Int(*i),
+        toml::Value::Float(f) => Value::Float(*f),
+        toml::Value::Boolean(b) => Value::Bool(*b),
+        toml::Value::Datetime(d) => Value::Str(d.to_string()),
+        toml::Value::Array(a) => Value::List(a.iter().map(toml_to_value).collect()),
+        toml::Value::Table(t) => {
+            let mut m = HashMap::new();
+            for (k, v) in t {
+                m.insert(k.clone(), toml_to_value(v));
+            }
+            Value::Dict(m)
+        }
+    }
+}
+
+fn toml_loads_builtin(text: &str) -> Result<Value, String> {
+    let v: toml::Value = toml::from_str(text).map_err(|e| format!("toml_loads: {e}"))?;
+    Ok(toml_to_value(&v))
+}
+
+fn value_to_toml(v: &Value) -> Option<toml::Value> {
+    match v {
+        Value::Int(i) => Some(toml::Value::Integer(*i)),
+        Value::Float(f) => Some(toml::Value::Float(*f)),
+        Value::Bool(b) => Some(toml::Value::Boolean(*b)),
+        Value::Str(s) => Some(toml::Value::String(s.clone())),
+        Value::List(items) => Some(toml::Value::Array(
+            items.iter().filter_map(value_to_toml).collect(),
+        )),
+        Value::Set(items) => Some(toml::Value::Array(
+            items.iter().filter_map(value_to_toml).collect(),
+        )),
+        Value::Dict(d) => {
+            let mut t = toml::map::Map::new();
+            for (k, v) in d {
+                if let Some(tv) = value_to_toml(v) {
+                    t.insert(k.clone(), tv);
+                }
+            }
+            Some(toml::Value::Table(t))
+        }
+        _ => None,
+    }
+}
+
+fn toml_dumps_builtin(value: &Value) -> Result<Value, String> {
+    let tv = value_to_toml(value).ok_or_else(|| "toml_dumps expects a dict".to_string())?;
+    let s = toml::to_string(&tv).map_err(|e| format!("toml_dumps: {e}"))?;
+    Ok(Value::Str(s))
+}
+
+/// Gzip-compress text, return the compressed bytes base64-encoded (text-safe).
+fn gzip_compress_builtin(text: &str) -> Result<Value, String> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(text.as_bytes())
+        .map_err(|e| format!("gzip_compress: {e}"))?;
+    let bytes = enc.finish().map_err(|e| format!("gzip_compress: {e}"))?;
+    use base64::Engine;
+    Ok(Value::Str(
+        base64::engine::general_purpose::STANDARD.encode(&bytes),
+    ))
+}
+
+/// Take base64 of gzip data and decompress it back to text.
+fn gzip_decompress_builtin(b64: &str) -> Result<Value, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("gzip_decompress: {e}"))?;
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    let mut dec = GzDecoder::new(&bytes[..]);
+    let mut out = String::new();
+    dec.read_to_string(&mut out)
+        .map_err(|e| format!("gzip_decompress: {e}"))?;
+    Ok(Value::Str(out))
+}
+
+/// List the entry names in a zip archive.
+fn zip_list_builtin(path: &str) -> Result<Value, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("zip_list: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip_list: {e}"))?;
+    let mut names = Vec::new();
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("zip_list: {e}"))?;
+        names.push(Value::Str(entry.name().to_string()));
+    }
+    Ok(Value::List(names))
+}
+
+/// Extract a zip archive into a destination directory (path-safe).
+fn zip_extract_builtin(path: &str, dest: &str) -> Result<Value, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("zip_extract: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip_extract: {e}"))?;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("zip_extract: {e}"))?;
+        let out_path = Path::new(dest).join(entry.mangled_name());
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path)
+                .map_err(|e| format!("zip_extract: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("zip_extract: {e}"))?;
+            }
+            let mut out = std::fs::File::create(&out_path)
+                .map_err(|e| format!("zip_extract: {e}"))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| format!("zip_extract: {e}"))?;
+        }
+    }
+    Ok(Value::Empty)
+}
+
+/// Run a named function on a background thread with its own isolated runtime.
+/// Returns a task id (int). Args are passed by value (consistent with Indent's
+/// pass-by-value model). The spawned runtime shares no mutable state.
+fn spawn_task_builtin(
+    fn_name: &str,
+    args: &[Value],
+    ctx: &mut ExecContext<'_>,
+) -> Result<Value, String> {
+    let f = ctx
+        .rt
+        .funcs
+        .get(fn_name)
+        .cloned()
+        .ok_or_else(|| format!("spawn: function '{}' not found", fn_name))?;
+    let funcs = ctx.rt.funcs.clone();
+    let callables = ctx.rt.callables.clone();
+    let classes = ctx.rt.classes.clone();
+    let module_dir = ctx.rt.module_dir.clone();
+    let args = args.to_vec();
+
+    let done = Arc::new(AtomicBool::new(false));
+    let result = Arc::new(Mutex::new(None::<Value>));
+    let done2 = done.clone();
+    let result2 = result.clone();
+
+    let id = TASK_NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let handle = std::thread::spawn(move || {
+        let mut rt = Runtime::new(module_dir);
+        rt.funcs = funcs;
+        rt.callables = callables;
+        rt.classes = classes;
+        let out = {
+            let mut ctx2 = ExecContext::new(&mut rt);
+            invoke_function(&f, &args, &HashMap::new(), &mut ctx2)
+        };
+        let val = match out {
+            Ok(v) => v,
+            Err(_e) => Value::Empty,
+        };
+        *result2.lock().unwrap() = Some(val);
+        done2.store(true, Ordering::SeqCst);
+    });
+
+    TASKS.lock().unwrap().insert(
+        id,
+        TaskState {
+            handle: Some(handle),
+            done,
+            result,
+        },
+    );
+    Ok(Value::Int(id))
+}
+
+/// Block until the task finishes and return its result.
+fn task_wait_builtin(id: i64) -> Result<Value, String> {
+    let handle = {
+        let mut tasks = TASKS.lock().unwrap();
+        let t = tasks
+            .get_mut(&id)
+            .ok_or_else(|| format!("task_wait: unknown task id {}", id))?;
+        t.handle.take()
+    };
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+    let tasks = TASKS.lock().unwrap();
+    let val = tasks
+        .get(&id)
+        .and_then(|t| t.result.lock().unwrap().clone())
+        .unwrap_or(Value::Empty);
+    Ok(val)
+}
+
+/// Non-blocking: is the task finished?
+fn task_done_builtin(id: i64) -> Result<Value, String> {
+    let tasks = TASKS.lock().unwrap();
+    let t = tasks
+        .get(&id)
+        .ok_or_else(|| format!("task_done: unknown task id {}", id))?;
+    Ok(Value::Bool(t.done.load(Ordering::SeqCst)))
+}
+
+/// Non-blocking: return the result if finished, else `empty`.
+fn task_result_builtin(id: i64) -> Result<Value, String> {
+    let tasks = TASKS.lock().unwrap();
+    let t = tasks
+        .get(&id)
+        .ok_or_else(|| format!("task_result: unknown task id {}", id))?;
+    if !t.done.load(Ordering::SeqCst) {
+        return Ok(Value::Empty);
+    }
+    Ok(t.result.lock().unwrap().clone().unwrap_or(Value::Empty))
+}
+
+/// Wait for a list of task ids, return their results in order.
+fn task_wait_all_builtin(ids: &Value) -> Result<Value, String> {
+    let ids = match ids {
+        Value::List(v) => v,
+        _ => return Err("task_wait_all expects a list of task ids".to_string()),
+    };
+    let mut results = Vec::new();
+    for item in ids {
+        let id = match item {
+            Value::Int(i) => *i,
+            _ => return Err("task_wait_all expects a list of task ids".to_string()),
+        };
+        results.push(task_wait_builtin(id)?);
+    }
+    Ok(Value::List(results))
+}
+
+/// Run a function for each argument-list concurrently; return results in order.
+/// Like Python's `asyncio.gather` — `parallel "f" [[a,b],[c,d]]` runs `f a b`
+/// and `f c d` in parallel and returns `[f(a,b), f(c,d)]`.
+fn parallel_builtin(
+    fn_name: &str,
+    arglists: &Value,
+    ctx: &mut ExecContext<'_>,
+) -> Result<Value, String> {
+    let lists = match arglists {
+        Value::List(v) => v,
+        _ => return Err("parallel expects a list of argument-lists".to_string()),
+    };
+    let mut ids = Vec::new();
+    for item in lists {
+        let args = match item {
+            Value::List(a) => a.clone(),
+            _ => {
+                return Err("parallel expects each item to be a list of arguments".to_string())
+            }
+        };
+        ids.push(spawn_task_builtin(fn_name, &args, ctx)?);
+    }
+    let mut results = Vec::new();
+    for id in ids {
+        if let Value::Int(i) = id {
+            results.push(task_wait_builtin(i)?);
+        }
+    }
+    Ok(Value::List(results))
+}
+
+/// Wait up to `seconds` for a task; return its result, or `empty` on timeout.
+/// Like Python's `asyncio.wait_for`.
+fn task_wait_timeout_builtin(id: i64, seconds: f64) -> Result<Value, String> {
+    let deadline = Instant::now() + Duration::from_secs_f64(seconds);
+    loop {
+        let done = {
+            let tasks = TASKS.lock().unwrap();
+            match tasks.get(&id) {
+                Some(t) => t.done.load(Ordering::SeqCst),
+                None => return Err(format!("task_wait_timeout: unknown task id {}", id)),
+            }
+        };
+        if done {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Ok(Value::Empty);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let handle = {
+        let mut tasks = TASKS.lock().unwrap();
+        tasks.get_mut(&id).and_then(|t| t.handle.take())
+    };
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+    let tasks = TASKS.lock().unwrap();
+    Ok(tasks
+        .get(&id)
+        .and_then(|t| t.result.lock().unwrap().clone())
+        .unwrap_or(Value::Empty))
 }
 
 fn time_now_builtin() -> Result<Value, String> {
@@ -6685,7 +7630,7 @@ fn eq_values(a: &Value, b: &Value) -> bool {
                     .iter()
                     .all(|(k, left)| y.get(k).is_some_and(|right| eq_values(left, right)))
         }
-        (Value::Module(x), Value::Module(y)) => Rc::ptr_eq(x, y),
+        (Value::Module(x), Value::Module(y)) => Arc::ptr_eq(x, y),
         (Value::Empty, Value::Empty) => true,
         _ => false,
     }
@@ -6700,7 +7645,7 @@ fn is_identity_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Func(x), Value::Func(y)) => x == y,
-        (Value::Module(x), Value::Module(y)) => Rc::ptr_eq(x, y),
+        (Value::Module(x), Value::Module(y)) => Arc::ptr_eq(x, y),
         (Value::Empty, Value::Empty) => true,
         (Value::Object { class_name: cn1, .. }, Value::Object { class_name: cn2, .. }) => {
             // Object identity: same class AND same field values
@@ -7931,10 +8876,12 @@ impl Parser {
                 let params: Vec<FunctionParam> = inline_params
                     .into_iter()
                     .map(|n| {
-                        if let Some((pname, default)) = n.split_once('=') {
-                            FunctionParam { name: pname.to_string(), ty: None, default_value: Some(default.to_string()) }
+                        if n.starts_with("...") {
+                            FunctionParam { name: n[3..].to_string(), ty: None, default_value: None, is_varargs: true }
+                        } else if let Some((pname, default)) = n.split_once('=') {
+                            FunctionParam { name: pname.to_string(), ty: None, default_value: Some(default.to_string()), is_varargs: false }
                         } else {
-                            FunctionParam { name: n, ty: None, default_value: None }
+                            FunctionParam { name: n, ty: None, default_value: None, is_varargs: false }
                         }
                     })
                     .collect();
@@ -7984,6 +8931,7 @@ impl Parser {
                     name: param_line.text.clone(),
                     ty: None,
                     default_value: None,
+                    is_varargs: false,
                 });
             }
 
@@ -8121,7 +9069,10 @@ impl Parser {
         }
 
         // Indent-2: open "file" as handle:  or  open "file" for read as handle:
-        if text.starts_with("open ") || text.starts_with("Open ") {
+        // with "file" as handle:  (Python-style alias for the same context manager)
+        if text.starts_with("open ") || text.starts_with("Open ")
+            || text.starts_with("with ") || text.starts_with("With ")
+        {
             return self.parse_open(line);
         }
 
@@ -8591,6 +9542,8 @@ impl Parser {
         let rest = text
             .strip_prefix("open ")
             .or_else(|| text.strip_prefix("Open "))
+            .or_else(|| text.strip_prefix("with "))
+            .or_else(|| text.strip_prefix("With "))
             .ok_or_else(|| format!("Invalid open syntax at line {}", line.line_no))?
             .trim();
 
@@ -9359,7 +10312,9 @@ fn parse_function_signature(raw: &str) -> Result<(String, Vec<FunctionParam>), S
         if params.iter().any(|x| x.name == name) {
             return Err(format!("Duplicate parameter '{}'", name));
         }
-        params.push(FunctionParam { name, ty, default_value: None });
+        let is_varargs = p.starts_with("...");
+        let pname = if is_varargs { name.trim_start_matches("...").to_string() } else { name.clone() };
+        params.push(FunctionParam { name: pname, ty, default_value: None, is_varargs });
     }
 
     Ok((name.to_string(), params))

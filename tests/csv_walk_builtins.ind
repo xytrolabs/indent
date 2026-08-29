@@ -1,0 +1,34 @@
+#! Regression test for native builtins: walk, csv_read, csv_write.
+#! Run: indent tests/csv_walk_builtins.ind
+
+#! CSV write + read round-trip (incl. quoted fields)
+var rows = []
+rows is append rows ["name", "age", "city"]
+rows is append rows ["Ada", "36", "New York"]
+rows is append rows ["Lin, \"Bob\"", "25", "Paris"]
+csv_write "/tmp/indent_csv_builtins.csv" rows
+
+var back = csv_read "/tmp/indent_csv_builtins.csv"
+var n = len back
+assert_eq(n, 3)
+
+var header = back[0]
+assert_eq(len(header), 3)
+var h0 = header[0]
+assert_eq(h0, "name")
+
+var third = back[2]
+var t0 = third[0]
+assert_eq(t0, "Lin, \"Bob\"")
+var t1 = third[1]
+assert_eq(t1, "25")
+
+#! Recursive walk over the repo docs dir
+var files = walk("../docs")
+var any_md = false
+for f in files
+    if ends_with f ".md"
+        any_md is true
+assert(any_md)
+
+say "csv+walk builtins: ALL PASS"

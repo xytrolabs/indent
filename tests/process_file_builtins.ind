@@ -1,0 +1,37 @@
+#! Regression test for process/file builtins: os_run, os_copy, os_move, os_copy_tree, file_size.
+#! Run: indent tests/process_file_builtins.ind
+
+#! os_run captures output (subprocess gap)
+var r = os_run "echo hello world"
+var ok = r.ok
+var status = r.status
+var out = trim(r.stdout)
+say "ok=" + string(ok) + " status=" + string(status)
+say "stdout='" + out + "'"
+assert(ok)
+assert(ends_with(out, "hello world"))
+
+#! file_size
+file_write_text "/tmp/indent_proc_test.txt" "0123456789"
+var sz = file_size "/tmp/indent_proc_test.txt"
+say "size=" + string(sz)
+assert_eq(sz, 10)
+
+#! os_copy / os_move
+os_copy "/tmp/indent_proc_test.txt" "/tmp/indent_proc_copy.txt"
+var sz2 = file_size "/tmp/indent_proc_copy.txt"
+assert_eq(sz2, 10)
+os_move "/tmp/indent_proc_copy.txt" "/tmp/indent_proc_moved.txt"
+assert(os_exists("/tmp/indent_proc_moved.txt"))
+var stillThere = os_exists "/tmp/indent_proc_copy.txt"
+assert_eq(stillThere, false)
+
+#! os_copy_tree (recursive)
+os_mkdir "/tmp/indent_proc_src/sub"
+file_write_text "/tmp/indent_proc_src/a.txt" "a"
+file_write_text "/tmp/indent_proc_src/sub/b.txt" "b"
+os_copy_tree "/tmp/indent_proc_src" "/tmp/indent_proc_dst"
+assert(os_exists("/tmp/indent_proc_dst/a.txt"))
+assert(os_exists("/tmp/indent_proc_dst/sub/b.txt"))
+
+say "process/file builtins: ALL PASS"

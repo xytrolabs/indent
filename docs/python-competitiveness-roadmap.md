@@ -12,7 +12,177 @@ high-impact Python scripting features: regex, string methods, comprehensions,
 ordered groups, glob, do/catch error handling, classes with inheritance,
 bitwise ops, formatting, and a reversible package manager (`air`). The
 remaining gaps vs Python are mostly breadth (stdlib size, async, decorators,
-tuples, YAML/TOML/CSV).
+tuples, YAML/TOML/CSV). For the full **"replace Python" strategy and the
+ecosystem / tooling / runtime dimensions**, see [Reaching Full Python
+Parity](#reaching-full-python-parity--strategy) below.
+
+---
+
+## Design Principle — Simplicity First (non-negotiable)
+
+> **Indent is made to be *easier to learn* and *simpler to use* than Python.**
+> Every parity feature below must pass this test or it gets reworked/rejected.
+
+When closing a Python gap, prefer, in order:
+1. **Additive builtins / std functions** — just more functions, *no new syntax
+   to learn* (e.g. `walk`, `csv_read`, `sqlite_query`, `error_type`).
+2. **Small, consistent syntax** that reuses existing keywords (e.g. `with` as
+   an alias for the existing `open ... as` context manager).
+3. **A simpler Indent idiom** over cloning Python verbatim — if Python's
+   approach is complex and Indent has a cleaner way, keep the cleaner way.
+
+**Rule of thumb:** a feature that adds Python parity but *increases* the
+learning curve or cognitive load is rejected. Simplicity wins over parity.
+
+---
+
+## Reaching Full Python Parity — Strategy
+
+### The honest goal: replace Python in its niches, not achieve full parity
+Python is 30+ years old with ~200 stdlib modules and a ~500k-package ecosystem.
+Literal 100% parity is years of work and the wrong target. The realistic,
+high-value goal is to **replace Python in the everyday niches** where most
+"I'll just use Python" decisions happen — scripts, CLI tools, bots, games,
+small web servers, teaching — while being honest that data science / ML stays
+Python's domain (bridged by interop).
+
+Three levers make this work:
+
+1. **Close the everyday-scripting gaps** — remove the friction that makes
+   people reach for Python for day-to-day tasks (see the [simplicity-first
+   plan](#simplicity-first-parity-plan) below).
+2. **Make Python interop a first-class feature** — "need `yaml`?
+   `python_eval_json` it." This kills the lock-in fear and buys time to build
+   natives (see [interop safety net](#the-interop-safety-net)).
+3. **Lead with differentiators** — zero-install native binary, fast startup,
+   native GUI/games/Discord/AI, and (after Parity Phase D) GIL-free threads.
+   These are places Indent can *beat* Python, not just match it.
+
+### Simplicity-first parity plan (1.5.0+)
+
+Prioritized so the highest-value, **lowest-complexity** items come first —
+all additive builtins, no new syntax:
+
+1. **Process capture** — `os_run(command)` → `{status, stdout, stderr}`
+   (fills the `subprocess` gap; simple, single call). ✅ shipped
+2. **File ops** — `os_copy`, `os_move`, `os_copy_tree`, `os_remove_tree`,
+   `file_size` (fills the `shutil`/`pathlib` gap). ✅ shipped (`os_copy`/`os_move`/`os_copy_tree`/`file_size`; note `os_remove` already removes dirs)
+3. **Text/data** — `toml_loads`/`toml_dumps`, `gzip_compress`/
+   `gzip_decompress`, `zip_extract` (config + compression). ✅ shipped
+   (`toml_loads`/`toml_dumps` + `gzip_compress`/`gzip_decompress` + `zip_list`/`zip_extract`)
+4. **CLI + logging** — `args(...)` helper and a simple `log(level, msg)`.
+   ✅ `log` shipped; `args` is already available as **`sys_argv`** (returns
+   command-line args as a list) — no new builtin needed
+5. **Collections** — `counter(...)`, `default_dict(...)`, `deque(...)`
+   as functions (no new syntax).
+6. **Async** — ✅ **SHIPPED (2026-08-26)**. Task-based `spawn`/`task_wait`/
+   `task_done`/`task_result`/`task_wait_all` **+ `parallel` (gather) +
+   `task_wait_timeout` (wait_for) + function-value `spawn`** implemented on a
+   thread-safe runtime (module storage refactored `Rc`→`Arc`/`Mutex`). See
+   [Async design](#async-design) below.
+7. ~~**Tuples**~~ — ❌ **Dropped** (decision: not needed). Indent's pass-by-value
+   semantics + lists already cover multiple-return and fixed grouping without a
+   new value type or `(…)` syntax. Complexity avoided.
+
+> Features 1–5 are all *just more builtins* — they keep Indent simple while
+> closing the most common scripting gaps. Async (6) is the one genuinely
+> architectural item and is treated as a priority; tuples (7) are removed.
+
+### Async design
+
+Goal: give bots, games, HTTP/WS servers, and concurrent scripts real
+concurrency **without** the complexity of Python's `async/await` + event loop.
+
+**✅ Implemented (2026-08-26) — task-based concurrency (`spawn`/join).**
+Runtime was made thread-safe first (module storage `Rc<ModuleInstance>` →
+`Arc<ModuleInstance>`, `Rc<RefCell<module_cache>>` → `Arc<Mutex<...>>`), then
+`spawn`/`task_wait`/`task_done`/`task_result`/`task_wait_all` were added.
+
+**Proposed model — task-based concurrency (spawn/join), not async/await:**
+
+```indent
+var id = spawn "fetch_page" "https://example.com"   # returns a task id
+# ... do other work ...
+var result = task_wait id                           # block for the result
+```
+
+| Builtin | Behavior |
+|---|---|
+| `spawn(fn, args...)` | Run `fn(args...)` on a background thread; returns a task id (int). Each task gets its own isolated variable scope (fits Indent's pass-by-value model). |
+| `task_wait(id)` | Block until the task completes, return its result. |
+| `task_done(id)` | Boolean — is the task finished? (non-blocking) |
+| `task_result(id)` | If done, return the result; else `empty` (non-blocking). |
+| `task_wait_all(ids)` | Wait for a list of tasks, return their results. |
+| `task_cancel(id)` | Best-effort cancellation. |
+
+Why this over async/await:
+- **Simpler to learn** — `spawn`/`task_wait` are just functions; no new keywords.
+- **Real parallelism** (threads) — actually *beats* Python's GIL-limited asyncio
+  for CPU-bound work; a genuine differentiator.
+- **Additive** — no parser/interpreter coroutine changes; builtins + a global
+  task store, matching the proven builtin pattern.
+- Each task runs an **isolated runtime copy** with args passed by value, so
+  there are no shared-state races — consistent with Indent's existing model.
+
+### Parity Phases (overview)
+
+```mermaid
+gantt
+    title Indent → Python-scripting-parity
+    dateFormat  YYYY-MM-DD
+    section Phase A — Everyday scripting (fast wins)
+    Tuples, os.walk, recursive glob, CSV, SQLite     :a1, 2026-09-01, 30d
+    Better tracebacks, typed exceptions              :a2, 2026-09-01, 30d
+    with-context for more resources, varargs         :a3, 2026-09-01, 30d
+    section Phase B — Stdlib depth
+    shutil, tempfile, subprocess-full, itertools,
+    functools, collections, logging, argparse        :b1, 2026-10-01, 45d
+    section Phase C — Advanced language
+    Async/await + event loop, generators/yield,
+    decorators, class special methods, dataclasses   :c1, 2026-11-15, 60d
+    section Phase D — Ecosystem & DX
+    Debugger, profiler, air deps/lockfiles, FFI,
+    GIL-free threads                                 :d1, 2027-01-15, 60d
+```
+
+### Gap dimensions the tactical list below doesn't cover
+The "Recommended Implementation Roadmap" later in this doc covers **language &
+stdlib** gaps well. Full parity also needs three more dimensions:
+
+#### Ecosystem & Packaging
+- `air` has ~50 packages vs PyPI's ~500k — the single biggest adoption blocker.
+- Needs: dependency resolution, version ranges, lockfiles, a publishing flow,
+  private registries, and a first-party "batteries" distribution so a clean
+  install ships the core ~40 modules.
+- Strategy: fewer, higher-quality first-party packages + interop for the long
+  tail — don't try to out-count PyPI.
+
+#### Tooling & Developer Experience (what makes people stay)
+- **Debugger** (breakpoints, step, watch, locals pane) — the biggest DX gap.
+- **Profiler** for hot spots.
+- Richer IDE: go-to-definition, hover types, autocomplete (VS Code ext +
+  tree-sitter grammar already exist).
+- Better error messages / tracebacks with frame + locals.
+
+#### Performance & Runtime
+- Native Rust runtime already wins on startup and single-binary deploy.
+- **GIL-free native threads** would beat CPython's concurrency story.
+- **FFI / call C** for speed-critical paths.
+
+### The interop safety net
+Indent already ships one-way Python interop (`python_eval`, `python_eval_json`,
+`python_exec`, `python_run_file`). Use it as a documented bridge: any library
+Indent doesn't ship yet can be reached through Python. This is a strategic
+feature — it removes the "what if I get stuck?" objection to switching.
+
+### When each dimension matters
+- **Phase A** removes ~90% of the everyday "Python is easier here" friction.
+- **Phase B** closes the long tail of common stdlib usage.
+- **Phase C** unlocks async frameworks and advanced abstraction.
+- **Phase D** makes Indent genuinely competitive on ecosystem and tooling.
+
+> The detailed per-feature breakdown below ("Recommended Implementation
+> Roadmap") is the tactical task list behind Phases A–C.
 
 ---
 
@@ -75,9 +245,9 @@ tuples, YAML/TOML/CSV).
 - Indent: `group([...])` gives **ordered** unique collections (dedup + `.contains`),
   but there is no immutable tuple type or hash-based set yet.
 
-#### ~~6. Filesystem Operations~~ ✅ **Implemented (partially)**
+#### ~~6. Filesystem Operations~~ ✅ **Implemented**
 - Python: `glob.glob("*.txt")`, `os.walk()`, `Path.iterdir()`, `Path.glob()`
-- Indent: `glob(...)` now exists; a recursive `os.walk`-style API is still a gap.
+- Indent: `glob(...)` **and** recursive `walk(path)` now exist (mirrors `os.walk` / `glob("**/*")`)
 
 #### ~~7. Exception Handling~~ ✅ **Implemented**
 - Python: `try: ... except ValueError: ... finally: ...`
@@ -87,12 +257,10 @@ tuples, YAML/TOML/CSV).
 
 ### Tier 2: Important / Medium-Priority
 
-#### 8. **CSV Support** 🟡
+#### ~~8. **CSV Support**~~ ✅ **Implemented**
 - Python: `csv.DictReader()`, `csv.writer()`
+- Indent: `csv_read(path)` / `csv_write(path, rows)` — native, with quoted-field handling
 - Impact: Data import/export (very common)
-- Current: None (JSON only)
-- Difficulty: Medium
-- ROI: **High** – CSV is universal data format
 
 #### 9. **Iterator / Generator Support** 🟡
 - Python: `yield`, generators for lazy evaluation
@@ -142,6 +310,13 @@ tuples, YAML/TOML/CSV).
 
 #### ~~17. Bitwise Operations~~ ✅ **Implemented**
 - Indent: `&, |, ^, <<, >>` operators (bitwise builtins) — see quick-reference
+
+### Just shipped (2026-08-26) ✅
+- **SQLite** — native `sqlite_exec` / `sqlite_query` / `sqlite_query_one` (bundled SQLite, no system dep).
+- **Varargs** — `fun f ...args` collects remaining args into a list.
+- **Typed errors** — `error_type(err)` / `error_message(err)` builtins for typed `do/catch` handling.
+- **`with` context manager** — `with "f.txt" for read as f:` is now an alias for `open ... as`.
+- **Recursive `walk(path)`** and **CSV** (`csv_read`/`csv_write`) — shipped earlier.
 
 ---
 

@@ -1,5 +1,32 @@
 # Indent Changelog
 
+## 1.5.0 — 2026-08-29 (Parity + Async runtime)
+
+### ⚡ Async / concurrency (native, no new keywords)
+- Task-based concurrency on **real OS threads**: `spawn(fn, args...)`,
+  `task_wait(id)`, `task_done(id)`, `task_result(id)`, `task_wait_all(ids)`,
+  `parallel(fn, list_of_arglists)` (gather), `task_wait_timeout(id, secs)`
+  (wait_for). `spawn` accepts a function value or a name string.
+- Runtime made thread-safe: module storage refactored `Rc` → `Arc`/`Mutex`.
+- Tests: `tests/async_tasks_builtins.ind`, `tests/async_ergo_builtins.ind`.
+
+### 🗂️ Stdlib parity builtins (native)
+- **SQLite**: `sqlite_exec` / `sqlite_query` / `sqlite_query_one` (bundled).
+- **CSV**: `csv_read` / `csv_write`; recursive **`walk(path)`**.
+- **Process**: `os_run` (capture stdout/stderr), `os_copy`, `os_move`,
+  `os_copy_tree`, `file_size`.
+- **Data**: `toml_loads` / `toml_dumps`, `gzip_compress` / `gzip_decompress`,
+  `zip_list` / `zip_extract`.
+- **Typed errors**: `error_type` / `error_message`; logging `log(level, msg)`;
+  `counter(list)`.
+
+### 🧩 Language
+- Varargs: `fun f ...args`.
+- `with ... as ...:` context-manager alias for `open ... as`.
+
+### ✅ Tests
+- 12 regression tests pass (`tests/*_builtins.ind`); smoke tests green.
+
 ## 1.5.0 — 2026-08-09
 
 ### 🎮 InGame — PyGame-style games written entirely in Indent

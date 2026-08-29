@@ -1,0 +1,24 @@
+#! Regression test for generalized resource contexts (with ... as).
+#! Run: indent tests/with_context_builtins.ind
+
+var p = "/tmp/indent_with_test.txt"
+
+#! Python-style `with ... for write as` context manager
+with p for write as f:
+    f is "hello from with"
+
+#! Read it back with `with ... for read as`
+var content = ""
+with p for read as g:
+    content is g
+
+say "content=" + content
+assert_eq(content, "hello from with")
+
+#! `open ... as` still works (unchanged)
+var content2 = ""
+open p for read as h:
+    content2 is h
+assert_eq(content2, "hello from with")
+
+say "with context: ALL PASS"

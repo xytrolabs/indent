@@ -1,0 +1,46 @@
+#! Regression test for async ergonomics: function-value spawn, parallel, task_wait_timeout.
+#! Run: indent tests/async_ergo_builtins.ind
+
+fun work x
+    time_sleep 0.05
+    give x * 10
+
+fun slow
+    time_sleep 0.3
+    give 999
+
+#! spawn accepts a function VALUE (not just a name string)
+var f = work
+var t0 = spawn f 5
+var r0 = task_wait t0
+say "fn-value spawn result=" + string(r0)
+assert_eq(r0, 50)
+
+#! parallel — like asyncio.gather (each sublist = args for one call)
+var results = parallel "work" [[5], [7]]
+say "parallel results=" + string(results)
+var n = len results
+var ra = results[0]
+var rb = results[1]
+say "n=" + string(n) + " ra=" + string(ra) + " rb=" + string(rb)
+assert_eq(n, 2)
+assert_eq(ra, 50)
+assert_eq(rb, 70)
+
+#! task_wait_timeout — completes before timeout
+var t1 = spawn "work" 7
+var tr = task_wait_timeout t1 2.0
+say "timeout result=" + string(tr)
+assert_eq(tr, 70)
+
+#! task_wait_timeout — expires (task runs longer than the timeout)
+var t2 = spawn "slow"
+var tr2 = task_wait_timeout t2 0.05
+say "expired empty?=" + string(tr2 == empty)
+assert(tr2 == empty)
+#! task is still running; wait for it properly and get the real result
+var tr3 = task_wait t2
+say "after wait=" + string(tr3)
+assert_eq(tr3, 999)
+
+say "async ergonomics: ALL PASS"

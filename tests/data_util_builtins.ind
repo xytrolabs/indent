@@ -1,0 +1,43 @@
+#! Regression test for: counter, log, toml_loads/toml_dumps, gzip_compress/gzip_decompress.
+#! Run: indent tests/data_util_builtins.ind
+
+#! counter
+var c = counter(["a", "b", "a", "c", "a"])
+var ca = c["a"]
+var cb = c["b"]
+var cc = c["c"]
+say "counter a=" + string(ca) + " b=" + string(cb) + " c=" + string(cc)
+assert_eq(ca, 3)
+assert_eq(cb, 1)
+assert_eq(cc, 1)
+
+#! toml_loads / toml_dumps
+var t = toml_loads "title = \"demo\"\ncount = 3\nactive = true\n"
+var title = t["title"]
+var count = t["count"]
+var active = t["active"]
+say "toml title=" + string(title) + " count=" + string(count) + " active=" + string(active)
+assert_eq(title, "demo")
+assert_eq(count, 3)
+assert_eq(active, true)
+
+var back = toml_dumps({"name": "Ada", "age": 36})
+var parsed = toml_loads(back)
+var name = parsed["name"]
+var age = parsed["age"]
+say "toml roundtrip name=" + string(name) + " age=" + string(age)
+assert_eq(name, "Ada")
+assert_eq(age, 36)
+
+#! gzip round-trip (compress → base64, decompress → original)
+var orig = "The quick brown fox jumps over the lazy dog 0123456789 The quick brown fox jumps over the lazy dog 0123456789"
+var gz = gzip_compress orig
+var back2 = gzip_decompress gz
+say "gzip roundtrip ok=" + string(back2 == orig) + " len=" + string(len(gz))
+assert(back2 == orig)
+assert(len(gz) > 0)
+
+#! log writes a [LEVEL] line to stderr
+log "info" "test log message"
+
+say "data/util builtins: ALL PASS"

@@ -1,0 +1,37 @@
+#! Regression test for async tasks: spawn, task_wait, task_done, task_result, task_wait_all.
+#! Run: indent tests/async_tasks_builtins.ind
+
+fun slow_add a b
+    time_sleep 0.05
+    give a + b
+
+#! Single spawn + wait
+var id = spawn "slow_add" 2 3
+say "id=" + string(id)
+var done_immediate = task_done id
+say "done immediately=" + string(done_immediate)
+var res_before = task_result id
+var r = task_wait id
+say "result=" + string(r)
+var done_after = task_done id
+say "done after wait=" + string(done_after)
+assert_eq(r, 5)
+assert(done_after)
+
+#! Several tasks + wait_all
+var id1 = spawn "slow_add" 1 1
+var id2 = spawn "slow_add" 10 20
+var ids = []
+ids is append ids id1
+ids is append ids id2
+var results = task_wait_all ids
+say "results=" + string(results)
+var n = len results
+var r0 = results[0]
+var r1 = results[1]
+say "n=" + string(n) + " r0=" + string(r0) + " r1=" + string(r1)
+assert_eq(n, 2)
+assert_eq(r0, 2)
+assert_eq(r1, 30)
+
+say "async tasks: ALL PASS"

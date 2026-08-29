@@ -1,0 +1,28 @@
+#! Regression test for zip builtins: zip_list, zip_extract.
+#! Run: indent tests/zip_builtins.ind
+
+#! Create a test zip via python (portable) and clean old outputs
+if os_exists "/tmp/iz_test.zip"
+    os_remove "/tmp/iz_test.zip"
+if os_exists "/tmp/iz_out"
+    os_remove "/tmp/iz_out"
+
+var py = "import zipfile, os; os.makedirs('/tmp/iz_src/sub', exist_ok=True); open('/tmp/iz_src/a.txt','w').write('aaa'); open('/tmp/iz_src/sub/b.txt','w').write('bbb'); z=zipfile.ZipFile('/tmp/iz_test.zip','w'); z.write('/tmp/iz_src/a.txt','a.txt'); z.write('/tmp/iz_src/sub/b.txt','sub/b.txt'); z.close()"
+file_write_text "/tmp/mkzip.py" py
+var r = os_run "python3 /tmp/mkzip.py"
+say "mkzip ok=" + string(r.ok)
+
+#! zip_list
+var names = zip_list "/tmp/iz_test.zip"
+say "zip entries=" + string(names)
+assert_eq(len(names), 2)
+
+#! zip_extract
+zip_extract "/tmp/iz_test.zip" "/tmp/iz_out"
+var a = file_read_text "/tmp/iz_out/a.txt"
+var b = file_read_text "/tmp/iz_out/sub/b.txt"
+say "a='" + a + "' b='" + b + "'"
+assert_eq(a, "aaa")
+assert_eq(b, "bbb")
+
+say "zip builtins: ALL PASS"

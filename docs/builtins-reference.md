@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v1.3.0)
+# Indent Built-in Functions — API Reference (v1.5.0)
 
-> Complete reference for every built-in function available in Indent 1.3.0.
+> Complete reference for every built-in function available in Indent 1.5.0.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v1.5**: async tasks (`spawn`/`task_wait`/`parallel`), SQLite, CSV, `walk`, `os_run`, TOML, gzip/zip, typed errors, `log`, `counter`
 > **🆕 v1.4**: Group type (`group([...])`), type conversion (`set varname type`), group methods
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
 >
@@ -225,6 +226,75 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 | `file_read_text(path)` | string | Read entire file as string |
 | `file_write_text(path, text)` | — | Write string to file (overwrite) |
 | `file_append_text(path, text)` | — | Append string to file |
+| `walk(path)` | list | Recursively list **every** file under `path` (sorted depth-first; like `os.walk` / `glob("**/*")`) |
+
+---
+
+## CSV (🆕 native)
+
+| Function | Returns | Description |
+|---|---|---|
+| `csv_read(path)` | list | Read a CSV file into a list of rows (each row a list of cell strings). Handles quoted fields, commas, escaped quotes. |
+| `csv_write(path, rows)` | — | Write a list of rows (each a list) as CSV. Fields containing commas/quotes/newlines are quoted and escaped. |
+
+```indent
+var rows = []
+rows is append rows ["name", "age", "city"]
+rows is append rows ["Ada", "36", "New York"]
+csv_write "people.csv" rows
+var back = csv_read "people.csv"     # → [["name","age","city"],["Ada","36","New York"]]
+```
+
+---
+
+## SQLite (🆕 native)
+
+| Function | Returns | Description |
+|---|---|---|
+| `sqlite_exec(path, sql)` | int | Run a non-query statement (CREATE/INSERT/UPDATE/DELETE); returns rows affected |
+| `sqlite_query(path, sql)` | list | Run a SELECT; returns a list of rows, each a list of cell values (int/float/string/empty) |
+| `sqlite_query_one(path, sql)` | list/empty | Run a SELECT; returns the first row or `empty` |
+
+Each call opens and closes the database file, so it's safe for scripts. `NULL` becomes `empty`.
+
+```indent
+sqlite_exec "app.db" "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
+sqlite_exec "app.db" "INSERT INTO users (name, age) VALUES ('Ada', 36)"
+var rows = sqlite_query "app.db" "SELECT name, age FROM users"   # → [["Ada", 36], ...]
+var one = sqlite_query_one "app.db" "SELECT name FROM users WHERE age = 36"
+```
+
+---
+
+## Typed Errors (🆕 native)
+
+Errors caught by `catch as err:` are strings. Use these to handle them by type:
+
+| Function | Returns | Description |
+|---|---|---|
+| `error_type(err)` | string | Human-readable type: `type_error`, `key_error`, `index_error`, `division_by_zero`, `file_not_found`, `json_error`, `network_error`, `syntax_error`, `undefined_variable`, `undefined_function`, `runtime_error`, ... |
+| `error_message(err)` | string | Just the message (strips `error[EXXX]: ` prefix and ANSI codes) |
+
+```indent
+do:
+    var x = d["missing"]
+catch as err:
+    if error_type(err) == "key_error"
+        say "missing key: " + error_message(err)
+```
+
+---
+
+## Language Features (🆕)
+
+- **Varargs** — `fun total ...nums` collects extra positional (and unmatched named)
+  args into a list `nums`. Any params before `...` are fixed:
+  ```indent
+  fun greet name ...tags
+      # name is fixed, tags is a list of the rest
+  ```
+- **`with` context manager** — `with` is an alias for `open`, so both
+  `open "f.txt" for read as f:` and `with "f.txt" for read as f:` work.
 
 ---
 
@@ -244,6 +314,11 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 | `os_getenv(key, default)` | string | Read environment variable |
 | `os_setenv(key, value)` | — | Set environment variable |
 | `os_system(command)` | int | Run shell command, returns exit code |
+| `os_run(command)` | dict | Run shell command, capture output → `{ok, status, stdout, stderr}` |
+| `os_copy(src, dst)` | — | Copy a file (shutil.copy) |
+| `os_move(src, dst)` | — | Move/rename a file (shutil.move) |
+| `os_copy_tree(src, dst)` | — | Recursively copy a directory tree (shutil.copytree) |
+| `file_size(path)` | int | Size of a file in bytes |
 | `process_exit(code)` | — | Exit with code |
 
 ---
@@ -289,6 +364,79 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 | `add_int(a, b)` / `sub_int(a, b)` | Integer arithmetic |
 | `mul_int(a, b)` / `div_int(a, b)` | Integer arithmetic |
 | `mod_int(a, b)` | Integer modulo |
+| `counter(list)` | dict — count occurrences of each element → `{element: count}` |
+| `log(level, msg)` | — write `[LEVEL] msg` to stderr (simple logging) |
+
+---
+
+## TOML (🆕 native)
+
+| Function | Returns | Description |
+|---|---|---|
+| `toml_loads(text)` | dynamic | Parse TOML text → Indent value (dict/list/int/float/bool/string) |
+| `toml_dumps(value)` | string | Serialize an Indent dict → TOML text |
+
+```indent
+var cfg = toml_loads "title = \"demo\"\ncount = 3\n"
+say cfg["title"]       # → demo
+var t = toml_dumps({"name": "Ada", "age": 36})
+```
+
+---
+
+## Compression (🆕 native)
+
+| Function | Returns | Description |
+|---|---|---|
+| `gzip_compress(text)` | string | Gzip-compress text; returns compressed bytes **base64-encoded** (text-safe) |
+| `gzip_decompress(b64)` | string | Take base64 of gzip data, decompress back to text |
+| `zip_list(path)` | list | List the entry names inside a zip archive |
+| `zip_extract(path, dest)` | — | Extract a zip archive into a directory (path-safe) |
+
+```indent
+var gz = gzip_compress "some text to compress"
+var orig = gzip_decompress gz
+```
+
+---
+
+## Async / Tasks (🆕 native)
+
+Run functions on background threads and collect results — real concurrency
+without `async`/`await` keywords.
+
+| Function | Returns | Description |
+|---|---|---|
+| `spawn(fn, args...)` | int | Run `fn(args...)` on a background thread; returns a task id. `fn` can be a **name string** or a **function value**. Each task gets its own isolated scope (args passed by value). |
+| `task_wait(id)` | value | Block until the task finishes; return its result |
+| `task_done(id)` | boolean | Is the task finished? (non-blocking) |
+| `task_result(id)` | value | Result if finished, else `empty` (non-blocking) |
+| `task_wait_all(ids)` | list | Wait for a list of task ids; return results in order |
+| `task_wait_timeout(id, seconds)` | value | Wait up to `seconds`; return the result, or `empty` on timeout (like `asyncio.wait_for`) |
+| `parallel(fn, list_of_arglists)` | list | Run `fn` once per arg-list **concurrently**; return results in order (like `asyncio.gather`) |
+
+```indent
+fun slow_add a b
+    time_sleep 0.1
+    give a + b
+
+var id = spawn "slow_add" 2 3
+# ... do other work ...
+var result = task_wait id        # → 5
+
+# Concurrent batch — each sublist is the args for one call
+var results = parallel "slow_add" [[1, 1], [10, 20]]   # → [2, 30]
+
+# Spawn with a function value instead of a name string
+var f = slow_add
+var id2 = spawn f 4 5
+
+# Wait with a timeout — returns empty if it takes too long
+var r = task_wait_timeout id2 2.0
+```
+
+> Built on a thread-safe runtime (module storage uses `Arc`/`Mutex`), so tasks
+> run in real parallel threads with no shared-state races.
 
 ---
 

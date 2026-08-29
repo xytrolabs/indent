@@ -1,0 +1,27 @@
+#! Regression test for typed-error builtins: error_type, error_message.
+#! Run: indent tests/error_type_builtins.ind
+
+var t0 = error_type("division by zero")
+var t1 = error_type("index out of range")
+var t2 = error_type("Dictionary has no key 'x'")
+var t3 = error_type("expects a string")
+say "t0=" + t0 + " t1=" + t1 + " t2=" + t2 + " t3=" + t3
+assert_eq(t0, "division_by_zero")
+assert_eq(t1, "index_error")
+assert_eq(t2, "key_error")
+assert_eq(t3, "type_error")
+
+#! Typed handling via do/catch
+var caught = ""
+var msg = ""
+do:
+    var d = {"a": 1}
+    var x = d["missing"]
+catch as err:
+    caught is error_type(err)
+    msg is error_message(err)
+say "caught=" + caught
+say "msg=" + msg
+assert_eq(caught, "key_error")
+
+say "error_type builtins: ALL PASS"

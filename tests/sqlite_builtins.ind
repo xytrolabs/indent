@@ -1,0 +1,32 @@
+#! Regression test for native SQLite builtins: sqlite_exec, sqlite_query, sqlite_query_one.
+#! Run: indent tests/sqlite_builtins.ind
+
+var db = "/tmp/indent_sqlite_test.db"
+if os_exists db
+    os_remove db
+
+var c = sqlite_exec db "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
+say "table created, changed=" + string(c)
+
+sqlite_exec db "INSERT INTO users (name, age) VALUES ('Ada', 36)"
+sqlite_exec db "INSERT INTO users (name, age) VALUES ('Bob', 25)"
+var affected = sqlite_exec db "UPDATE users SET age = 26 WHERE name = 'Bob'"
+say "update affected=" + string(affected)
+
+var rows = sqlite_query db "SELECT id, name, age FROM users ORDER BY id"
+say "rows=" + string(len(rows))
+var first = rows[0]
+say "first row=" + string(first)
+var first_name = first[1]
+say "first name=" + string(first_name)
+
+var one = sqlite_query_one db "SELECT name FROM users WHERE age = 36"
+var one_name = one[0]
+say "query_one=" + string(one_name)
+
+assert_eq(len(rows), 2)
+assert_eq(first_name, "Ada")
+assert_eq(one_name, "Ada")
+assert_eq(affected, 1)
+
+say "sqlite builtins: ALL PASS"

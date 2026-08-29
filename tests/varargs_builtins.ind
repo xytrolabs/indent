@@ -1,0 +1,36 @@
+#! Regression test for varargs (...args) support.
+#! Run: indent tests/varargs_builtins.ind
+
+fun total ...nums
+    var sum = 0
+    for n in nums
+        sum is sum + n
+    give sum
+
+fun greet name ...tags
+    var msg = "Hi " + name
+    for t in tags
+        msg is msg + " " + t
+    give msg
+
+fun with_leading a b ...rest
+    var out = a + b
+    for r in rest
+        out is out + r
+    give out
+
+var s = total 1 2 3 4
+say "total(1..4)=" + string(s)
+var s0 = total
+say "total()=" + string(s0)
+var g = greet "Ada" "one" "two"
+say "greet=" + string(g)
+var w = with_leading 1 2 3 4 5
+say "with_leading=" + string(w)
+
+assert_eq(s, 10)
+assert_eq(s0, 0)
+assert_eq(g, "Hi Ada one two")
+assert_eq(w, 15)
+
+say "varargs: ALL PASS"
