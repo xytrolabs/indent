@@ -1,10 +1,23 @@
-# Your Journey with Indent 1.4
+# Your Journey with Indent 1.5
 
-> Indent 1.4 adds **Group type**, **type conversion** (`set varname type`), compound assignment, and type inference — all with the same simple, lovable syntax.
+> Indent 1.5 adds **async tasks**, **SQLite**, CSV, TOML, gzip/zip, typed errors, and varargs — all with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
 ---
+
+## What's New in 1.5.0
+
+- **Async tasks**: `spawn "fn" args...` runs on a background thread; collect with
+  `task_wait(id)`, `parallel(fn, list_of_arglists)` (gather), `task_wait_timeout(id, secs)`,
+  `task_done(id)` / `task_result(id)` — real threads, no `async`/`await` keywords.
+- **SQLite**: `sqlite_exec` / `sqlite_query` / `sqlite_query_one` (bundled, no install).
+- **CSV**: `csv_read` / `csv_write`; recursive file listing with `walk(path)`.
+- **Data**: `toml_loads` / `toml_dumps`, `gzip_compress` / `gzip_decompress`,
+  `zip_list` / `zip_extract`.
+- **Typed errors**: `error_type(err)` / `error_message(err)` for typed `do/catch`.
+- **Varargs**: `fun total ...nums`.
+- **`with`-context**: `with "file.txt" for read as f:` (alias for `open ... as`).
 
 ## What's New in 1.4.1
 

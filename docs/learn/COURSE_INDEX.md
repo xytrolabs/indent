@@ -1,7 +1,7 @@
-# Indent Learning Course (v1.4)
+# Indent Learning Course (v1.5)
 
 > A step-by-step curriculum to go from zero to proficient in Indent.
-> **🆕 Updated for Indent 1.4** — Group type, type conversion, compound assignment, type inference, and all 1.2 features!
+> **🆕 Updated for Indent 1.5** — async tasks, SQLite, CSV, TOML, gzip/zip, typed errors, varargs, and all earlier features!
 
 ---
 

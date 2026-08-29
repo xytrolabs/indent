@@ -1,7 +1,7 @@
-# Indent Quick Reference (v1.4.1)
+# Indent Quick Reference (v1.5.0)
 
 > Complete syntax reference for the Indent programming language.
-> **New in 1.4**: Group type (`group` builtin), type conversion (`set varname type`), compound assignment, type inference.
+> **New in 1.5**: async tasks (`spawn`/`parallel`), SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.
 > 💡 Unique ordered collections are called **groups** — `group([1,2,3])`. The `set` keyword performs **type conversion** (`set x string`); only the `group` builtin builds a group.<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)
@@ -15,7 +15,7 @@ x is 43                     # Reassign (NOT =)
 null                        # Null/none (alias for empty)
 ```
 
-## Type Conversion (v1.4)
+## Type Conversion (v1.5)
 ```indent
 var name1 = 21              # int
 set name1 string            # → "21" (int→string)
@@ -120,7 +120,7 @@ next                        # Continue
 reset                       # Restart loop
 ```
 
-## Groups (v1.4) — Unique Ordered Collections
+## Groups (v1.5) — Unique Ordered Collections
 
 > 💡 Unique collections are **groups** — `group([1, 2, 2, 3])`. The keyword `set`
 > is reserved for type conversion (`set varname type`), so building a group uses
