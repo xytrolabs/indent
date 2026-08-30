@@ -103,3 +103,23 @@ fun HasKey d key
 
 fun ContainsKey d key
     give contains_key d key
+
+#! --- Set helpers ---
+
+fun SetUnion a b
+    give set_union a b
+
+fun SetIntersection a b
+    give set_intersection a b
+
+fun SetDifference a b
+    give set_difference a b
+
+fun SetAdd s value
+    give set_add s value
+
+fun SetRemove s value
+    give set_remove s value
+
+fun SetContains s value
+    give set_contains s value

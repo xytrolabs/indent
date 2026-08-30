@@ -1,0 +1,43 @@
+#! set operations regression test
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+#! build two sets
+var a = group [1, 2, 3, 4]
+var b = group [3, 4, 5, 6]
+
+#! union = 1 2 3 4 5 6
+var u = set_union a b
+var nu = len u
+say "union=" + string(u) + " len=" + string(nu)
+assert_eq(nu, 6)
+
+#! intersection = 3 4
+var i = set_intersection a b
+var ni = len i
+say "inter=" + string(i) + " len=" + string(ni)
+assert_eq(ni, 2)
+
+#! difference a-b = 1 2
+var d = set_difference a b
+var nd = len d
+say "diff=" + string(d) + " len=" + string(nd)
+assert_eq(nd, 2)
+
+#! contains still works
+var c = set_contains a 3
+say "contains3=" + string(c)
+assert(c)
+
+var c2 = set_contains a 9
+say "contains9=" + string(c2)
+assert(not c2)
+
+say "set ops: ALL PASS"

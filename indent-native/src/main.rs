@@ -3543,6 +3543,29 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => Some(Err(format!("contains expects a set, got {}", positional[0].type_name()))),
             }
         }
+        "set_union" | "set_intersection" | "set_difference" => {
+            if positional.len() != 2 {
+                return Some(Err(format!("{} expects exactly 2 set arguments", callee)));
+            }
+            let a = match &positional[0] { Value::Set(v) => v.clone(), _ => return Some(Err(format!("{} expects a set, got {}", callee, positional[0].type_name()))) };
+            let b = match &positional[1] { Value::Set(v) => v.clone(), _ => return Some(Err(format!("{} expects a set, got {}", callee, positional[1].type_name()))) };
+            let b_keys: HashSet<String> = b.iter().map(|v| format!("{}", v)).collect();
+            let result: Vec<Value> = if callee == "set_union" {
+                // a ∪ b : all from a, then b items not already present
+                let mut seen: HashSet<String> = HashSet::new();
+                let mut out: Vec<Value> = Vec::new();
+                for item in a.iter().chain(b.iter()) {
+                    let key = format!("{}", item);
+                    if seen.insert(key) { out.push(item.clone()); }
+                }
+                out
+            } else if callee == "set_intersection" {
+                a.iter().filter(|v| b_keys.contains(&format!("{}", v))).cloned().collect()
+            } else {
+                a.iter().filter(|v| !b_keys.contains(&format!("{}", v))).cloned().collect()
+            };
+            Some(Ok(Value::Set(result)))
+        }
         "is_missing" => {
             if positional.len() != 1 {
                 return Some(Err(

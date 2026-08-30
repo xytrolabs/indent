@@ -121,6 +121,9 @@ var age int = ask("int", "Age: ")
 | `g.contains(x)` | boolean | Is `x` in the group? (alias: `g.has(x)`) |
 | `len(g)` | int | Number of unique elements |
 | `g + g2` | group | Union of two groups |
+| `set_union(a, b)` | group | Union of two groups (additive builtin) |
+| `set_intersection(a, b)` | group | Elements present in **both** groups |
+| `set_difference(a, b)` | group | Elements in `a` but not in `b` |
 | `is_missing(g)` | boolean | TRUE if the group is empty |
 
 ```indent
@@ -130,6 +133,12 @@ var u = t.remove(2)         # → {1, 3, 4}
 u.contains(3)               # → TRUE
 contains(u, 9)              # → FALSE
 type_of(s)                  # → "group"
+
+var a = group([1, 2, 3, 4])
+var b = group([3, 4, 5, 6])
+set_union(a, b)             # → {1, 2, 3, 4, 5, 6}
+set_intersection(a, b)      # → {3, 4}
+set_difference(a, b)        # → {1, 2}
 ```
 
 ---
