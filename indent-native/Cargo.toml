@@ -14,3 +14,4 @@ flate2 = "1"
 toml = "0.8"
 base64 = "0.22"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+serde_yaml = "0.9"

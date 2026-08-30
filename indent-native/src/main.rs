@@ -5044,6 +5044,19 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(toml_dumps_builtin(&positional[0]))
         }
+        // ── YAML ──────────────────────────────────────────────
+        "yaml_loads" => {
+            if positional.len() != 1 {
+                return Some(Err("yaml_loads expects exactly 1 argument (text)".to_string()));
+            }
+            Some(yaml_loads_builtin(&positional[0].to_string()))
+        }
+        "yaml_dumps" => {
+            if positional.len() != 1 {
+                return Some(Err("yaml_dumps expects exactly 1 argument (dict)".to_string()));
+            }
+            Some(yaml_dumps_builtin(&positional[0]))
+        }
         // ── Compression ───────────────────────────────────────
         "gzip_compress" => {
             if positional.len() != 1 {
@@ -6053,6 +6066,21 @@ fn value_to_toml(v: &Value) -> Option<toml::Value> {
 fn toml_dumps_builtin(value: &Value) -> Result<Value, String> {
     let tv = value_to_toml(value).ok_or_else(|| "toml_dumps expects a dict".to_string())?;
     let s = toml::to_string(&tv).map_err(|e| format!("toml_dumps: {e}"))?;
+    Ok(Value::Str(s))
+}
+
+/// Parse YAML text into an Indent value (reuses the JSON value converters,
+/// since YAML is a superset-ish of JSON's data model).
+fn yaml_loads_builtin(text: &str) -> Result<Value, String> {
+    let v: JsonValue =
+        serde_yaml::from_str(text).map_err(|e| format!("yaml_loads: {e}"))?;
+    Ok(json_to_value(&v))
+}
+
+/// Serialize an Indent value to YAML text (reuses value_to_json).
+fn yaml_dumps_builtin(value: &Value) -> Result<Value, String> {
+    let jv = value_to_json(value);
+    let s = serde_yaml::to_string(&jv).map_err(|e| format!("yaml_dumps: {e}"))?;
     Ok(Value::Str(s))
 }
 

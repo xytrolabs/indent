@@ -393,6 +393,22 @@ var t = toml_dumps({"name": "Ada", "age": 36})
 
 ---
 
+## YAML (🆕 native)
+
+| Function | Returns | Description |
+|---|---|---|
+| `yaml_loads(text)` | dynamic | Parse YAML text → Indent value (dict/list/int/float/bool/string) |
+| `yaml_dumps(value)` | string | Serialize an Indent dict → YAML text |
+
+```indent
+var cfg = yaml_loads "name: Indent\nfeatures:\n  - async\n  - yaml"
+say cfg["name"]            # → Indent
+say len(cfg["features"])   # → 2
+var y = yaml_dumps({"name": "Ada", "age": 36})
+```
+
+---
+
 ## Compression (🆕 native)
 
 | Function | Returns | Description |

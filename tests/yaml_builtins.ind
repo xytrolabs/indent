@@ -1,0 +1,36 @@
+#! YAML config support regression test
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+#! parse a YAML document (nested dict + list + scalars)
+var text = "name: Indent\nversion: 1.6\nfeatures:\n  - async\n  - yaml\nenabled: true"
+var d = yaml_loads text
+var tn = type_of d
+say "type=" + tn
+assert_eq(tn, "dict")
+var n = dict_get d "name" ""
+say "name=" + n
+assert_eq(n, "Indent")
+var f = dict_get d "features" []
+var lf = len f
+say "features=" + string(f) + " len=" + string(lf)
+assert_eq(lf, 2)
+var en = dict_get d "enabled" false
+say "enabled=" + string(en)
+assert(en)
+
+#! round-trip dump -> loads
+var out = yaml_dumps d
+var back = yaml_loads out
+var bn = dict_get back "name" ""
+say "roundtrip name=" + bn
+assert_eq(bn, "Indent")
+
+say "yaml: ALL PASS"
