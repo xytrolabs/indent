@@ -11468,8 +11468,11 @@ fn run_new_project(target: &Path) -> Result<(), String> {
 }
 
 fn collect_ath_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let is_lang_file = |p: &Path| {
+        matches!(p.extension().and_then(|e| e.to_str()), Some("ath") | Some("ind"))
+    };
     if path.is_file() {
-        if path.extension().and_then(|e| e.to_str()) == Some("ath") {
+        if is_lang_file(path) {
             out.push(path.to_path_buf());
         }
         return Ok(());
@@ -11482,7 +11485,7 @@ fn collect_ath_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> 
         let p = entry.path();
         if p.is_dir() {
             collect_ath_files(&p, out)?;
-        } else if p.extension().and_then(|e| e.to_str()) == Some("ath") {
+        } else if is_lang_file(&p) {
             out.push(p);
         }
     }

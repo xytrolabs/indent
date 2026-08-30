@@ -8,8 +8,10 @@
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
 >
 > **Note on groups:** unique ordered collections are called **groups** — created
-> with the `group` builtin: `group([1, 2, 2, 3])`. The `set` keyword is reserved
-> for type conversion (`set varname type`) and does **not** build a group.
+> with `group([...])` **or** `set([...])` (both build a group; `set` is the
+> canonical builder, `group` an alias). The `set` **keyword** is reserved for
+> type conversion (`set varname type`) and must not be confused with the
+> `set([...])` function call.
 
 ---
 
@@ -62,6 +64,8 @@ var age int = ask("int", "Age: ")
 | `str_removeprefix(text, prefix)` | string | Strip `prefix` if present |
 | `str_removesuffix(text, suffix)` | string | Strip `suffix` if present |
 | `str_partition(text, sep)` | list | `[before, sep, after]` |
+| `format(template, a, b, ...)` | string | Positional formatting — `{0}`, `{1}`, ... |
+| `sformat(template, k, v, ...)` | string | Named formatting — `{key}`; also `%name%` interpolation |
 | `contains(s, sub)` | boolean | Check if string contains substring |
 | `find(s, sub)` | int | Find position of substring (-1 if not found) |
 | `slice(s, start, end)` | string | Extract substring from `start` to `end` |
@@ -84,9 +88,9 @@ var age int = ask("int", "Age: ")
 | `sort(list)` | list | **New** sorted list (numbers by value, strings alphabetically) |
 | `reverse(list)` | list | **New** reversed list |
 | `slice(list, start, end)` | list | Sublist from `start` to `end` |
-| `sum(list)` | float | Sum of numeric elements |
-| `min(list)` | float | Minimum value |
-| `max(list)` | float | Maximum value |
+| `sum(list)` | number | Sum of numeric elements |
+| `min(list)` | number | Minimum value |
+| `max(list)` | number | Maximum value |
 | `any(list)` | boolean | True if any element is truthy |
 | `all(list)` | boolean | True if all elements are truthy |
 | `count(list, value)` | int | Count occurrences of value |
@@ -118,13 +122,15 @@ var age int = ask("int", "Age: ")
 
 ## Group Functions
 
-> Groups are unique, ordered collections. Create them with the `group` builtin.
-> Methods mutate by returning a **new** group; reassign the result to keep the
-> change. (The `set` keyword, by contrast, only performs type conversion.)
+> Groups are unique, ordered collections. Create them with `group([...])` **or**
+> `set([...])`. Methods mutate by returning a **new** group; reassign the result
+> to keep the change. (The `set` **keyword** statement `set x type`, by contrast,
+> only performs type conversion.)
 
 | Function / Method | Returns | Description |
 |---|---|---|
-| `group(list)` | group | Build a group, deduplicating while preserving order |
+| `group(list)` | group | Build a group, deduplicating while preserving order (alias of `set`) |
+| `set(list)` | group | Build a group, deduplicating while preserving order (canonical builder) |
 | `g.add(x)` | group | **New** group with `x` added (no-op if present) |
 | `g.remove(x)` | group | **New** group without `x` |
 | `g.contains(x)` | boolean | Is `x` in the group? (alias: `g.has(x)`) |
@@ -162,7 +168,7 @@ set_difference(a, b)        # → {1, 2}
 | `bool(v)` | boolean | Convert to boolean |
 | `type_of(v)` | string | Get type name (`"int"`, `"string"`, `"function"`, etc.) |
 
-> **v2.2.0**: `type_of` returns `"function"` for function references. `string(fn)` returns the function name.
+> `type_of` returns `"function"` for function references. `string(fn)` returns the function name.
 
 ---
 
@@ -201,11 +207,11 @@ All HTTP functions return a dict with `status` (int), `body` (string), and `ok` 
 | `http_delete(url)` | DELETE request |
 | `http_delete(url, auth)` | DELETE with Authorization |
 | `http_serve_dir(path, port)` | Start static file server (blocking) |
-| `gui_show_html(html, title, width, height)` | Open HTML in native desktop window (🆕 v2.2.0) |
+| `gui_show_html(html, title, width, height)` | Open HTML in native desktop window |
 
 ---
 
-## GUI (🆕 v2.2.0)
+## GUI
 
 Opens a native GTK+WebKit desktop window — no browser or server needed.
 Requires the `indent-gui` helper binary alongside the `indent` executable.
@@ -522,6 +528,12 @@ var res = coop [["task_a", []], ["task_b", []]]   # → [A, B], interleaved
 | `future_wait_for(id, secs)` | Wait up to `secs`; return result or `empty` on timeout (`asyncio.wait_for`) |
 | `coop [[fn, args], ...]` | Run async function bodies cooperatively on one thread |
 
+> **coop caveat:** `coop` is cooperative only at the **top level** of each task
+> function — a `wait`/`await` directly inside the function body suspends and lets
+> other tasks run. A `wait` nested inside an `if`/`repeat`/`loop` block still
+> blocks on its thread until done (nested cooperative suspension is not yet
+> implemented).
+
 ### Async I/O (🆕)
 
 Run HTTP requests on background threads and await them — so many requests run
@@ -588,7 +600,7 @@ loop:
 
 ---
 
-## Result Type (v2.5+)
+## Result Type
 
 | Function | Returns | Description |
 |---|---|---|
@@ -677,6 +689,7 @@ loop:
 | `base64_encode(text)` | string | Encode text to Base64 |
 | `base64_decode(text)` | string | Decode Base64 text |
 | `hash_sha256(text)` | string | SHA256 hex hash of text |
+| `file_sha256(path)` | string | SHA256 hex hash of a file's contents |
 
 ## Path & Filesystem (🆕 v1.2)
 

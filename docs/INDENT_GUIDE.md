@@ -73,9 +73,12 @@
 
 ## What's New in 1.4.1
 
-> 💡 Unique ordered collections are called **groups** — created with the `group` builtin: `group([1, 2, 2, 3])`. The keyword `set` is reserved for **type conversion** (`set varname type`), so it is not used to build groups. Note the difference:
-> - `set x string` — *type conversion* (the `set` keyword)
-> - `group([1, 2, 2, 3])` — *builds a group* (the `group` builtin)
+> 💡 Unique ordered collections are called **groups**. Build one with `group([...])`
+> **or** `set([...])` — both work (`set` is the canonical builder, `group` is an
+> alias). Don't confuse the **function call** `set([1, 2, 3])` with the
+> **type-conversion keyword** `set x string`. Note the difference:
+> - `set x string` — *type conversion* (keyword statement)
+> - `set([1, 2, 2, 3])` or `group([1, 2, 2, 3])` — *builds a group*
 
 - **Group type**: `group([1,2,2,3])` → `{1, 2, 3}` — unique ordered collections
 - **Type conversion**: `set name string`, `set x int` — clean type casting
@@ -141,7 +144,7 @@ indent run hello.ind
 
 ## 2. Variables & Types
 
-Indent has eight types: `string`, `int`, `float`, `boolean`, `list`, `group`, `dict`, `dynamic`, and `empty`.
+Indent has nine types: `string`, `int`, `float`, `boolean`, `list`, `group`, `dict`, `dynamic`, and `empty`.
 
 ```indent
 # Type inference — preferred style!

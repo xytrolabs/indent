@@ -1,8 +1,9 @@
-# Indent Quick Reference (v1.5.0)
+# Indent Quick Reference (v1.6.0)
 
 > Complete syntax reference for the Indent programming language.
-> **New in 1.5**: async tasks (`spawn`/`parallel`), SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.
-> 💡 Unique ordered collections are called **groups** — `group([1,2,3])`. The `set` keyword performs **type conversion** (`set x string`); only the `group` builtin builds a group.<｜end▁of▁thinking｜>## Basics
+> **New in 1.6**: async I/O (`http_*_async`), set ops (`set_union`/`set_intersection`/`set_difference`), YAML, path helpers, `str_*` methods.
+> **New in 1.5**: async tasks (`spawn`/`parallel`), `async fun`/`wait`/`gather`/`coop`, SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.
+> 💡 Unique ordered collections are called **groups** — build one with `group([1,2,3])` **or** `set([1,2,3])`. The `set` **keyword** statement `set x string` is type conversion.<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)
 say "Hello"                 # Print to stdout
@@ -122,9 +123,9 @@ reset                       # Restart loop
 
 ## Groups (v1.5) — Unique Ordered Collections
 
-> 💡 Unique collections are **groups** — `group([1, 2, 2, 3])`. The keyword `set`
-> is reserved for type conversion (`set varname type`), so building a group uses
-> the `group` builtin.
+> 💡 Unique collections are **groups** — build one with `group([...])` **or**
+> `set([...])` (both work; `set` is the canonical builder, `group` an alias).
+> The `set` **keyword** statement `set x type` is type conversion.
 
 ```indent
 var s = group([1, 2, 2, 3])  # → {1, 2, 3} — deduplicated
@@ -398,6 +399,6 @@ Available modules:
 6. Compound assignment: `x += 5` instead of `x is x + 5`
 7. Reassign with `is`, not `=`: `x is 42`
 8. `set varname type` converts types: `set x string`
-9. `group([1,2,3])` creates a Group (unique collection); `set` is only for type conversion
+9. `group([1,2,3])` or `set([1,2,3])` creates a Group (unique collection); the `set` **keyword** statement `set x type` is type conversion
 10. Imports resolve: same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
 11. `indent --update` keeps you on the latest version

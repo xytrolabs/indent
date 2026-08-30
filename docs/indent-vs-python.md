@@ -276,10 +276,10 @@ lastly:
 | Base64 | `base64` | `base64_*` | ✅ |
 | Iterators/generators | `yield` | — | ⭕ |
 | Decorators | `@decorator` | — | ⭕ |
-| Async/await | `async/await` | — | ⭕ |
+| Async/await | `async/await` | `async fun` / `wait` / `gather` / `coop` | ✅ |
 | CSV | `csv` module | `csv_read` / `csv_write` | ✅ |
 | SQLite | `sqlite3` | `sqlite_exec` / `sqlite_query` / `sqlite_query_one` | ✅ |
-| YAML/TOML | stdlib pkgs | JSON only | ⭕ |
+| YAML/TOML | stdlib pkgs | `toml_loads`/`dumps`, `yaml_loads`/`dumps` | ✅ |
 | Call Python | `ctypes` / `subprocess` | `python_eval` / `python_exec` | ✅ |
 
 ---
@@ -400,7 +400,7 @@ and `examples/rpg_demo.ind`.
 |---|---|---|
 | Runtime | CPython (bytecode, GIL) | native Rust runtime |
 | Startup | interpreter + site-packages | small single binary, fast start |
-| Concurrency | threads (GIL), asyncio | none yet (planned) |
+| Concurrency | threads (GIL), asyncio | real threads (`spawn`/`task_*`/`parallel`) + cooperative `coop` |
 | Typing | dynamic (hints optional) | dynamic with optional type annotations & `set` conversion |
 
 Indent is designed for small, fast-starting tools and scripts, not CPU-bound
@@ -414,7 +414,7 @@ rather than recomputing in Indent.
 - **Use Indent when**: you want simple, readable scripts; learning to program;
   building games (InGame), Discord bots, or small web servers — all without
   fighting syntax.
-- **Use Python when**: you need the huge stdlib, async, scientific/ML
+- **Use Python when**: you need the huge stdlib, scientific/ML
   ecosystem (NumPy/PyTorch), or mature third-party packages.
 
 ---

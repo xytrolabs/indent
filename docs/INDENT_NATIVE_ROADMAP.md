@@ -10,7 +10,7 @@ Make Indent a complete standalone language with a native-first runtime and ecosy
   - `Do / Catch / Otherwise / Lastly`
   - `flag:` for raising errors.
 - **Python-style type inference**: `var x = 42` infers `int`, `var name = "Ada"` infers `string`.
-- **Group type**: `group([1,2,3])` for unique collections (the `set` keyword is for type conversion), union via `+`, iteration, comprehension
+- **Group type**: `group([1,2,3])` or `set([1,2,3])` for unique collections (`set x type` is type conversion), union via `+`, iteration, comprehension, `set_union`/`set_intersection`/`set_difference`
 - **Type conversion**: `set varname type` for clean type casting
 - **Compound assignment operators**: `+=`, `-=`, `*=`, `/=`, `%=`.
 - **Default parameters**: `fun greet name = "World"`.
@@ -22,13 +22,13 @@ Make Indent a complete standalone language with a native-first runtime and ecosy
 - **Regex, Datetime, Crypto, Path, Functional builtins**.
 - **Classes with single inheritance**.
 - **Match/case pattern matching**.
+- **Async/task model**: real threads (`spawn`/`task_*`/`parallel`) + Python-style async (`async fun`/`loop:`/`wait`/`gather`) + cooperative `coop`.
 
 ## Remaining Native Milestones
 1. Language capability
-- Class and inheritance model.
-- Richer function metadata and composition utilities.
-- Async scheduler and task model.
 - Generator/yield and iterator protocol.
+- Richer function metadata and composition utilities.
+- Structured exception object hierarchy (typed catch by `error_type` is partial).
 
 2. Runtime capability
 - Structured exception object hierarchy.

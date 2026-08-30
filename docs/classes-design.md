@@ -278,4 +278,4 @@ r.describe()            # "Rectangle 10x5"
 
 ---
 
-## Status: DESIGN COMPLETE — Awaiting Rust compilation
+## Status: ✅ IMPLEMENTED — Classes with single inheritance are fully supported in the native runtime (`class … from Parent`, fields, methods, instantiation).
