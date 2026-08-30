@@ -438,37 +438,55 @@ var r = task_wait_timeout id2 2.0
 > Built on a thread-safe runtime (module storage uses `Arc`/`Mutex`), so tasks
 > run in real parallel threads with no shared-state races.
 
-### Python-style async (`loop` / `await` / `future`)
+### Python-style async (`loop` / `wait` / `future`)
 
-Python-flavored syntax over the same thread-based engine:
+**`wait` is the single async keyword** — one simple word for both waiting on a
+future and a time delay:
+
+- `wait <future>` (an **int**) — await that future; its result is stored in `__await_result__`
+- `wait <seconds>` (a **float**) — cooperative delay
 
 ```indent
 fun slow a
-    time_sleep 0.05
     give a * 2
 
 loop:
     var f1 = future "slow" 10     # schedule on a background thread
     var f2 = future "slow" 20     # ... concurrently
-    await f1                       # block until done; result in __await_result__
+    wait f1                        # await; result in __await_result__
     var r1 = __await_result__
-    await f2
-    var r2 = __await_result__
-    say r1 + r2                    # → 60
+    wait 0.05                      # cooperative delay
+    var r2 = __await_result__      # r2 holds the awaited value from f1
+```
+
+### Cooperative execution (`coop`)
+
+`coop [[fn, args], ...]` runs several async function bodies **cooperatively on
+one thread** — each suspends at `wait` when its future isn't ready and lets
+others run:
+
+```indent
+fun task_a
+    wait 0.02
+    give "A"
+
+var res = coop [["task_a", []], ["task_b", []]]   # → [A, B], interleaved
 ```
 
 | Keyword / Function | Description |
 |---|---|
+| `wait <future>` / `wait <seconds>` | Await a future (int) or delay (float); the unified async keyword |
+| `await <future>` | Alias for waiting on a future; result in `__await_result__` |
 | `async fun f ...` | Define an async function — calling it returns a future automatically |
-| `loop:` | Async block; `await` statements inside block until their future completes |
-| `await <future>` | Block until the future resolves; result stored in `__await_result__` |
-| `async with <future> as name:` | Await a future, bind its result to `name`, run the block body |
+| `loop:` | Async block; `wait` statements inside block until their future completes |
+| `async with <future> as name:` | Wait a future, bind its result to `name`, run the block body |
 | `future "fn" args...` | Schedule `fn(args...)` as an async future (background thread); returns a future id |
 | `future_done(id)` / `future_result(id)` | Non-blocking status / result |
 | `future_cancel(id)` | Best-effort cancel (removes the future id) |
 | `gather(f1, f2, ...)` / `gather [f1, f2]` | Await many futures; return results in order (`asyncio.gather`) |
-| `sleep(secs)` | Async sleep; returns a future (`asyncio.sleep`) |
+| `sleep(secs)` | Alias for `wait secs` (async delay) |
 | `future_wait_for(id, secs)` | Wait up to `secs`; return result or `empty` on timeout (`asyncio.wait_for`) |
+| `coop [[fn, args], ...]` | Run async function bodies cooperatively on one thread |
 
 ```indent
 # async def — calling it returns a future automatically

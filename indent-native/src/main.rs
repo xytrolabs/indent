@@ -257,6 +257,11 @@ enum Stmt {
         line: usize,
         expr: String,
     },
+    /// Async wait: `wait <future>` (int) awaits a future; `wait <seconds>` (float) delays.
+    Wait {
+        line: usize,
+        expr: String,
+    },
     /// Async context: `async with <future> as name:` — awaits, binds, runs body
     AsyncWith {
         line: usize,
@@ -1266,6 +1271,22 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             ctx.define_local("__await_result__", result);
             Ok(Control::None)
         }
+        Stmt::Wait { expr, .. } => {
+            // wait <future> (int) awaits a future; wait <seconds> (float) delays.
+            let val = eval_expr(expr, ctx)?;
+            match val {
+                Value::Int(id) => {
+                    let result = task_wait_builtin(id)?;
+                    ctx.define_local("__await_result__", result);
+                }
+                Value::Float(secs) => {
+                    let fut = sleep_builtin(secs)?;
+                    let _ = task_wait_builtin(future_to_id(&fut)?)?;
+                }
+                _ => return Err(format!("wait expects a future id (int) or seconds (float), got {}", val.type_name())),
+            }
+            Ok(Control::None)
+        }
         Stmt::AsyncWith { expr, binding, body, .. } => {
             // Await the future, bind its result, run the body.
             let future_val = eval_expr(expr, ctx)?;
@@ -1367,6 +1388,7 @@ fn stmt_line(stmt: &Stmt) -> usize {
         | Stmt::Open { line, .. }
         | Stmt::Loop { line, .. }
         | Stmt::Await { line, .. }
+        | Stmt::Wait { line, .. }
         | Stmt::AsyncWith { line, .. } => *line,
     }
 }
@@ -1876,6 +1898,14 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return spawn_task_builtin(&fn_name, &task_args, ctx);
     }
 
+    // Handle coop builtin — run async function bodies cooperatively on one thread.
+    if callee == "coop" {
+        if positional.len() != 1 {
+            return Err("coop expects exactly 1 argument: coop [[fn, args], ...]".to_string());
+        }
+        return coop_builtin(&positional[0], ctx);
+    }
+
     // Handle parallel builtin — run a function for each arg-list concurrently.
     if callee == "parallel" {
         if positional.len() != 2 {
@@ -2336,6 +2366,14 @@ fn invoke_callable_expr(
         let fn_name = positional[0].to_string();
         let task_args: Vec<Value> = positional[1..].to_vec();
         return spawn_task_builtin(&fn_name, &task_args, ctx);
+    }
+
+    // Handle coop builtin — run async function bodies cooperatively on one thread.
+    if callee == "coop" {
+        if positional.len() != 1 {
+            return Err("coop expects exactly 1 argument: coop [[fn, args], ...]".to_string());
+        }
+        return coop_builtin(&positional[0], ctx);
     }
 
     // Handle parallel builtin — run a function for each arg-list concurrently.
@@ -6324,6 +6362,181 @@ fn sleep_builtin(seconds: f64) -> Result<Value, String> {
     Ok(Value::Int(id))
 }
 
+// ── Cooperative coroutine engine (Milestone 1) ─────────────
+/// A lightweight green thread: a function body plus an instruction pointer and
+/// its own locals. Suspendable at `await` statements.
+struct Coro {
+    body: Vec<Stmt>,
+    ip: usize,
+    locals: HashMap<String, Value>,
+    result: Value,
+    done: bool,
+    awaiting: Option<i64>,
+}
+
+impl Coro {
+    fn new(body: Vec<Stmt>) -> Self {
+        Self {
+            body,
+            ip: 0,
+            locals: HashMap::new(),
+            result: Value::Empty,
+            done: false,
+            awaiting: None,
+        }
+    }
+}
+
+/// Run several async function bodies cooperatively on the current thread.
+/// Each coroutine executes one statement at a time; when it hits `await` on a
+/// future that isn't ready it suspends and other coroutines get to run. Once a
+/// suspended coroutine's future resolves it resumes.
+///
+/// Milestone-1 scope: cooperative at top-level `await` statements in each body;
+/// `await` nested inside `if`/`repeat` blocks still blocks (thread-backed).
+fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    let items = match fn_list {
+        Value::List(v) => v,
+        _ => return Err("coop expects a list of [fn_name, [args]]".to_string()),
+    };
+
+    let mut coros: Vec<Coro> = Vec::new();
+    for item in items {
+        let pair = match item {
+            Value::List(p) => p,
+            _ => return Err("coop expects each item to be [fn_name, [args]]".to_string()),
+        };
+        let name = pair[0].to_string();
+        let args: Vec<Value> = match pair.get(1) {
+            Some(Value::List(a)) => a.clone(),
+            _ => vec![],
+        };
+        let f = ctx
+            .rt
+            .funcs
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| format!("coop: function '{}' not found", name))?;
+        let mut c = Coro::new(f.body.clone());
+        for (i, p) in f.params.iter().enumerate() {
+            c.locals.insert(p.name.clone(), args.get(i).cloned().unwrap_or(Value::Empty));
+        }
+        coros.push(c);
+    }
+
+    let mut results: Vec<Value> = vec![Value::Empty; coros.len()];
+
+    loop {
+        let mut any_progress = false;
+
+        for (ci, c) in coros.iter_mut().enumerate() {
+            if c.done {
+                continue;
+            }
+
+            // If suspended on an await, check whether the future is now ready.
+            if let Some(id) = c.awaiting {
+                if matches!(task_done_builtin(id)?, Value::Bool(true)) {
+                    let r = task_wait_builtin(id)?;
+                    c.awaiting = None;
+                    c.locals.insert("__await_result__".to_string(), r);
+                    any_progress = true;
+                } else {
+                    continue; // still waiting on this future
+                }
+            }
+
+            // Run statements until we return a result or suspend on a not-ready await.
+            loop {
+                if c.ip >= c.body.len() {
+                    c.done = true;
+                    results[ci] = c.result.clone();
+                    break;
+                }
+                let stmt = c.body[c.ip].clone();
+                c.ip += 1;
+
+                match &stmt {
+                    Stmt::Await { expr, .. } => {
+                        // The awaited expression may reference coroutine locals.
+                        ctx.frames.push(c.locals.clone());
+                        let fv = eval_expr(expr, ctx);
+                        ctx.frames.pop();
+                        let fv = fv?;
+                        let id = future_to_id(&fv)?;
+                        if matches!(task_done_builtin(id)?, Value::Bool(true)) {
+                            let r = task_wait_builtin(id)?;
+                            c.locals.insert("__await_result__".to_string(), r);
+                            any_progress = true;
+                        } else {
+                            c.awaiting = Some(id);
+                            break; // suspend
+                        }
+                    }
+                    Stmt::Wait { expr, .. } => {
+                        // wait <future> (int) awaits; wait <seconds> (float) delays.
+                        ctx.frames.push(c.locals.clone());
+                        let v = eval_expr(expr, ctx);
+                        ctx.frames.pop();
+                        let v = v?;
+                        let id = match v {
+                            Value::Int(id) => id,
+                            Value::Float(secs) => future_to_id(&sleep_builtin(secs)?)?,
+                            other => {
+                                return Err(format!(
+                                    "wait expects a future id (int) or seconds (float), got {}",
+                                    other.type_name()
+                                ))
+                            }
+                        };
+                        if matches!(task_done_builtin(id)?, Value::Bool(true)) {
+                            let r = task_wait_builtin(id)?;
+                            c.locals.insert("__await_result__".to_string(), r);
+                            any_progress = true;
+                        } else {
+                            c.awaiting = Some(id);
+                            break; // suspend
+                        }
+                    }
+                    _ => {
+                        // Run the statement with this coroutine's locals on top.
+                        ctx.frames.push(c.locals.clone());
+                        let control = exec_stmt(&stmt, ctx);
+                        c.locals = ctx.frames.pop().unwrap();
+                        let control = control?;
+                        any_progress = true;
+                        match control {
+                            Control::None => {}
+                            Control::Return(v) | Control::Yield(v) => {
+                                c.result = v;
+                                c.done = true;
+                                results[ci] = c.result.clone();
+                                break;
+                            }
+                            other => {
+                                return Err(format!(
+                                    "coop: unexpected control flow in coroutine: {:?}",
+                                    other
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if coros.iter().all(|c| c.done) {
+            break;
+        }
+        if !any_progress {
+            // Nothing ready — let thread-backed futures make progress.
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    Ok(Value::List(results))
+}
+
 fn time_now_builtin() -> Result<Value, String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -9452,6 +9665,15 @@ impl Parser {
             });
         }
 
+        // Async: wait <future>  (int)  or  wait <seconds>  (float)
+        if text.starts_with("wait ") || text.starts_with("Wait ") {
+            let expr = text[5..].trim().to_string();
+            return Ok(Stmt::Wait {
+                line: line.line_no,
+                expr,
+            });
+        }
+
         // Async: async with <future> as name:
         if text.starts_with("async with ") || text.starts_with("Async with ") {
             let rest = text[11..].trim().to_string(); // strip "async with "
@@ -11294,6 +11516,7 @@ fn touch_lines(stmt: &Stmt) {
         | Stmt::Open { line, .. }
         | Stmt::Loop { line, .. }
         | Stmt::Await { line, .. }
+        | Stmt::Wait { line, .. }
         | Stmt::AsyncWith { line, .. } => {
             let _ = *line;
         }

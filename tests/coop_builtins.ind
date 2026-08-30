@@ -1,0 +1,30 @@
+#! Regression test for cooperative execution (coop) — async bodies interleaved on one thread.
+#! Run: indent tests/coop_builtins.ind
+
+fun task_a
+    var s = sleep 0.02
+    await s
+    give "A"
+
+fun task_b
+    var s2 = sleep 0.01
+    await s2
+    give "B"
+
+var res = coop [["task_a", []], ["task_b", []]]
+say "coop=" + string(res)
+assert_eq(res[0], "A")
+assert_eq(res[1], "B")
+
+#! coop with args
+fun add_await x
+    var s3 = sleep 0.01
+    await s3
+    give x + 10
+
+var res2 = coop [["add_await", [5]], ["add_await", [7]]]
+say "coop2=" + string(res2)
+assert_eq(res2[0], 15)
+assert_eq(res2[1], 17)
+
+say "coop: ALL PASS"

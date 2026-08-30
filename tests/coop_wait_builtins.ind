@@ -1,0 +1,36 @@
+#! Regression test for cooperative wait, the unified async keyword.
+#! wait <future> (int) awaits a future; wait <seconds> (float) delays.
+#! Run: indent tests/coop_wait_builtins.ind
+
+fun task_a
+    wait 0.02
+    give "A"
+
+fun task_b
+    wait 0.01
+    give "B"
+
+#! cooperative execution on one thread
+var res = coop [["task_a", []], ["task_b", []]]
+say "coop=" + string(res)
+assert_eq(res[0], "A")
+assert_eq(res[1], "B")
+
+#! wait <future> inside a coroutine
+fun fetch_wait
+    var f = future "task_b" []
+    wait f
+    var r = __await_result__
+    give r
+
+var res2 = coop [["fetch_wait", []]]
+say "coop2=" + string(res2)
+assert_eq(res2[0], "B")
+
+#! wait works in the blocking loop path too
+loop:
+    wait 0.01
+say "loop wait ok"
+assert(true)
+
+say "coop wait: ALL PASS"
