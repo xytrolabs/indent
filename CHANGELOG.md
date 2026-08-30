@@ -1,5 +1,15 @@
 # Indent Changelog
 
+## 1.5.1 — 2026-08-30 (Async / await)
+
+### 🐍 Python-style async (`loop` / `await` / `future`)
+- New **`loop:`** block, **`await <future>`** statement, and **`future "fn" args...`**
+  scheduler — schedule work on background threads, then await results.
+- `future_done(id)` / `future_result(id)` / `future_cancel(id)` status helpers.
+- `await` exposes its result as `__await_result__`.
+- Built on the thread-safe runtime (real OS threads, no GIL) — real concurrency.
+- Test: `tests/async_await_builtins.ind`.
+
 ## 1.5.0 — 2026-08-29 (Parity + Async runtime)
 
 ### ⚡ Async / concurrency (native, no new keywords)

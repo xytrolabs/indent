@@ -438,6 +438,35 @@ var r = task_wait_timeout id2 2.0
 > Built on a thread-safe runtime (module storage uses `Arc`/`Mutex`), so tasks
 > run in real parallel threads with no shared-state races.
 
+### Python-style async (`loop` / `await` / `future`)
+
+Python-flavored syntax over the same thread-based engine:
+
+```indent
+fun slow a
+    time_sleep 0.05
+    give a * 2
+
+loop:
+    var f1 = future "slow" 10     # schedule on a background thread
+    var f2 = future "slow" 20     # ... concurrently
+    await f1                       # block until done; result in __await_result__
+    var r1 = __await_result__
+    await f2
+    var r2 = __await_result__
+    say r1 + r2                    # → 60
+```
+
+| Keyword / Function | Description |
+|---|---|
+| `loop:` | Async block; `await` statements inside block until their future completes |
+| `await <future>` | Block until the future resolves; result stored in `__await_result__` |
+| `future "fn" args...` | Schedule `fn(args...)` as an async future (background thread); returns a future id |
+| `future_done(id)` / `future_result(id)` | Non-blocking status / result |
+| `future_cancel(id)` | Best-effort cancel (removes the future id) |
+
+> Real OS threads mean this beats Python's GIL-limited asyncio for CPU-bound work.
+
 ---
 
 ## Type Checking & Conversion

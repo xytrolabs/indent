@@ -36,6 +36,116 @@ static TASKS: LazyLock<Mutex<HashMap<i64, TaskState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static TASK_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
+// ── Event loop (async/await) ────────────────────────────────
+/// A future representing an async computation.
+enum FutureState {
+    Pending,
+    Ready(Value),
+    Cancelled,
+}
+
+struct AsyncFuture {
+    state: FutureState,
+    /// If Some, this is a spawned thread's JoinHandle (for thread-backed futures).
+    handle: Option<std::thread::JoinHandle<Result<Value, String>>>,
+}
+
+impl AsyncFuture {
+    fn new() -> Self {
+        Self { state: FutureState::Pending, handle: None }
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(self.state, FutureState::Ready(_))
+    }
+
+    fn is_cancelled(&self) -> bool {
+        matches!(self.state, FutureState::Cancelled)
+    }
+
+    fn take_result(self) -> Option<Value> {
+        match self.state {
+            FutureState::Ready(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+/// The global event loop scheduler.
+/// Stores all active futures keyed by id, plus a queue of ready tasks.
+struct Scheduler {
+    /// All registered futures: id → future
+    futures: HashMap<i64, AsyncFuture>,
+    /// Next available future id
+    next_id: i64,
+    /// Queue of future ids that are ready to resume (pop from front)
+    ready_queue: Vec<i64>,
+}
+
+impl Scheduler {
+    fn new() -> Self {
+        Self {
+            futures: HashMap::new(),
+            next_id: 1,
+            ready_queue: Vec::new(),
+        }
+    }
+
+    fn register(&mut self, future: AsyncFuture) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.futures.insert(id, future);
+        id
+    }
+
+    fn resolve(&mut self, id: i64, value: Value) {
+        if let Some(fut) = self.futures.get_mut(&id) {
+            fut.state = FutureState::Ready(value);
+            self.ready_queue.push(id);
+        }
+    }
+
+    fn cancel(&mut self, id: i64) {
+        if let Some(fut) = self.futures.get_mut(&id) {
+            fut.state = FutureState::Cancelled;
+        }
+    }
+
+    fn get(&self, id: i64) -> Option<&AsyncFuture> {
+        self.futures.get(&id)
+    }
+
+    fn take_next_ready(&mut self) -> Option<(i64, Value)> {
+        while let Some(id) = self.ready_queue.first().cloned() {
+            if let Some(fut) = self.futures.get(&id) {
+                if fut.is_ready() {
+                    // Remove from map and return
+                    let removed = self.futures.remove(&id)?;
+                    self.ready_queue.retain(|&x| x != id);
+                    return Some((id, removed.take_result()?));
+                } else if fut.is_cancelled() {
+                    self.futures.remove(&id);
+                    self.ready_queue.retain(|&x| x != id);
+                    continue;
+                }
+            } else {
+                self.ready_queue.retain(|&x| x != id);
+                continue;
+            }
+            break; // No more ready futures
+        }
+        None
+    }
+
+    fn len(&self) -> usize {
+        self.futures.len()
+    }
+}
+
+static SCHEDULER: LazyLock<Mutex<Scheduler>> =
+    LazyLock::new(|| Mutex::new(Scheduler::new()));
+static SCHEDULER_NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
 #[derive(Debug, Clone)]
 struct SourceLine {
     line_no: usize,
@@ -136,6 +246,16 @@ enum Stmt {
         methods: Vec<Stmt>,
     },
     Flag { line: usize, expr: String },
+    /// Async event loop: `loop { ... }` — runs until all futures complete
+    Loop {
+        line: usize,
+        body: Vec<Stmt>,
+    },
+    /// Async await: `await expr` — suspends until future resolves
+    Await {
+        line: usize,
+        expr: String,
+    },
     Yield { line: usize, expr: String },
     Decorator {
         line: usize,
@@ -1121,6 +1241,16 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             let value = eval_expr(expr, ctx)?;
             Err(format!("Line {}: {}", line, value))
         }
+        Stmt::Loop { body, .. } => run_event_loop(body, ctx),
+        Stmt::Await { expr, .. } => {
+            // Evaluate expr to a future id, then block until it resolves.
+            let future_val = eval_expr(expr, ctx)?;
+            let future_id = future_to_id(&future_val)?;
+            let result = task_wait_builtin(future_id)?;
+            // Expose the awaited result so it can be captured if needed.
+            ctx.define_local("__await_result__", result);
+            Ok(Control::None)
+        }
         Stmt::Yield { line, expr } => {
             let value = eval_expr(expr, ctx)
                 .map_err(|e| format!("Line {}: {}", line, e))?;
@@ -1211,7 +1341,9 @@ fn stmt_line(stmt: &Stmt) -> usize {
         | Stmt::Flag { line, .. }
         | Stmt::Yield { line, .. }
         | Stmt::Decorator { line, .. }
-        | Stmt::Open { line, .. } => *line,
+        | Stmt::Open { line, .. }
+        | Stmt::Loop { line, .. }
+        | Stmt::Await { line, .. } => *line,
     }
 }
 
@@ -1710,6 +1842,16 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return spawn_task_builtin(&fn_name, &task_args, ctx);
     }
 
+    // Handle future builtin — schedule a function as an async future (background thread).
+    if callee == "future" {
+        if positional.is_empty() {
+            return Err("future expects at least 1 argument (function_name, args...)".to_string());
+        }
+        let fn_name = positional[0].to_string();
+        let task_args: Vec<Value> = positional[1..].to_vec();
+        return spawn_task_builtin(&fn_name, &task_args, ctx);
+    }
+
     // Handle parallel builtin — run a function for each arg-list concurrently.
     if callee == "parallel" {
         if positional.len() != 2 {
@@ -2151,6 +2293,16 @@ fn invoke_callable_expr(
     if callee == "spawn" {
         if positional.is_empty() {
             return Err("spawn expects at least 1 argument (function_name, args...)".to_string());
+        }
+        let fn_name = positional[0].to_string();
+        let task_args: Vec<Value> = positional[1..].to_vec();
+        return spawn_task_builtin(&fn_name, &task_args, ctx);
+    }
+
+    // Handle future builtin — schedule a function as an async future (background thread).
+    if callee == "future" {
+        if positional.is_empty() {
+            return Err("future expects at least 1 argument (function_name, args...)".to_string());
         }
         let fn_name = positional[0].to_string();
         let task_args: Vec<Value> = positional[1..].to_vec();
@@ -4920,6 +5072,34 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => Some(Err("task_wait_timeout expects (int task id, number seconds)".to_string())),
             }
         }
+        // ── Async futures (Python-flavored) ──────────────────
+        "future_done" => {
+            if positional.len() != 1 {
+                return Some(Err("future_done expects exactly 1 argument (future id)".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(id) => Some(task_done_builtin(*id)),
+                _ => Some(Err("future_done expects an integer future id".to_string())),
+            }
+        }
+        "future_result" => {
+            if positional.len() != 1 {
+                return Some(Err("future_result expects exactly 1 argument (future id)".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(id) => Some(task_result_builtin(*id)),
+                _ => Some(Err("future_result expects an integer future id".to_string())),
+            }
+        }
+        "future_cancel" => {
+            if positional.len() != 1 {
+                return Some(Err("future_cancel expects exactly 1 argument (future id)".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(id) => Some(future_cancel_builtin(*id)),
+                _ => Some(Err("future_cancel expects an integer future id".to_string())),
+            }
+        }
         _ => None,
     }
 }
@@ -5808,16 +5988,22 @@ fn spawn_task_builtin(
     args: &[Value],
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
-    let f = ctx
-        .rt
-        .funcs
-        .get(fn_name)
-        .cloned()
-        .ok_or_else(|| format!("spawn: function '{}' not found", fn_name))?;
+    // Resolve the callable first (handles both local funcs and module externals).
+    let callable = resolve_callable(fn_name, ctx)
+        .map_err(|e| format!("spawn: function '{}' not found: {}", fn_name, e))?;
+
+    let (module_dir, func_def, module_ref, func_key) = match &callable {
+        Callable::Local(f) => {
+            (ctx.rt.module_dir.clone(), Some(f.clone()), None, None)
+        }
+        Callable::External { module, name } => {
+            (ctx.rt.module_dir.clone(), None, Some(module.clone()), Some(name.clone()))
+        }
+    };
+
     let funcs = ctx.rt.funcs.clone();
     let callables = ctx.rt.callables.clone();
     let classes = ctx.rt.classes.clone();
-    let module_dir = ctx.rt.module_dir.clone();
     let args = args.to_vec();
 
     let done = Arc::new(AtomicBool::new(false));
@@ -5831,9 +6017,32 @@ fn spawn_task_builtin(
         rt.funcs = funcs;
         rt.callables = callables;
         rt.classes = classes;
+
+        // Inject the external module so its functions are callable.
+        if let Some(ref m) = module_ref {
+            for (n, c) in &m.callables {
+                if !rt.callables.contains_key(n.as_str()) {
+                    rt.callables.insert(n.clone(), c.clone());
+                }
+            }
+            for (n, v) in &m.vars {
+                if !rt.vars.contains_key(n.as_str()) {
+                    rt.vars.insert(n.clone(), v.clone());
+                }
+            }
+        }
+
         let out = {
             let mut ctx2 = ExecContext::new(&mut rt);
-            invoke_function(&f, &args, &HashMap::new(), &mut ctx2)
+            // Local function: we have the cloned FunctionDef directly.
+            // External function: invoke via module ref + name.
+            if let Some(f) = func_def {
+                invoke_function(&f, &args, &HashMap::new(), &mut ctx2)
+            } else if let (Some(em), Some(ek)) = (&module_ref, &func_key) {
+                invoke_external_function(em.clone(), ek, &args, &HashMap::new(), &mut ctx2)
+            } else {
+                Err("spawn: internal error — no callable resolved".to_string())
+            }
         };
         let val = match out {
             Ok(v) => v,
@@ -5975,6 +6184,36 @@ fn task_wait_timeout_builtin(id: i64, seconds: f64) -> Result<Value, String> {
         .get(&id)
         .and_then(|t| t.result.lock().unwrap().clone())
         .unwrap_or(Value::Empty))
+}
+
+/// Convert a future value (task id) to an i64 id. Accepts an int or a string
+/// that parses as an int.
+fn future_to_id(v: &Value) -> Result<i64, String> {
+    match v {
+        Value::Int(i) => Ok(*i),
+        Value::Str(s) => s
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| format!("await: invalid future id '{}'", s)),
+        _ => Err(format!("await: expected a future id (int), got {}", v.type_name())),
+    }
+}
+
+/// Run the body of a `loop:` block. `await` statements inside block until their
+/// future (a background thread task) completes, so multiple `future` calls made
+/// before awaiting run concurrently.
+fn run_event_loop(body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, String> {
+    exec_block(body, ctx)
+}
+
+/// Best-effort cancel: remove the task from the store (thread keeps running,
+/// but the future id is no longer awaitable).
+fn future_cancel_builtin(id: i64) -> Result<Value, String> {
+    let mut tasks = TASKS.lock().unwrap();
+    match tasks.remove(&id) {
+        Some(_t) => Ok(Value::Bool(true)),
+        None => Err(format!("future_cancel: unknown future id {}", id)),
+    }
 }
 
 fn time_now_builtin() -> Result<Value, String> {
@@ -9068,6 +9307,24 @@ impl Parser {
             return self.parse_do_chain(line);
         }
 
+        // Async: loop:  — run the event loop until all futures complete
+        if text == "loop:" || text == "Loop:" {
+            let body = self.parse_nested_block(line.indent)?;
+            return Ok(Stmt::Loop {
+                line: line.line_no,
+                body,
+            });
+        }
+
+        // Async: await expr
+        if text.starts_with("await ") || text.starts_with("Await ") {
+            let expr = text[6..].trim().to_string();
+            return Ok(Stmt::Await {
+                line: line.line_no,
+                expr,
+            });
+        }
+
         // Indent-2: open "file" as handle:  or  open "file" for read as handle:
         // with "file" as handle:  (Python-style alias for the same context manager)
         if text.starts_with("open ") || text.starts_with("Open ")
@@ -10890,7 +11147,9 @@ fn touch_lines(stmt: &Stmt) {
         | Stmt::Flag { line, .. }
         | Stmt::Yield { line, .. }
         | Stmt::Decorator { line, .. }
-        | Stmt::Open { line, .. } => {
+        | Stmt::Open { line, .. }
+        | Stmt::Loop { line, .. }
+        | Stmt::Await { line, .. } => {
             let _ = *line;
         }
     }

@@ -1,10 +1,28 @@
-# Your Journey with Indent 1.5
+# Your Journey with Indent 1.5.1
 
-> Indent 1.5 adds **async tasks**, **SQLite**, CSV, TOML, gzip/zip, typed errors, and varargs — all with the same simple, lovable syntax.
+> Indent 1.5 adds **Python-style async** (`loop`/`await`/`future`), async tasks,
+> SQLite, CSV, TOML, gzip/zip, typed errors, and varargs — all with the same
+> simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
 ---
+
+## What's New in 1.5.1
+
+- **Python-style async**: `loop:` block + `await <future>` + `future "fn" args...`.
+  Schedule work on background threads, await results, and read them from
+  `__await_result__`. Status helpers `future_done`/`future_result`/`future_cancel`.
+  ```indent
+  loop:
+      var f1 = future "slow" 10
+      var f2 = future "slow" 20
+      await f1
+      var a = __await_result__
+      await f2
+      var b = __await_result__
+      say a + b      # → 60
+  ```
 
 ## What's New in 1.5.0
 

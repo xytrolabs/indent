@@ -1,0 +1,34 @@
+#! Regression test for Python-style async: loop, await, future, future_done/result.
+#! Run: indent tests/async_await_builtins.ind
+
+fun slow a
+    time_sleep 0.05
+    give a * 2
+
+#! future + await inside a loop: block
+var sum = 0
+loop:
+    var f1 = future "slow" 10
+    var f2 = future "slow" 20
+    await f1
+    var r1 = __await_result__
+    await f2
+    var r2 = __await_result__
+    sum is r1 + r2
+say "sum=" + string(sum)
+assert_eq(sum, 60)
+
+#! future_result after completion
+var f3 = future "slow" 5
+await f3
+var res3 = future_result f3
+say "res3=" + string(res3)
+assert_eq(res3, 10)
+
+#! future_cancel (best-effort)
+var f4 = future "slow" 7
+var c = future_cancel f4
+say "cancelled=" + string(c)
+assert(c)
+
+say "async/await: ALL PASS"
