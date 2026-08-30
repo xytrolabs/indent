@@ -243,7 +243,8 @@ feature — it removes the "what if I get stuck?" objection to switching.
 #### 5. **Tuples** 🔴 (Groups ✅ done)
 - Python: `(1, 2, 3)` tuples (immutable)
 - Indent: `group([...])` gives **ordered** unique collections (dedup + `.contains`),
-  but there is no immutable tuple type or hash-based set yet.
+  and full set algebra via `set_union`/`set_intersection`/`set_difference` (1.6.0).
+  No immutable tuple type (dropped by design).
 
 #### ~~6. Filesystem Operations~~ ✅ **Implemented**
 - Python: `glob.glob("*.txt")`, `os.walk()`, `Path.iterdir()`, `Path.glob()`
@@ -281,10 +282,10 @@ feature — it removes the "what if I get stuck?" objection to switching.
   [Classes vs Python/JS](learn/11-classes.md)
 - Remaining gap: special methods (`__str__`, `__add__`)
 
-#### 12. **YAML/TOML Config Support** 🟡
+#### 12. **YAML/TOML Config Support** ✅ **Implemented**
 - Python: `yaml.load()`, `tomllib.loads()`
+- Indent: native `toml_loads`/`toml_dumps` **and** `yaml_loads`/`yaml_dumps` (1.6.0)
 - Impact: Configuration file parsing
-- Current: JSON only
 - Difficulty: Medium
 - ROI: **Medium** – important for ops/deployment
 

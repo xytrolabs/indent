@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v1.5.0)
+# Indent Built-in Functions — API Reference (v1.6.0)
 
-> Complete reference for every built-in function available in Indent 1.5.0.
+> Complete reference for every built-in function available in Indent 1.6.0.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v1.6**: async I/O (`http_get_async` & co), set ops (`set_union`/`set_intersection`/`set_difference`), YAML (`yaml_loads`/`yaml_dumps`), path helpers (`path_ext`/`path_stem`/`path_abs`/`path_expand`/`path_norm`), string methods (`str_zfill` & co)
 > **🆕 v1.5**: async tasks (`spawn`/`task_wait`/`parallel`), SQLite, CSV, `walk`, `os_run`, TOML, gzip/zip, typed errors, `log`, `counter`
 > **🆕 v1.4**: Group type (`group([...])`), type conversion (`set varname type`), group methods
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)

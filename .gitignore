@@ -24,9 +24,44 @@ Thumbs.db
 # Build artifacts
 indent-native/indent
 
+# Stale source backups
+* copy.rs
+*.bak
+
+# Local user data / binaries — must never be committed
+~/.local/
+
 # Legacy Aether artifacts; Zor gets its own registry later, so .zor is ignored too
 *.ath
 *.zor
 
 # ML training data (huge)
 scripts/train-starcoder/
+
+# Unrelated projects that live in this folder but are NOT part of the Indent repo
+Aether-Forge-IDE/
+aether-release/
+examples/
+indent-file-icons/
+indent-language/
+indent-scrible/
+puzzles/
+tree-sitter-indent/
+.vscode/
+bot.py
+discord.py
+*.png
+*.svg
+PUBLISHING_EXTENSIONS.md
+builtin_smoke.ind
+do_catch_smoke.ind
+discord30-test.ind
+example-discord.ind
+indent-test.ind
+issue.ind
+py_prefix_smoke.ind
+stdlib_smoke.ind
+test.ind
+v2.ind
+z-2test.ind
+z-class.ind

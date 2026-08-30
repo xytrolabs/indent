@@ -1,5 +1,38 @@
 # Indent Changelog
 
+## 1.6.0 — 2026-08-30 (Async I/O + parity builtins)
+
+### 🌐 Async I/O (non-blocking HTTP on background threads)
+- **`http_get_async` / `http_post_json_async` / `http_put_json_async` /
+  `http_delete_async`** — run any HTTP request on a background thread and
+  return a **future id**; await with `wait`, `gather`, or `future_done`/`result`.
+  Fire many requests concurrently without blocking the program.
+- Backed by a generic `spawn_builtin_future` helper (runs any builtin on a thread).
+- Test: `tests/async_io_builtins.ind`.
+
+### 🧮 Collections
+- **`set_union(a, b)` / `set_intersection(a, b)` / `set_difference(a, b)`** —
+  complete the group/set type. `collections` wrappers: `SetUnion`/`SetIntersection`/
+  `SetDifference`/`SetAdd`/`SetRemove`/`SetContains`.
+- Test: `tests/set_ops_builtins.ind`.
+
+### 🗂 Config
+- **`yaml_loads(text)` / `yaml_dumps(value)`** — native YAML config parsing
+  (config parity alongside TOML/JSON).
+- Test: `tests/yaml_builtins.ind`.
+
+### 📁 Path (pathlib parity)
+- **`path_ext` / `path_stem` / `path_abs` / `path_expand` / `path_norm`** —
+  extension, stem, absolute, `~` expansion, `.`/`..` normalization. `path`
+  wrappers: `Ext`/`Stem`/`Abs`/`Expand`/`Norm`.
+- Test: `tests/path_helpers_builtins.ind`.
+
+### 🔤 String methods
+- **`str_zfill` / `str_ljust` / `str_rjust` / `str_center` / `str_splitlines` /
+  `str_removeprefix` / `str_removesuffix` / `str_partition`** — Python `str`
+  method parity as additive builtins.
+- Test: `tests/string_helpers_builtins.ind`.
+
 ## 1.5.2 — 2026-08-30 (Async parity: async def / gather / async with)
 
 ### 🐍 Async parity additions

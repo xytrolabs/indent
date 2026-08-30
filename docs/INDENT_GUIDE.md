@@ -1,10 +1,27 @@
-# Your Journey with Indent 1.5.2
+# Your Journey with Indent 1.6.0
 
-> Indent 1.5 adds **Python-style async** (`async fun`/`await`/`gather`/`loop`),
-> async tasks, SQLite, CSV, TOML, gzip/zip, typed errors, and varargs — all with
-> the same simple, lovable syntax.
+> Indent 1.6 adds **async I/O** (non-blocking `http_*_async`), set operations,
+> YAML config, pathlib-style path helpers, and more Python `str` methods — all
+> with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
+
+---
+
+## What's New in 1.6.0
+
+- **Async I/O** — non-blocking HTTP on background threads, awaited with `wait`/
+  `gather`. Fire many requests concurrently without blocking:
+  ```indent
+  var f1 = http_get_async "https://api.example.com/a"
+  var f2 = http_get_async "https://api.example.com/b"
+  var results = gather f1 f2      # both run concurrently
+  ```
+- **Set operations** — `set_union`, `set_intersection`, `set_difference`.
+- **YAML** — `yaml_loads` / `yaml_dumps` for config files.
+- **Path helpers** — `path_ext`, `path_stem`, `path_abs`, `path_expand`, `path_norm`.
+- **String methods** — `str_zfill`, `str_ljust`, `str_rjust`, `str_center`,
+  `str_splitlines`, `str_removeprefix`, `str_removesuffix`, `str_partition`.
 
 ---
 
