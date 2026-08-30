@@ -1,0 +1,14 @@
+#! Regression test for async with — await a future, bind result, run body.
+#! Run: indent tests/async_with_builtins.ind
+
+async fun load_data
+    time_sleep 0.03
+    give {"users": 3}
+
+loop:
+    async with load_data() as data:
+        var users = data["users"]
+        say "users=" + string(users)
+        assert_eq(users, 3)
+
+say "async with: ALL PASS"

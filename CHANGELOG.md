@@ -1,5 +1,18 @@
 # Indent Changelog
 
+## 1.5.2 — 2026-08-30 (Async parity: async def / gather / async with)
+
+### 🐍 Async parity additions
+- **`async fun`** — calling an async function returns a future automatically
+  (no manual `future "f"`). Auto-schedules on a background thread.
+- **`gather(f1, f2, ...)`** or `gather [f1, f2]` — await many futures, results in
+  order (`asyncio.gather`).
+- **`async with <future> as name:`** — await a future, bind its result, run body.
+- **`sleep(secs)`** — async sleep; returns a future (`asyncio.sleep`).
+- **`future_wait_for(id, secs)`** — `asyncio.wait_for`.
+- Tests: `tests/async_def_builtins.ind`, `tests/async_helpers_builtins.ind`,
+  `tests/async_with_builtins.ind`.
+
 ## 1.5.1 — 2026-08-30 (Async / await)
 
 ### 🐍 Python-style async (`loop` / `await` / `future`)

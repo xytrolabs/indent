@@ -194,6 +194,7 @@ enum Stmt {
         return_type: Option<String>,
         body: Vec<Stmt>,
         is_generator: bool,
+        is_async: bool,
     },
     Give { line: usize, expr: String },
     IfChain {
@@ -255,6 +256,13 @@ enum Stmt {
     Await {
         line: usize,
         expr: String,
+    },
+    /// Async context: `async with <future> as name:` — awaits, binds, runs body
+    AsyncWith {
+        line: usize,
+        expr: String,
+        binding: String,
+        body: Vec<Stmt>,
     },
     Yield { line: usize, expr: String },
     Decorator {
@@ -668,6 +676,7 @@ struct Runtime {
     classes: HashMap<String, ClassDef>,
     module_cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
     debugger: Option<Debugger>,
+    async_funcs: HashSet<String>,
 }
 
 struct Debugger {
@@ -687,6 +696,7 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             debugger: None,
+            async_funcs: HashSet::new(),
         }
     }
 
@@ -700,6 +710,7 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: cache,
             debugger: None,
+            async_funcs: HashSet::new(),
         }
     }
 
@@ -1104,6 +1115,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             return_type,
             body,
             is_generator,
+            is_async,
             ..
         } => {
             let f = FunctionDef {
@@ -1114,6 +1126,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             };
             ctx.rt.funcs.insert(name.clone(), f.clone());
             ctx.rt.callables.insert(name.clone(), Callable::Local(f));
+            if *is_async {
+                ctx.rt.async_funcs.insert(name.clone());
+            }
             Ok(Control::None)
         }
         Stmt::Give { expr, line } => {
@@ -1251,6 +1266,14 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             ctx.define_local("__await_result__", result);
             Ok(Control::None)
         }
+        Stmt::AsyncWith { expr, binding, body, .. } => {
+            // Await the future, bind its result, run the body.
+            let future_val = eval_expr(expr, ctx)?;
+            let future_id = future_to_id(&future_val)?;
+            let result = task_wait_builtin(future_id)?;
+            ctx.define_local(binding, result);
+            exec_block(body, ctx)
+        }
         Stmt::Yield { line, expr } => {
             let value = eval_expr(expr, ctx)
                 .map_err(|e| format!("Line {}: {}", line, e))?;
@@ -1343,7 +1366,8 @@ fn stmt_line(stmt: &Stmt) -> usize {
         | Stmt::Decorator { line, .. }
         | Stmt::Open { line, .. }
         | Stmt::Loop { line, .. }
-        | Stmt::Await { line, .. } => *line,
+        | Stmt::Await { line, .. }
+        | Stmt::AsyncWith { line, .. } => *line,
     }
 }
 
@@ -1865,6 +1889,11 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
     // (Python-style shadowing), so std library functions like `Upper` or
     // `Append` are not hidden by case-insensitive builtin lookup.
     if let Ok(callable) = resolve_callable(callee, ctx) {
+        // An `async fun` call returns a future: schedule it on a background thread.
+        if ctx.rt.async_funcs.contains(callee) && matches!(callable, Callable::Local(_)) {
+            let task_args: Vec<Value> = positional.clone();
+            return spawn_task_builtin(callee, &task_args, ctx);
+        }
         return match callable {
             Callable::Local(f) => invoke_function(&f, &positional, &named, ctx),
             Callable::External { module, name } => {
@@ -2323,6 +2352,11 @@ fn invoke_callable_expr(
     // calls to module functions (e.g. `Count(items)` inside a module) are not
     // shadowed by case-insensitive builtin lookup.
     if let Ok(callable) = resolve_callable(callee, ctx) {
+        // An `async fun` call returns a future: schedule it on a background thread.
+        if ctx.rt.async_funcs.contains(callee) && matches!(callable, Callable::Local(_)) {
+            let task_args: Vec<Value> = positional.clone();
+            return spawn_task_builtin(callee, &task_args, ctx);
+        }
         return match callable {
             Callable::Local(f) => invoke_function(&f, &positional, &HashMap::new(), ctx),
             Callable::External { module, name } => {
@@ -5100,6 +5134,32 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => Some(Err("future_cancel expects an integer future id".to_string())),
             }
         }
+        "gather" => {
+            if positional.is_empty() {
+                return Some(Err("gather expects at least 1 future id".to_string()));
+            }
+            Some(gather_builtin(&positional))
+        }
+        "sleep" => {
+            if positional.len() != 1 {
+                return Some(Err("sleep expects exactly 1 argument (seconds)".to_string()));
+            }
+            match &positional[0] {
+                Value::Float(secs) => Some(sleep_builtin(*secs)),
+                Value::Int(secs) => Some(sleep_builtin(*secs as f64)),
+                _ => Some(Err("sleep expects a number of seconds".to_string())),
+            }
+        }
+        "future_wait_for" => {
+            if positional.len() != 2 {
+                return Some(Err("future_wait_for expects exactly 2 arguments (future id, seconds)".to_string()));
+            }
+            match (&positional[0], &positional[1]) {
+                (Value::Int(id), Value::Float(secs)) => Some(task_wait_timeout_builtin(*id, *secs)),
+                (Value::Int(id), Value::Int(secs)) => Some(task_wait_timeout_builtin(*id, *secs as f64)),
+                _ => Some(Err("future_wait_for expects (int future id, number seconds)".to_string())),
+            }
+        }
         _ => None,
     }
 }
@@ -6004,6 +6064,7 @@ fn spawn_task_builtin(
     let funcs = ctx.rt.funcs.clone();
     let callables = ctx.rt.callables.clone();
     let classes = ctx.rt.classes.clone();
+    let async_funcs = ctx.rt.async_funcs.clone();
     let args = args.to_vec();
 
     let done = Arc::new(AtomicBool::new(false));
@@ -6017,6 +6078,7 @@ fn spawn_task_builtin(
         rt.funcs = funcs;
         rt.callables = callables;
         rt.classes = classes;
+        rt.async_funcs = async_funcs;
 
         // Inject the external module so its functions are callable.
         if let Some(ref m) = module_ref {
@@ -6214,6 +6276,52 @@ fn future_cancel_builtin(id: i64) -> Result<Value, String> {
         Some(_t) => Ok(Value::Bool(true)),
         None => Err(format!("future_cancel: unknown future id {}", id)),
     }
+}
+
+/// Await a list of futures and collect their results in order.
+/// Like Python's `asyncio.gather`. Accepts `gather f1 f2 ...` or `gather [f1, f2]`.
+fn gather_builtin(ids: &[Value]) -> Result<Value, String> {
+    let mut results = Vec::new();
+    for v in ids {
+        match v {
+            Value::Int(id) => results.push(task_wait_builtin(*id)?),
+            Value::List(l) => {
+                for item in l {
+                    if let Value::Int(id) = item {
+                        results.push(task_wait_builtin(*id)?);
+                    } else {
+                        return Err("gather: list must contain only future ids (int)".to_string());
+                    }
+                }
+            }
+            _ => return Err("gather expects future ids (int) or a list of them".to_string()),
+        }
+    }
+    Ok(Value::List(results))
+}
+
+/// Async sleep: returns a future that resolves after `seconds`.
+/// Usable with `await sleep(0.1)` inside a `loop:` block.
+fn sleep_builtin(seconds: f64) -> Result<Value, String> {
+    let done = Arc::new(AtomicBool::new(false));
+    let result = Arc::new(Mutex::new(None::<Value>));
+    let done2 = done.clone();
+    let result2 = result.clone();
+    let id = TASK_NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
+        *result2.lock().unwrap() = Some(Value::Empty);
+        done2.store(true, Ordering::SeqCst);
+    });
+    TASKS.lock().unwrap().insert(
+        id,
+        TaskState {
+            handle: Some(handle),
+            done,
+            result,
+        },
+    );
+    Ok(Value::Int(id))
 }
 
 fn time_now_builtin() -> Result<Value, String> {
@@ -9074,8 +9182,24 @@ impl Parser {
         // Also: fun name  (with indented param lines)
         // Also: fun name param1 param2 as returnType
         // Also: fun name param = default_value (default params)
-        if let Some(rest) = text.strip_prefix("fun ") {
-            let rest = rest.trim();
+        // Also: async fun name ...  (calling it returns a future)
+        let def_is_async;
+        let rest_str;
+        if let Some(r) = text
+            .strip_prefix("async fun ")
+            .or_else(|| text.strip_prefix("Async fun "))
+        {
+            def_is_async = true;
+            rest_str = r.trim().to_string();
+        } else if let Some(r) = text.strip_prefix("fun ").or_else(|| text.strip_prefix("Fun ")) {
+            def_is_async = false;
+            rest_str = r.trim().to_string();
+        } else {
+            def_is_async = false;
+            rest_str = String::new();
+        }
+        if def_is_async || !rest_str.is_empty() {
+            let rest = rest_str.as_str();
             if rest.is_empty() {
                 return Err(format!("Function name missing at line {}", line.line_no));
             }
@@ -9132,6 +9256,7 @@ impl Parser {
                     return_type,
                     body,
                     is_generator: false,
+                    is_async: def_is_async,
                 });
             }
 
@@ -9147,6 +9272,7 @@ impl Parser {
                         return_type,
                         body: vec![],
                         is_generator: false,
+                        is_async: def_is_async,
                     });
                 }
             };
@@ -9196,6 +9322,7 @@ impl Parser {
                 return_type,
                 body,
                 is_generator: false,
+                is_async: def_is_async,
             });
         }
 
@@ -9323,6 +9450,23 @@ impl Parser {
                 line: line.line_no,
                 expr,
             });
+        }
+
+        // Async: async with <future> as name:
+        if text.starts_with("async with ") || text.starts_with("Async with ") {
+            let rest = text[11..].trim().to_string(); // strip "async with "
+            let rest = rest.trim_end_matches(':').trim();
+            if let Some((expr, binding)) = rest.split_once(" as ") {
+                let binding = binding.trim().to_string();
+                let body = self.parse_nested_block(line.indent)?;
+                return Ok(Stmt::AsyncWith {
+                    line: line.line_no,
+                    expr: expr.trim().to_string(),
+                    binding,
+                    body,
+                });
+            }
+            return Err(format!("async with expects 'async with <future> as name:' at line {}", line.line_no));
         }
 
         // Indent-2: open "file" as handle:  or  open "file" for read as handle:
@@ -11149,7 +11293,8 @@ fn touch_lines(stmt: &Stmt) {
         | Stmt::Decorator { line, .. }
         | Stmt::Open { line, .. }
         | Stmt::Loop { line, .. }
-        | Stmt::Await { line, .. } => {
+        | Stmt::Await { line, .. }
+        | Stmt::AsyncWith { line, .. } => {
             let _ = *line;
         }
     }

@@ -1,12 +1,29 @@
-# Your Journey with Indent 1.5.1
+# Your Journey with Indent 1.5.2
 
-> Indent 1.5 adds **Python-style async** (`loop`/`await`/`future`), async tasks,
-> SQLite, CSV, TOML, gzip/zip, typed errors, and varargs — all with the same
-> simple, lovable syntax.
+> Indent 1.5 adds **Python-style async** (`async fun`/`await`/`gather`/`loop`),
+> async tasks, SQLite, CSV, TOML, gzip/zip, typed errors, and varargs — all with
+> the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
 
 ---
+
+## What's New in 1.5.2
+
+- **`async fun`** — calling an async function returns a future automatically:
+  ```indent
+  async fun fetch id
+      give http_get_json "https://api.example.com/" + id
+
+  loop:
+      var f1 = fetch 1
+      var f2 = fetch 2
+      var results = gather f1 f2   # concurrent fetches, results in order
+  ```
+- **`gather(f1, f2, ...)`** / `gather [f1, f2]` — await many futures, results in order.
+- **`async with <future> as name:`** — await, bind result, run the block.
+- **`sleep(secs)`** — async sleep (returns a future).
+- **`future_wait_for(id, secs)`** — wait with a timeout.
 
 ## What's New in 1.5.1
 

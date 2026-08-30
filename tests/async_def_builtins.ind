@@ -1,0 +1,34 @@
+#! Regression test for async def — calling an async function returns a future.
+#! Run: indent tests/async_def_builtins.ind
+
+#! async fun: calling it schedules a future and returns its id
+async fun slow a
+    time_sleep 0.05
+    give a * 2
+
+var f = slow 10
+var t = type_of f
+say "type_of f=" + string(t)
+assert_eq(t, "int")
+
+loop:
+    await f
+    var r = __await_result__
+    say "r=" + string(r)
+    assert_eq(r, 20)
+
+#! gather of async functions (auto-futures)
+var fa = slow 3
+var fb = slow 4
+var res = gather fa fb
+say "gather=" + string(res)
+assert_eq(res[0], 6)
+assert_eq(res[1], 8)
+
+#! async def with parentheses call form
+var fc = slow(6)
+await fc
+var rc = __await_result__
+assert_eq(rc, 12)
+
+say "async def: ALL PASS"

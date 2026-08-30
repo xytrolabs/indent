@@ -1,0 +1,38 @@
+#! Regression test for async helpers: gather, sleep, future_wait_for.
+#! Run: indent tests/async_helpers_builtins.ind
+
+fun slow a
+    time_sleep 0.05
+    give a * 2
+
+#! gather — await many futures, results in order (asyncio.gather)
+var f1 = future "slow" 10
+var f2 = future "slow" 20
+var res = gather f1 f2
+say "gather=" + string(res)
+var n = len res
+var r0 = res[0]
+var r1 = res[1]
+assert_eq(n, 2)
+assert_eq(r0, 20)
+assert_eq(r1, 40)
+
+#! gather with a list
+var f3 = future "slow" 5
+var res2 = gather [f3]
+assert_eq(res2[0], 10)
+
+#! sleep + await inside loop
+loop:
+    var s = sleep 0.01
+    await s
+say "sleep ok"
+assert(true)
+
+#! future_wait_for — like asyncio.wait_for
+var f4 = future "slow" 3
+var w = future_wait_for f4 2.0
+say "wait_for=" + string(w)
+assert_eq(w, 6)
+
+say "async helpers: ALL PASS"

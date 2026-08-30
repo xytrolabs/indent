@@ -459,11 +459,32 @@ loop:
 
 | Keyword / Function | Description |
 |---|---|
+| `async fun f ...` | Define an async function — calling it returns a future automatically |
 | `loop:` | Async block; `await` statements inside block until their future completes |
 | `await <future>` | Block until the future resolves; result stored in `__await_result__` |
+| `async with <future> as name:` | Await a future, bind its result to `name`, run the block body |
 | `future "fn" args...` | Schedule `fn(args...)` as an async future (background thread); returns a future id |
 | `future_done(id)` / `future_result(id)` | Non-blocking status / result |
 | `future_cancel(id)` | Best-effort cancel (removes the future id) |
+| `gather(f1, f2, ...)` / `gather [f1, f2]` | Await many futures; return results in order (`asyncio.gather`) |
+| `sleep(secs)` | Async sleep; returns a future (`asyncio.sleep`) |
+| `future_wait_for(id, secs)` | Wait up to `secs`; return result or `empty` on timeout (`asyncio.wait_for`) |
+
+```indent
+# async def — calling it returns a future automatically
+async fun fetch id
+    give http_get_json "https://api.example.com/" + id
+
+loop:
+    var f1 = fetch 1          # auto-future
+    var f2 = fetch 2
+    var results = gather f1 f2   # → [data1, data2]
+
+# async with — await + bind + run body
+loop:
+    async with fetch 3 as data:
+        say data
+```
 
 > Real OS threads mean this beats Python's GIL-limited asyncio for CPU-bound work.
 
