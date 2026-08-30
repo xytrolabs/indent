@@ -1,0 +1,48 @@
+#! string helper builtins regression test
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+#! zfill
+var z = str_zfill "42" 5
+say "zfill=" + z
+assert_eq(z, "00042")
+
+#! ljust / rjust / center
+var l = str_ljust "ab" 4 "*"
+say "ljust=" + l
+assert_eq(l, "ab**")
+var r = str_rjust "ab" 4 "*"
+say "rjust=" + r
+assert_eq(r, "**ab")
+var c = str_center "ab" 4 "*"
+say "center=" + c
+assert_eq(c, "*ab*")
+
+#! splitlines
+var s = str_splitlines "one\ntwo\nthree"
+var ns = len s
+say "splitlines=" + string(s) + " len=" + string(ns)
+assert_eq(ns, 3)
+
+#! removeprefix / removesuffix
+var p = str_removeprefix "prefix_text" "prefix_"
+say "prefix=" + p
+assert_eq(p, "text")
+var sf = str_removesuffix "file.txt" ".txt"
+say "suffix=" + sf
+assert_eq(sf, "file")
+
+#! partition
+var part = str_partition "a=b=c" "="
+say "partition=" + string(part)
+var np = len part
+assert_eq(np, 3)
+
+say "string helpers: ALL PASS"

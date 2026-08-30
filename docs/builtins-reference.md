@@ -53,6 +53,14 @@ var age int = ask("int", "Age: ")
 | `join(list, sep)` | string | Join list elements with separator |
 | `starts_with(s, prefix)` | boolean | Check if string starts with prefix |
 | `ends_with(s, suffix)` | boolean | Check if string ends with suffix |
+| `str_zfill(text, width)` | string | Pad with leading zeros to `width` (e.g. `"42"`→`"00042"`) |
+| `str_ljust(text, width[, pad])` | string | Left-justify in `width` with optional pad char |
+| `str_rjust(text, width[, pad])` | string | Right-justify in `width` with optional pad char |
+| `str_center(text, width[, pad])` | string | Center in `width` with optional pad char |
+| `str_splitlines(text)` | list | Split on line breaks |
+| `str_removeprefix(text, prefix)` | string | Strip `prefix` if present |
+| `str_removesuffix(text, suffix)` | string | Strip `suffix` if present |
+| `str_partition(text, sep)` | list | `[before, sep, after]` |
 | `contains(s, sub)` | boolean | Check if string contains substring |
 | `find(s, sub)` | int | Find position of substring (-1 if not found) |
 | `slice(s, start, end)` | string | Extract substring from `start` to `end` |

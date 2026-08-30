@@ -2833,6 +2833,85 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let to = positional[2].to_string();
             Some(Ok(Value::Str(text.replace(&from, &to))))
         }
+        "str_zfill" => {
+            if positional.len() != 2 {
+                return Some(Err("str_zfill expects exactly 2 arguments: str_zfill(text, width)".to_string()));
+            }
+            let text = positional[0].to_string();
+            let width = to_i64_value(&positional[1]).unwrap_or(0);
+            let pad = width as usize - text.len();
+            let out = if pad > 0 { format!("{}{}", "0".repeat(pad), text) } else { text };
+            Some(Ok(Value::Str(out)))
+        }
+        "str_ljust" | "str_rjust" | "str_center" => {
+            if positional.len() < 2 || positional.len() > 3 {
+                return Some(Err(format!("{} expects (text, width[, pad])", callee)));
+            }
+            let text = positional[0].to_string();
+            let width = to_i64_value(&positional[1]).unwrap_or(0);
+            let pad_char = if positional.len() == 3 { positional[2].to_string().chars().next().unwrap_or(' ') } else { ' ' };
+            let total = width as usize;
+            let out = if text.len() >= total {
+                text
+            } else {
+                let extra = total - text.len();
+                if callee == "str_ljust" {
+                    format!("{}{}", text, pad_char.to_string().repeat(extra))
+                } else if callee == "str_rjust" {
+                    format!("{}{}", pad_char.to_string().repeat(extra), text)
+                } else {
+                    let left = extra / 2;
+                    let right = extra - left;
+                    format!("{}{}{}", pad_char.to_string().repeat(left), text, pad_char.to_string().repeat(right))
+                }
+            };
+            Some(Ok(Value::Str(out)))
+        }
+        "str_splitlines" => {
+            if positional.len() != 1 {
+                return Some(Err("str_splitlines expects exactly 1 argument".to_string()));
+            }
+            let text = positional[0].to_string();
+            let lines: Vec<Value> = text.lines().map(|l| Value::Str(l.to_string())).collect();
+            Some(Ok(Value::List(lines)))
+        }
+        "str_removeprefix" => {
+            if positional.len() != 2 {
+                return Some(Err("str_removeprefix expects exactly 2 arguments".to_string()));
+            }
+            let text = positional[0].to_string();
+            let prefix = positional[1].to_string();
+            let out = if let Some(stripped) = text.strip_prefix(&prefix) { stripped.to_string() } else { text };
+            Some(Ok(Value::Str(out)))
+        }
+        "str_removesuffix" => {
+            if positional.len() != 2 {
+                return Some(Err("str_removesuffix expects exactly 2 arguments".to_string()));
+            }
+            let text = positional[0].to_string();
+            let suffix = positional[1].to_string();
+            let out = if let Some(stripped) = text.strip_suffix(&suffix) { stripped.to_string() } else { text };
+            Some(Ok(Value::Str(out)))
+        }
+        "str_partition" => {
+            if positional.len() != 2 {
+                return Some(Err("str_partition expects exactly 2 arguments: str_partition(text, sep)".to_string()));
+            }
+            let text = positional[0].to_string();
+            let sep = positional[1].to_string();
+            if sep.is_empty() {
+                return Some(Err("str_partition: separator cannot be empty".to_string()));
+            }
+            let out = match text.find(&sep) {
+                Some(idx) => {
+                    let before = text[..idx].to_string();
+                    let after = text[idx + sep.len()..].to_string();
+                    Value::List(vec![Value::Str(before), Value::Str(sep), Value::Str(after)])
+                }
+                None => Value::List(vec![Value::Str(text), Value::Str(String::new()), Value::Str(String::new())]),
+            };
+            Some(Ok(out))
+        }
         "keys" => {
             if positional.len() != 1 {
                 return Some(Err("keys expects exactly 1 argument (dictionary)".to_string()));
