@@ -12065,6 +12065,12 @@ fn main() {
     };
 
     if let Some(base_dir) = abs.parent() {
+        // Run with the script's directory as the working directory so that
+        // relative paths in the script (file ops, os_list_dir, subprocesses)
+        // resolve relative to the script — the same behavior as running
+        // `cd <script-dir> && indent bot.ind`. This makes
+        // `indent run /abs/path/bot.ind` work from any terminal directory.
+        let _ = env::set_current_dir(base_dir);
         load_project_environment(base_dir);
     }
 
