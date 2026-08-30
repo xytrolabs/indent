@@ -96,6 +96,26 @@ fun Get
     var auth string = "Bot " + token
     give http_get url auth
 
+#! ==============================
+#! ⚡  PARALLEL REST (6.5) — fetch many resources concurrently
+#! ==============================
+#! Fetch multiple items in parallel via the `parallel` gather builtin.
+#! NOTE: spawn/parallel can only run functions DEFINED IN THE MAIN SCRIPT
+#! (not module functions). Pass a worker function you define in bot.ind:
+#!   fun myGet path token
+#!       give Get path token
+#!   var results dynamic = ParallelFetch "myGet" token paths
+#! Returns a list of results in the same order as the paths.
+fun ParallelFetch
+    workerName
+    token
+    paths
+    var arglists dynamic = []
+    repeat p in paths
+        var pair dynamic = [p, token]
+        arglists is arglists + [pair]
+    give parallel workerName arglists
+
 fun Post
     path
     token
@@ -713,6 +733,71 @@ fun InteractionEmbed
     var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
     Post path token {"type": 4, "data": {"embeds": [embed]}}
 
+#! ==============================
+#! ⚡  ASYNC LAYER (6.5) — non-blocking handlers on real OS threads
+#! ==============================
+#! Indent 1.5.0 runs `spawn`ed functions on background threads, so slow work
+#! (AI, REST, webhooks) no longer freezes the gateway event loop.
+#!
+#! Deferred interaction pattern (respects Discord's 3s window):
+#!   DeferReply token interaction        # acknowledge immediately (loading)
+#!   SpawnCommand "myHandler" ctx        # run work on a thread
+#!   # myHandler finishes with CtxFollowup ctx result  (sent via webhook)
+
+#! Defer an interaction immediately (type 5). Call first so Discord doesn't
+#! expire the 3s interaction token, then do slow work and follow up later.
+fun DeferReply
+    token
+    interaction
+    var path string = "/interactions/" + interaction.id + "/" + interaction.token + "/callback"
+    give Post path token {"type": 5}
+
+#! Spawn a command handler on a background thread. Does NOT block the gateway.
+#! Returns a task id (for task_done/task_wait). Handler runs as:
+#!   fun myHandler ctx args   →  finish with CtxFollowup ctx result
+fun SpawnCommand
+    handlerName
+    ctx
+    give spawn handlerName ctx
+
+#! Spawn a named function with up to 2 args on a thread; returns the task id.
+fun SpawnTask
+    fnName
+    arg1
+    arg2
+    give spawn fnName arg1 arg2
+
+#! Wait for a spawned task and return its result (blocks this caller only).
+fun AsyncAwait
+    taskId
+    give task_wait taskId
+
+#! Is a spawned task finished? Returns 1 if done, 0 if still running.
+fun AsyncDone
+    taskId
+    give task_done taskId
+
+#! Register a command whose handler runs on a background thread (non-blocking).
+#!   bot is AsyncCommand bot "analyze" "Run analysis" "onAnalyze"
+#! The handler must finish with CtxFollowup (defer happens automatically).
+fun AsyncCommand
+    bot
+    name
+    desc
+    handlerName
+    bot is BotHandler bot name desc handlerName
+    bot is AddSlash bot name desc handlerName empty
+    #! mark as async so RunCommand spawns it instead of blocking
+    var cmds dynamic = bot.commands
+    var entry dynamic = cmds[name]
+    entry["async"] is 1
+    cmds[name] is entry
+    bot.commands is cmds
+    give bot
+
+#! ==============================
+#! 🚀  RunCommand
+#! ==============================
 fun RunCommand
     bot
     token
@@ -800,6 +885,22 @@ fun RunCommand
     if has_key command "handler_name"
         var handlerName dynamic = command.handler_name
         if handlerName != empty
+            #! async command: defer the interaction (if any) and spawn the
+            #! handler on a thread so the gateway never blocks on slow work.
+            var isAsync int = 0
+            if has_key command "async"
+                isAsync is 1
+            if isAsync == 1
+                #! acknowledge/defer first (satisfies the 3s interaction window)
+                if has_key source "author"
+                    if has_key source "id"
+                        var deferPath string = "/interactions/" + source.id + "/" + source.token + "/callback"
+                        do:
+                            Post token deferPath {"type": 5}
+                        catch as err:
+                            say "   (defer skipped: " + string(err) + ")"
+                spawn handlerName {"cmd": cmd, "token": token, "source": source, "args": args, "handler_name": handlerName}
+                give empty
             CallEvent bot "command" {"cmd": cmd, "token": token, "source": source, "args": args, "handler_name": handlerName}
             give empty
 
