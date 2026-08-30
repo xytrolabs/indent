@@ -677,6 +677,11 @@ loop:
 | `path_join(a, b, ...)` | string | Join path components |
 | `path_basename(path)` | string | Extract filename from path |
 | `path_dirname(path)` | string | Extract directory from path |
+| `path_ext(path)` | string | File extension with dot (e.g. `".txt"`), or `""` |
+| `path_stem(path)` | string | Filename without extension |
+| `path_abs(path)` | string | Make the path absolute |
+| `path_expand(path)` | string | Expand `~` and `~/...` to the home dir |
+| `path_norm(path)` | string | Normalize `.` and `..` components |
 
 ## Functional (🆕 v1.2)
 

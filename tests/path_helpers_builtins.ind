@@ -1,0 +1,33 @@
+#! pathlib-style helpers regression test
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+#! extension
+var e = path_ext "/home/user/report.txt"
+say "ext=" + e
+assert_eq(e, ".txt")
+
+#! stem
+var s = path_stem "/home/user/report.txt"
+say "stem=" + s
+assert_eq(s, "report")
+
+#! stem of file without extension = whole name
+var s2 = path_stem "/home/user/README"
+say "stem2=" + s2
+assert_eq(s2, "README")
+
+#! normalize: resolve . and ..
+var n = path_norm "/a/b/../c/./d"
+say "norm=" + n
+assert_eq(n, "/a/c/d")
+
+#! absolute (works even if cwd unknown; just must not be empty and start with /)
+var a = path_abs "relative/file.txt"
+say "abs=" + a
+var isabs = starts_with a "/"
+assert(isabs)
+
+say "path helpers: ALL PASS"

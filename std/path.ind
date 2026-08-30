@@ -18,3 +18,18 @@ fun IsFile path
 
 fun IsDir path
     give os_is_dir path
+
+fun Ext path
+    give path_ext path
+
+fun Stem path
+    give path_stem path
+
+fun Abs path
+    give path_abs path
+
+fun Expand path
+    give path_expand path
+
+fun Norm path
+    give path_norm path

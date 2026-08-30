@@ -5115,6 +5115,78 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let parent = p.parent().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             Some(Ok(Value::Str(parent)))
         }
+        "path_ext" => {
+            if positional.len() != 1 {
+                return Some(Err("path_ext expects exactly 1 argument".to_string()));
+            }
+            let path_str = positional[0].to_string();
+            let p = Path::new(&path_str);
+            let ext = p.extension().map(|n| format!(".{}", n.to_string_lossy())).unwrap_or_default();
+            Some(Ok(Value::Str(ext)))
+        }
+        "path_stem" => {
+            if positional.len() != 1 {
+                return Some(Err("path_stem expects exactly 1 argument".to_string()));
+            }
+            let path_str = positional[0].to_string();
+            let p = Path::new(&path_str);
+            let fname = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let stem = match p.extension() {
+                Some(_) => {
+                    let f = Path::new(&fname);
+                    f.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                }
+                None => fname,
+            };
+            Some(Ok(Value::Str(stem)))
+        }
+        "path_abs" => {
+            if positional.len() != 1 {
+                return Some(Err("path_abs expects exactly 1 argument".to_string()));
+            }
+            let p = PathBuf::from(positional[0].to_string());
+            let abs = if p.is_absolute() {
+                p
+            } else {
+                std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p)
+            };
+            Some(Ok(Value::Str(abs.to_string_lossy().to_string())))
+        }
+        "path_expand" => {
+            if positional.len() != 1 {
+                return Some(Err("path_expand expects exactly 1 argument".to_string()));
+            }
+            let raw = positional[0].to_string();
+            let expanded = if raw == "~" || raw.starts_with("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    let home = home.to_string_lossy().to_string();
+                    if raw == "~" { home } else { format!("{}/{}", home, &raw[2..]) }
+                } else {
+                    raw
+                }
+            } else {
+                raw
+            };
+            Some(Ok(Value::Str(expanded)))
+        }
+        "path_norm" => {
+            if positional.len() != 1 {
+                return Some(Err("path_norm expects exactly 1 argument".to_string()));
+            }
+            let p = PathBuf::from(positional[0].to_string());
+            let mut parts: Vec<String> = Vec::new();
+            for comp in p.components() {
+                match comp {
+                    std::path::Component::RootDir => {}
+                    std::path::Component::ParentDir => { parts.pop(); }
+                    std::path::Component::CurDir => {}
+                    other => parts.push(other.as_os_str().to_string_lossy().to_string()),
+                }
+            }
+            let joined = parts.join("/");
+            let out = if p.is_absolute() { format!("/{}", joined) } else { joined };
+            Some(Ok(Value::Str(out)))
+        }
         // ── Hash text ──────────────────────────────────────────
         "hash_sha256" => {
             if positional.len() != 1 {
