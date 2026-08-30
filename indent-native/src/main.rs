@@ -4216,6 +4216,31 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             };
             Some(http_serve_dir_builtin(&dir, port))
         }
+        // ── Async I/O — run an HTTP builtin on a background thread, return a future id ──
+        "http_get_async" => {
+            if positional.is_empty() || positional.len() > 2 {
+                return Some(Err("http_get_async expects 1 or 2 arguments: http_get_async(url, [authorization])".to_string()));
+            }
+            Some(spawn_builtin_future("http_get", positional.to_vec()))
+        }
+        "http_post_json_async" => {
+            if positional.len() < 2 || positional.len() > 3 {
+                return Some(Err("http_post_json_async expects 2 or 3 arguments: http_post_json_async(url, payload, [authorization])".to_string()));
+            }
+            Some(spawn_builtin_future("http_post_json", positional.to_vec()))
+        }
+        "http_put_json_async" => {
+            if positional.len() < 2 || positional.len() > 3 {
+                return Some(Err("http_put_json_async expects 2 or 3 arguments: http_put_json_async(url, payload, [authorization])".to_string()));
+            }
+            Some(spawn_builtin_future("http_put_json", positional.to_vec()))
+        }
+        "http_delete_async" => {
+            if positional.is_empty() || positional.len() > 2 {
+                return Some(Err("http_delete_async expects 1 or 2 arguments: http_delete_async(url, [authorization])".to_string()));
+            }
+            Some(spawn_builtin_future("http_delete", positional.to_vec()))
+        }
         "gui_show_html" => {
             // gui_show_html(html, [title], [width], [height]) — opens HTML in a native window
             if positional.is_empty() || positional.len() > 4 {
@@ -6349,6 +6374,34 @@ fn sleep_builtin(seconds: f64) -> Result<Value, String> {
     let handle = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
         *result2.lock().unwrap() = Some(Value::Empty);
+        done2.store(true, Ordering::SeqCst);
+    });
+    TASKS.lock().unwrap().insert(
+        id,
+        TaskState {
+            handle: Some(handle),
+            done,
+            result,
+        },
+    );
+    Ok(Value::Int(id))
+}
+
+/// Run any builtin on a background thread and return a future id for it.
+/// Enables async I/O: `var f = http_get_async url` then `wait f`.
+fn spawn_builtin_future(builtin_name: &str, args: Vec<Value>) -> Result<Value, String> {
+    let builtin_name = builtin_name.to_string();
+    let done = Arc::new(AtomicBool::new(false));
+    let result = Arc::new(Mutex::new(None::<Value>));
+    let done2 = done.clone();
+    let result2 = result.clone();
+    let id = TASK_NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let handle = std::thread::spawn(move || {
+        let out = invoke_builtin(&builtin_name, &args).unwrap_or_else(|| {
+            Err(format!("async {}: no such builtin", builtin_name))
+        });
+        let val = out.unwrap_or(Value::Empty);
+        *result2.lock().unwrap() = Some(val);
         done2.store(true, Ordering::SeqCst);
     });
     TASKS.lock().unwrap().insert(

@@ -488,6 +488,30 @@ var res = coop [["task_a", []], ["task_b", []]]   # → [A, B], interleaved
 | `future_wait_for(id, secs)` | Wait up to `secs`; return result or `empty` on timeout (`asyncio.wait_for`) |
 | `coop [[fn, args], ...]` | Run async function bodies cooperatively on one thread |
 
+### Async I/O (🆕)
+
+Run HTTP requests on background threads and await them — so many requests run
+concurrently without blocking the program:
+
+| Function | Returns | Description |
+|---|---|---|
+| `http_get_async(url, [auth])` | future id | `http_get` on a background thread |
+| `http_post_json_async(url, payload, [auth])` | future id | `http_post_json` on a background thread |
+| `http_put_json_async(url, payload, [auth])` | future id | `http_put_json` on a background thread |
+| `http_delete_async(url, [auth])` | future id | `http_delete` on a background thread |
+
+```indent
+var f = http_get_async "https://api.example.com/users"
+# ... other work ...
+wait f
+var resp = __await_result__      # → {status, body, ok}
+
+# concurrent requests
+var f1 = http_get_async "https://api.example.com/a"
+var f2 = http_get_async "https://api.example.com/b"
+var results = gather f1 f2        # both run concurrently
+```
+
 ```indent
 # async def — calling it returns a future automatically
 async fun fetch id
