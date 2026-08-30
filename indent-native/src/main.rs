@@ -10907,12 +10907,16 @@ fn is_literal(s: &str) -> bool {
 }
 
 fn contains_expr_operators(s: &str) -> bool {
-    // Check if the text contains expression operators that indicate
-    // it's an expression, not a function call
+    // Check if the text contains TOP-LEVEL expression operators (outside
+    // strings AND outside brackets/parens) that indicate it's an expression,
+    // not a function call. Operators nested inside ( ) [ ] { } are part of a
+    // single parenthesized argument (e.g. foo "a" ("b" + x)) and do NOT make
+    // the whole line an expression.
     let bytes = s.as_bytes();
     let mut in_str = false;
     let mut str_char = '\0';
     let mut escape = false;
+    let mut depth = 0i32;
     for &b in bytes {
         let c = b as char;
         if escape { escape = false; continue; }
@@ -10922,14 +10926,12 @@ fn contains_expr_operators(s: &str) -> bool {
             continue;
         }
         if c == '"' || c == '\'' { in_str = true; str_char = c; continue; }
-        // Expression operators outside strings
+        if c == '(' || c == '[' || c == '{' { depth += 1; continue; }
+        if c == ')' || c == ']' || c == '}' { depth -= 1; continue; }
+        if depth > 0 { continue; }
+        // Expression operators outside strings and brackets
         if matches!(c, '+' | '-' | '*' | '/' | '%' | '=' | '<' | '>' | '!') {
             return true;
-        }
-        // Check for multi-char operators
-        if c == 'o' || c == 'O' || c == 'a' || c == 'A' || c == 'n' || c == 'N' {
-            // Could be 'or', 'and', 'not', 'in' - but these are covered by the
-            // is_keyword check on the callee. Just check for operator chars.
         }
     }
     false
