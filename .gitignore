@@ -52,6 +52,7 @@ bot.py
 discord.py
 *.png
 *.svg
+!share/icons/**/*.svg
 PUBLISHING_EXTENSIONS.md
 builtin_smoke.ind
 do_catch_smoke.ind
