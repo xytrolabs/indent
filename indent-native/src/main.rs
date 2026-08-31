@@ -434,6 +434,71 @@ fn is_valid_color_literal(value: &str) -> bool {
     )
 }
 
+/// Resolve a color (hex `#RGB`/`#RRGGBB`/`#RRGGBBAA`, with or without `#`, or a
+/// named color like `RED`) into `(r, g, b)` for ANSI truecolor output.
+fn color_to_rgb(s: &str) -> Option<(u8, u8, u8)> {
+    let s = s.trim();
+    let hex = if let Some(h) = s.strip_prefix('#') {
+        h.to_string()
+    } else {
+        let named = match s.to_ascii_lowercase().as_str() {
+            "red" => "#ff4d4d",
+            "green" => "#32c671",
+            "blue" => "#3b82f6",
+            "cyan" => "#06b6d4",
+            "magenta" => "#d946ef",
+            "yellow" => "#facc15",
+            "orange" => "#fb923c",
+            "purple" => "#8b5cf6",
+            "pink" => "#ec4899",
+            "black" => "#0f172a",
+            "white" => "#f8fafc",
+            _ => return None,
+        };
+        named.trim_start_matches('#').to_string()
+    };
+    let h = hex.trim_start_matches('#');
+    match h.len() {
+        // #RGB
+        3 => {
+            let r = u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?;
+            Some((r, g, b))
+        }
+        // #RGBA
+        4 => {
+            let r = u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?;
+            Some((r, g, b))
+        }
+        // #RRGGBB
+        6 => {
+            let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+            Some((r, g, b))
+        }
+        // #RRGGBBAA (alpha ignored)
+        8 => {
+            let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+            Some((r, g, b))
+        }
+        _ => None,
+    }
+}
+
+/// Wrap `text` in ANSI truecolor escape codes for foreground `color`.
+fn colorize_text(text: &str, color: &str) -> Result<String, String> {
+    match color_to_rgb(color) {
+        Some((r, g, b)) => Ok(format!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, text)),
+        None => Err(format!("colored: unknown color '{}'", color)),
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2476,7 +2541,7 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
 const INDENT_BUILTINS: &[&str] = &[
     "abs", "add_int", "all", "any", "append", "ask", "assert", "assert_eq",
     "base64_decode", "base64_encode", "between_int", "bool", "boolean", "builtins",
-    "capitalize", "clamp", "clear", "coalesce", "contains", "coop", "copy", "count",
+    "capitalize", "clamp", "clear", "coalesce", "colored", "contains", "coop", "copy", "count",
     "counter", "csv_read", "csv_write", "dec", "default", "dict_get", "dict_items",
     "dict_remove", "dict_set", "dict_update", "div_int", "ends_with", "enumerate",
     "err", "error_message", "error_type", "extend", "false", "file_append_text",
@@ -2547,6 +2612,14 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 .join(" ");
             println!("{line}");
             Some(Ok(Value::Empty))
+        }
+        "colored" | "colorize" => {
+            if positional.len() != 2 {
+                return Some(Err("colored expects exactly 2 arguments: colored(text, color)".to_string()));
+            }
+            let text = positional[0].to_string();
+            let color = positional[1].to_string();
+            Some(colorize_text(&text, &color).map(Value::Str))
         }
         "ask" => {
             if positional.is_empty() || positional.len() > 2 {

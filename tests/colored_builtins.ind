@@ -1,0 +1,50 @@
+#! colored() regression test
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+#! hex color → ANSI truecolor prefix (check the RGB code substring)
+var red = colored "Hi" "#ff0000"
+var hasRedCode = contains red "38;2;255;0;0"
+assert(hasRedCode)
+var hasHi = contains red "Hi"
+assert(hasHi)
+var notPlain = not (red == "Hi")
+assert(notPlain)
+
+#! different colors → different codes
+var grn = colored "Hi" "#00ff00"
+var grnDiff = not (red == grn)
+assert(grnDiff)
+var hasGrn = contains grn "38;2;0;255;0"
+assert(hasGrn)
+
+#! 3-digit hex expands (#f00 → 255;0;0)
+var c3 = colored "x" "#f00"
+var hasC3 = contains c3 "38;2;255;0;0"
+assert(hasC3)
+
+#! named color (RED → #ff4d4d → 255;77;77)
+var named = colored "x" "RED"
+var hasNamed = contains named "38;2;255;77;77"
+assert(hasNamed)
+
+#! color variable (stored as #hex string)
+var accent color = "#22c55e"
+var cv = colored "ok" accent
+var hasCv = contains cv "38;2;34;197;94"
+assert(hasCv)
+
+#! prints in color (visible in a real terminal)
+say colored "This is red text" "#ff0000"
+say colored "This is green named" "green"
+say colored "This is blue var" accent
+say colored "done" "#333"
+
+say "colored: ALL PASS"

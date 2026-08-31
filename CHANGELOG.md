@@ -1,5 +1,22 @@
 # Indent Changelog
 
+## 1.6.1 — 2026-08-31 (Colored output + builtin discovery)
+
+### 🎨 Colored text output
+- **`colored(text, color)`** — wrap text in ANSI truecolor escape codes so
+  `say colored "hi" color` prints in color. Accepts hex (`#RGB`, `#RRGGBB`,
+  `#RRGGBBAA`, with or without `#`) or a named color (`RED`, `green`, `blue`, …)
+  or a color variable (`var c color = "#22c55e"`).
+- Test: `tests/colored_builtins.ind`.
+
+### 🔍 Builtin discovery
+- **`builtins()`** — returns the names of every available builtin (like Python's
+  `dir(__builtins__)`).
+- **`get <builtin>`** (with optional `as alias`) — bind a builtin as a value so
+  it can be passed around / called via a variable, consistent with
+  `get X from module`. Backed by a new `Callable::Builtin` variant.
+- Tests: `tests/builtins_discovery.ind`, `tests/get_builtin.ind`.
+
 ## 1.6.0 — 2026-08-30 (Async I/O + parity builtins)
 
 ### 🌐 Async I/O (non-blocking HTTP on background threads)

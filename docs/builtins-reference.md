@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v1.6.0)
+# Indent Built-in Functions — API Reference (v1.6.1)
 
-> Complete reference for every built-in function available in Indent 1.6.0.
+> Complete reference for every built-in function available in Indent 1.6.1.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v1.6.1**: `colored(text, color)` for colored terminal output, `builtins()`, `get <builtin>`
 > **🆕 v1.6**: async I/O (`http_get_async` & co), set ops (`set_union`/`set_intersection`/`set_difference`), YAML (`yaml_loads`/`yaml_dumps`), path helpers (`path_ext`/`path_stem`/`path_abs`/`path_expand`/`path_norm`), string methods (`str_zfill` & co)
 > **🆕 v1.5**: async tasks (`spawn`/`task_wait`/`parallel`), SQLite, CSV, `walk`, `os_run`, TOML, gzip/zip, typed errors, `log`, `counter`
 > **🆕 v1.4**: Group type (`group([...])`), type conversion (`set varname type`), group methods
@@ -42,6 +43,33 @@ var shout = upper "hi"     # → "HI"
 > `get <builtin>` is equivalent to `get <name> from module` for module functions,
 > but pulls from the builtin table. Builtins passed by value follow the same
 > rules as any function value.
+
+---
+
+## Colored output (🆕 v1.6.1)
+
+`colored(text, color)` wraps text in ANSI **truecolor** escape codes, so you can
+print in any color — great for terminal tools, menus, and emphasis.
+
+| Function | Returns | Description |
+|---|---|---|
+| `colored(text, color)` | string | `text` wrapped in ANSI truecolor for `color` |
+
+`color` accepts:
+- a hex literal — `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (with or without `#`)
+- a **named** color: `RED`, `GREEN`, `BLUE`, `CYAN`, `MAGENTA`, `YELLOW`, `ORANGE`, `PURPLE`, `PINK`, `BLACK`, `WHITE` (case-insensitive)
+- a **color variable** — `var accent color = "#22c55e"`
+
+```indent
+say colored "This is red" "#ff0000"
+say colored "This is green" "green"
+say colored "This is blue" "#22c55e"
+
+var accent color = "#ff9900"
+say colored "Warning!" accent
+```
+
+`colored` returns a string, so you can embed it in larger output with `+`.
 
 ---
 
