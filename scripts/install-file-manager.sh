@@ -4,7 +4,21 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARE="${SCRIPT_DIR}/../share"
+SYSTEM_MODE=""
+
+# Optional: --share-dir <path> overrides where the mime/icons/applications
+# assets live (defaults to <this-script>/../share). Useful when the assets
+# come from a release tarball rather than a cloned repo.
+if [[ "${1:-}" == "--share-dir" ]]; then
+  SHARE="${2:-$SHARE}"
+  shift 2
+fi
 SYSTEM_MODE="${1:-}"
+
+if [[ ! -f "${SHARE}/mime/packages/indent.xml" ]]; then
+  echo "  (install-file-manager: share assets not found under ${SHARE}; skipping)" >&2
+  exit 0
+fi
 
 echo "🎨 Installing Indent file manager integration..."
 

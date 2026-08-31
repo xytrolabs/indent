@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-indent">
+    <comment>Indent source file</comment>
+    <acronym>Indent</acronym>
+    <expanded-acronym>Indent</expanded-acronym>
+    <glob pattern="*.ind"/>
+  </mime-type>
+  <mime-type type="text/x-indent-env">
+    <comment>Indent environment file</comment>
+    <glob pattern="*.glo"/>
+  </mime-type>
+</mime-info>

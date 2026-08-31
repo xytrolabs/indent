@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Indent
+GenericName=Indent Interpreter
+Comment=Run Indent programs and the interactive REPL
+Exec=indent %F
+Icon=text-x-indent
+Terminal=true
+Categories=Development;Programming;
+Keywords=Indent;Aether;script;language;interpreter;
+MimeType=text/x-indent;text/x-indent-env;

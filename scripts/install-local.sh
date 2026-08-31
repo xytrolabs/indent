@@ -163,5 +163,12 @@ echo ""
 echo "  Try it:   $(bold 'indent --version')"
 echo "  Format:   $(bold 'indent fmt myfile.ind')"
 echo "  REPL:     $(bold 'indent repl')"
+
+# ---- File manager integration (Indent file icon + MIME for .ind / .glo) ----
+if [[ "$(uname -s)" == "Linux" && -f "${SCRIPT_DIR}/install-file-manager.sh" && -d "${PROJECT_DIR}/share" ]]; then
+  bash "${SCRIPT_DIR}/install-file-manager.sh"
+elif [[ "$(uname -s)" == "Linux" ]]; then
+  echo "  (Skipping file-manager icon integration — share/ assets not present)" >&2
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""

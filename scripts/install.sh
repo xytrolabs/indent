@@ -70,6 +70,9 @@ esac
 TARGET="${ARCH_PART}-${OS_PART}"
 CURL_OPTS=(--fail --silent --show-error --location --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2)
 
+# Directory containing this installer (used for local share/ assets)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ---- install paths ----
 INDENT_HOME="${HOME}/.local/share/indent"
 BIN_DIR="${INDENT_HOME}/bin"
@@ -372,4 +375,46 @@ if command -v jq >/dev/null 2>&1; then
   echo "Configured VS Code settings for .ind recognition and Indent icon theme defaults."
 else
   echo "Optional: install 'jq' to auto-configure VS Code .ind settings during install."
+fi
+
+# ---- File manager integration (Indent file icon + MIME for .ind / .glo) ----
+if [[ "$OS" == "linux" ]]; then
+  FM_SHARE=""
+  FM_SCRIPT=""
+
+  # 1) Local repo assets (from-source --local, or a cloned build)
+  if [[ -f "${SCRIPT_DIR}/install-file-manager.sh" && -d "${SCRIPT_DIR}/../share" ]]; then
+    FM_SHARE="${SCRIPT_DIR}/../share"
+    FM_SCRIPT="${SCRIPT_DIR}/install-file-manager.sh"
+  elif [[ -n "${BUILD_DIR:-}" && -d "${BUILD_DIR}/share" ]]; then
+    FM_SHARE="${BUILD_DIR}/share"
+    FM_SCRIPT="${BUILD_DIR}/scripts/install-file-manager.sh"
+  # 2) Prebuilt release: fetch the share assets + script from GitHub raw
+  elif command -v curl >/dev/null 2>&1; then
+    FM_DIR="$(mktemp -d)"
+    FM_SCRIPT="${FM_DIR}/install-file-manager.sh"
+    if curl "${CURL_OPTS[@]}" \
+        "https://raw.githubusercontent.com/${REPO}/main/scripts/install-file-manager.sh" \
+        -o "$FM_SCRIPT" 2>/dev/null; then
+      mkdir -p "${FM_DIR}/share/mime/packages" \
+               "${FM_DIR}/share/icons/hicolor/scalable/mimetypes" \
+               "${FM_DIR}/share/applications"
+      for f in \
+          mime/packages/indent.xml \
+          icons/hicolor/scalable/mimetypes/text-x-indent.svg \
+          icons/hicolor/scalable/mimetypes/text-x-indent-env.svg \
+          applications/indent.desktop; do
+        curl "${CURL_OPTS[@]}" \
+            "https://raw.githubusercontent.com/${REPO}/main/share/$f" \
+            -o "${FM_DIR}/share/$f" 2>/dev/null || true
+      done
+      FM_SHARE="${FM_DIR}/share"
+    fi
+  fi
+
+  if [[ -n "$FM_SHARE" && -f "$FM_SCRIPT" ]]; then
+    bash "$FM_SCRIPT" --share-dir "$FM_SHARE"
+  else
+    echo "  (File-manager icon integration skipped — could not locate share assets)" >&2
+  fi
 fi
