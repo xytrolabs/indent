@@ -1,0 +1,22 @@
+#! get builtin as a value
+get len
+var x = len [1, 2, 3]
+say "len via get = " + string(x)
+
+get max
+var m = max [3, 9]
+say "max via get = " + string(m)
+
+get string as str2
+var s = str2 42
+say "string(42) via alias = " + s
+
+get upper
+var u = upper "hello"
+say "upper('hello') via get = " + u
+
+#! enumerate builtins
+var b = builtins()
+var n = len b
+say "builtin count = " + string(n)
+say "builtins ok"

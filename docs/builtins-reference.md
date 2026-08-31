@@ -15,6 +15,38 @@
 
 ---
 
+## How to get a builtin
+
+**List every builtin** with `builtins()` (like Python's `dir(__builtins__)`):
+
+```indent
+var names = builtins()      # → ["abs", "add_int", "len", ..., "zip_list"]
+say len names               # → 236
+```
+
+**Bind a builtin as a value** with `get <builtin>`, so you can pass it around or
+call it through a variable (like `import`-ing a module function, but for the
+builtin table). This works with an optional `as` alias:
+
+```indent
+get len                    # bind len
+var n = len [1, 2, 3]      # → 3
+
+get string as to_s         # bind with an alias
+var s = to_s 42            # → "42"
+
+get upper
+var shout = upper "hi"     # → "HI"
+```
+
+> `get <builtin>` is equivalent to `get <name> from module` for module functions,
+> but pulls from the builtin table. Builtins passed by value follow the same
+> rules as any function value.
+
+---
+
+---
+
 ## Output & Input
 
 ### `say expr`
@@ -390,6 +422,7 @@ catch as err:
 | `mod_int(a, b)` | Integer modulo |
 | `counter(list)` | dict — count occurrences of each element → `{element: count}` |
 | `log(level, msg)` | — write `[LEVEL] msg` to stderr (simple logging) |
+| `builtins()` | list — names of every available builtin (see [How to get a builtin](#how-to-get-a-builtin)) |
 
 ---
 

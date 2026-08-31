@@ -1,0 +1,16 @@
+var b = builtins()
+var n = len b
+say "builtin count: " + string(n)
+var hasSqlite = 0
+repeat item in b
+    if item == "sqlite_query"
+        hasSqlite is 1
+if hasSqlite
+    say "sqlite_query present: YES"
+var hasSpawn = 0
+repeat item in b
+    if item == "spawn"
+        hasSpawn is 1
+if hasSpawn
+    say "spawn present: YES"
+say "all builtins ok"

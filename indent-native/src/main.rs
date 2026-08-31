@@ -357,6 +357,7 @@ struct ClassDef {
 enum Callable {
     Local(FunctionDef),
     External { module: Arc<ModuleInstance>, name: String },
+    Builtin(String),
 }
 
 #[derive(Debug, Clone)]
@@ -1653,6 +1654,16 @@ fn import_stmt(
     alias: Option<&str>,
     ctx: &mut ExecContext<'_>,
 ) -> Result<(), String> {
+    // `get <builtin>` (no "from") binds a builtin as a value, e.g. `get len`.
+    // Otherwise `get <module>` / `get X from module` imports a module/symbol.
+    if symbol_name.is_none() && INDENT_BUILTINS.contains(&module_name) {
+        let bind = alias.unwrap_or(module_name).to_string();
+        ctx.rt
+            .callables
+            .insert(bind, Callable::Builtin(module_name.to_string()));
+        return Ok(());
+    }
+
     let module = load_module(module_name, ctx)?;
 
     match symbol_name {
@@ -1875,6 +1886,7 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
             Callable::External { module, name } => {
                 invoke_external_function(module, &name, &func_args, &named, ctx)
             }
+            Callable::Builtin(name) => invoke_builtin_callable(&name, &func_args, &named),
         };
     }
 
@@ -1929,6 +1941,7 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
             Callable::External { module, name } => {
                 invoke_external_function(module, &name, &positional, &named, ctx)
             }
+            Callable::Builtin(name) => invoke_builtin_callable(&name, &positional, &named),
         };
     }
 
@@ -2400,6 +2413,7 @@ fn invoke_callable_expr(
             Callable::External { module, name } => {
                 invoke_external_function(module, &name, &positional, &HashMap::new(), ctx)
             }
+            Callable::Builtin(name) => invoke_builtin_callable(&name, &positional, &HashMap::new()),
         };
     }
 
@@ -2422,6 +2436,7 @@ fn invoke_callable_expr(
         Callable::External { module, name } => {
             invoke_external_function(module, &name, &positional, &HashMap::new(), ctx)
         }
+        Callable::Builtin(name) => invoke_builtin_callable(&name, &positional, &HashMap::new()),
     }
 }
 
@@ -2454,9 +2469,72 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
+/// Names of every builtin function available in Indent, including the ctx-aware
+/// ones dispatched outside invoke_builtin (spawn/parallel/future/coop). Returned
+/// by the `builtins()` function so scripts can discover what's available.
+/// NOTE: keep this in sync when adding a builtin to invoke_builtin (or the exec path).
+const INDENT_BUILTINS: &[&str] = &[
+    "abs", "add_int", "all", "any", "append", "ask", "assert", "assert_eq",
+    "base64_decode", "base64_encode", "between_int", "bool", "boolean", "builtins",
+    "capitalize", "clamp", "clear", "coalesce", "contains", "coop", "copy", "count",
+    "counter", "csv_read", "csv_write", "dec", "default", "dict_get", "dict_items",
+    "dict_remove", "dict_set", "dict_update", "div_int", "ends_with", "enumerate",
+    "err", "error_message", "error_type", "extend", "false", "file_append_text",
+    "file_read_text", "file_sha256", "file_size", "file_write_text", "filter", "find",
+    "float", "float_or", "format", "future", "future_cancel", "future_done",
+    "future_result", "future_wait_for", "gather", "glob", "group", "gui_show_html",
+    "gzip_compress", "gzip_decompress", "hash_sha256", "has_key", "http_delete",
+    "http_delete_async", "http_get", "http_get_async", "http_patch_json",
+    "http_post_json", "http_post_json_async", "http_put_json", "http_put_json_async",
+    "http_serve_dir", "inc", "index", "insert", "int", "int_or", "is_err", "is_even",
+    "is_missing", "is_odd", "is_ok", "items", "join", "json_dumps", "json_loads",
+    "keys", "len", "log", "lower", "lstrip", "map", "math_abs", "math_acos",
+    "math_asin", "math_atan", "math_atan2", "math_ceil", "math_cos", "math_exp",
+    "math_floor", "math_log", "math_log10", "math_pow", "math_round", "math_sin",
+    "math_sqrt", "math_tan", "max", "min", "mod_int", "mul_int", "ok", "os_chdir",
+    "os_copy", "os_copy_tree", "os_environ", "os_exists", "os_getcwd", "os_getenv",
+    "os_is_dir", "os_is_file", "os_list_dir", "os_mkdir", "os_move", "os_remove",
+    "os_rename", "os_run", "os_setenv", "os_system", "pad_left", "pad_right",
+    "parallel", "path_abs", "path_basename", "path_dirname", "path_expand",
+    "path_ext", "path_join", "path_norm", "path_stem", "pop", "print",
+    "process_exit", "python_available", "python_eval", "python_eval_json",
+    "python_exec", "python_run_file", "random_choice", "random_float", "random_int",
+    "random_seed", "random_shuffle", "range", "regex_findall", "regex_match",
+    "regex_replace", "regex_search", "regex_split", "remove", "repeat_str",
+    "replace", "reverse", "rstrip", "say", "set", "set_add", "set_contains",
+    "set_difference", "set_intersection", "set_remove", "set_union", "sformat",
+    "sleep", "slice", "sort", "spawn", "split", "sqlite_exec", "sqlite_query",
+    "sqlite_query_one", "starts_with", "str", "str_center", "string", "str_ljust",
+    "str_partition", "str_removeprefix", "str_removesuffix", "str_rjust",
+    "str_splitlines", "str_zfill", "sub_int", "sum", "swapcase", "sys_arch",
+    "sys_argv", "sys_executable", "sys_platform", "sys_version", "task_done",
+    "task_result", "task_wait", "task_wait_all", "task_wait_timeout", "time_format",
+    "time_now", "time_parse", "time_perf_counter", "time_sleep", "time_utc",
+    "title", "toml_dumps", "toml_loads", "trim", "true", "try", "type_of", "typeof",
+    "unwrap", "upper", "uuid", "values", "walk", "ws_close", "ws_connect",
+    "ws_recv_text", "ws_recv_text_timeout", "ws_send_text", "yaml_dumps",
+    "yaml_loads", "zip", "zip_extract", "zip_list",
+];
+
+/// Invoke a builtin that was bound as a value via `get <builtin>`.
+fn invoke_builtin_callable(name: &str, positional: &[Value], named: &HashMap<String, Value>) -> Result<Value, String> {
+    if !named.is_empty() {
+        return Err(format!("builtin '{}' does not accept named arguments", name));
+    }
+    invoke_builtin(name, positional).unwrap_or_else(|| Err(format!("Unknown builtin '{name}'")))
+}
+
 fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, String>> {
     let builtin = callee.to_ascii_lowercase();
     match builtin.as_str() {
+        "builtins" => {
+            if !positional.is_empty() {
+                return Some(Err("builtins takes no arguments".to_string()));
+            }
+            Some(Ok(Value::List(
+                INDENT_BUILTINS.iter().map(|n| Value::Str(n.to_string())).collect(),
+            )))
+        }
         "say" | "print" => {
             if positional.is_empty() {
                 println!();
@@ -6317,12 +6395,15 @@ fn spawn_task_builtin(
     let callable = resolve_callable(fn_name, ctx)
         .map_err(|e| format!("spawn: function '{}' not found: {}", fn_name, e))?;
 
-    let (module_dir, func_def, module_ref, func_key) = match &callable {
+    let (module_dir, func_def, module_ref, func_key, builtin_name) = match &callable {
         Callable::Local(f) => {
-            (ctx.rt.module_dir.clone(), Some(f.clone()), None, None)
+            (ctx.rt.module_dir.clone(), Some(f.clone()), None, None, None)
         }
         Callable::External { module, name } => {
-            (ctx.rt.module_dir.clone(), None, Some(module.clone()), Some(name.clone()))
+            (ctx.rt.module_dir.clone(), None, Some(module.clone()), Some(name.clone()), None)
+        }
+        Callable::Builtin(name) => {
+            (ctx.rt.module_dir.clone(), None, None, None, Some(name.clone()))
         }
     };
 
@@ -6367,6 +6448,9 @@ fn spawn_task_builtin(
                 invoke_function(&f, &args, &HashMap::new(), &mut ctx2)
             } else if let (Some(em), Some(ek)) = (&module_ref, &func_key) {
                 invoke_external_function(em.clone(), ek, &args, &HashMap::new(), &mut ctx2)
+            } else if let Some(bn) = &builtin_name {
+                invoke_builtin(bn, &args)
+                    .unwrap_or_else(|| Err(format!("Unknown builtin '{bn}'")))
             } else {
                 Err("spawn: internal error — no callable resolved".to_string())
             }
