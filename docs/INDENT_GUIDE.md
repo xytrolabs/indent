@@ -1,10 +1,33 @@
-# Your Journey with Indent 1.6.0
+# Your Journey with Indent 1.6.1
 
-> Indent 1.6 adds **async I/O** (non-blocking `http_*_async`), set operations,
-> YAML config, pathlib-style path helpers, and more Python `str` methods — all
-> with the same simple, lovable syntax.
+> Indent 1.6.1 adds **colored terminal output** (`colored`), builtin discovery
+> (`builtins()`) and `get <builtin>`; 1.6 adds async I/O, set operations, YAML,
+> path helpers, and more Python `str` methods — all with the same simple,
+> lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
+
+---
+
+## What's New in 1.6.1
+
+- **Colored output** — `colored(text, color)` wraps text in ANSI truecolor codes,
+  so `say colored "hi" "#ff0000"` prints in color. Accepts hex (`#RGB`/`#RRGGBB`),
+  named colors (`RED`, `green`, …), or a color variable:
+  ```indent
+  var accent color = "#22c55e"
+  say colored "This is green" "green"
+  say colored "This is the accent" accent
+  ```
+- **`builtins()`** — returns a list of every available builtin (like Python's
+  `dir(__builtins__)`), so you can discover what's built in.
+- **`get <builtin>`** — bind a builtin as a value (with optional `as` alias):
+  ```indent
+  get len
+  var n = len [1, 2, 3]     # → 3
+  get string as to_s
+  var s = to_s 42           # → "42"
+  ```
 
 ---
 

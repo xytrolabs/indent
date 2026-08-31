@@ -1,9 +1,12 @@
-# Indent Quick Reference (v1.6.0)
+# Indent Quick Reference (v1.6.1)
 
 > Complete syntax reference for the Indent programming language.
+> **New in 1.6.1**: `colored(text, color)` terminal colors, `builtins()`, `get <builtin>`.
 > **New in 1.6**: async I/O (`http_*_async`), set ops (`set_union`/`set_intersection`/`set_difference`), YAML, path helpers, `str_*` methods.
 > **New in 1.5**: async tasks (`spawn`/`parallel`), `async fun`/`wait`/`gather`/`coop`, SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.
-> 💡 Unique ordered collections are called **groups** — build one with `group([1,2,3])` **or** `set([1,2,3])`. The `set` **keyword** statement `set x string` is type conversion.<｜end▁of▁thinking｜>## Basics
+> 💡 Unique ordered collections are called **groups** — build one with `group([1,2,3])` **or** `set([1,2,3])`. The `set` **keyword** statement `set x string` is type conversion.
+> 🎨 Print in color: `say colored "hi" "#ff0000"` (hex, named colors, or a color variable).
+> 🔍 Discover builtins: `builtins()`; bind one as a value with `get <builtin>`.<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)
 say "Hello"                 # Print to stdout
