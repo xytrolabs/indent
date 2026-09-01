@@ -311,22 +311,28 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 | `file_write_text(path, text)` | — | Write string to file (overwrite) |
 | `file_append_text(path, text)` | — | Append string to file |
 | `walk(path)` | list | Recursively list **every** file under `path` (sorted depth-first; like `os.walk` / `glob("**/*")`) |
-| `run_file(path)` | — | Run another Indent file **in the current runtime** — its functions and module-level vars become available here (include-like) |
 
-There is also a **`launch` keyword** — `launch "path.ind"` is the statement form
-of `run_file`:
+### Running other Indent files
+
+**`launch` is the canonical way** to run another Indent file **in the current
+runtime** — the launched file's functions and module-level vars become available
+here (include-like):
 
 ```indent
-# run_file.ind defines: fun double x  and  var helperMsg = "..."
-launch "run_file.ind"      # same as: run_file "run_file.ind"
+# helper.ind defines: fun double x  and  var helperMsg = "..."
+launch "helper.ind"
 var d = double 21          # → 42  (function from the other file)
 say helperMsg              # var from the other file is now in scope
 ```
 
-> `launch "path"` / `run_file "path"` run the file's top-level code in your
-> script's runtime. To launch a file as a **separate process** (isolated, via the
-> `indent` binary), use `os_run "indent path.ind"` — which returns
-> `{ok, status, stdout, stderr}`.
+| Form | Returns | Notes |
+|---|---|---|
+| `launch "path"` | — | **Canonical** keyword form |
+| `run_file("path")` | — | Function alias of `launch` |
+
+> Both forms run the file's top-level code in your script's runtime. To run a
+> file as a **separate process** (isolated, via the `indent` binary), use
+> `os_run "indent path.ind"` — which returns `{ok, status, stdout, stderr}`.
 
 ---
 
