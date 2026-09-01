@@ -18,8 +18,16 @@
   ```
 - **Type checks** — `is_list`, `is_dict`, `is_string`, `is_number`, `is_int`,
   `is_float`, `is_bool`, `is_group`.
-- **`launch` is canonical** for running another Indent file; `run_file` is a
-  deprecated alias.
+- **`launch` is canonical** for running another Indent file in the current
+  runtime — its functions and module-level vars become available:
+  ```indent
+  # helper.ind defines: fun double x  and  var helperMsg = "..."
+  launch "helper.ind"
+  var d = double 21          # → 42
+  say helperMsg              # var from the other file is now in scope
+  ```
+  `run_file "helper.ind"` is a deprecated alias. To run a file as a separate
+  process, use `os_run "indent helper.ind"`.
 
 ---
 

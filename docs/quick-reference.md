@@ -201,6 +201,14 @@ get Pow from math           # Single function
 get RandInt from random as R # With alias
 ```
 
+## Running other files (v1.6.2)
+```indent
+launch "helper.ind"          # Canonical: run another .ind file in this runtime.
+                             # Its functions + module-level vars become available.
+run_file "helper.ind"        # Deprecated alias of launch.
+```
+> Use `os_run "indent file.ind"` to run a file as a **separate process**.
+
 ## File Handling
 ```indent
 open "data.txt" for read as f:
