@@ -1992,6 +1992,17 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return parallel_builtin(&fn_name, &positional[1], ctx);
     }
 
+    // Handle run_file builtin — run another Indent file in this runtime.
+    // Module-level vars/functions it defines become available here (include-like).
+    if callee == "run_file" {
+        if positional.len() != 1 {
+            return Err("run_file expects exactly 1 argument (path)".to_string());
+        }
+        let path = PathBuf::from(positional[0].to_string());
+        ctx.rt.run_file(&path).map_err(|e| format!("run_file: {e}"))?;
+        return Ok(Value::Empty);
+    }
+
     // User-defined and imported functions take precedence over builtins
     // (Python-style shadowing), so std library functions like `Upper` or
     // `Append` are not hidden by case-insensitive builtin lookup.
@@ -2463,6 +2474,16 @@ fn invoke_callable_expr(
         return parallel_builtin(&fn_name, &positional[1], ctx);
     }
 
+    // Handle run_file builtin — run another Indent file in this runtime.
+    if callee == "run_file" {
+        if positional.len() != 1 {
+            return Err("run_file expects exactly 1 argument (path)".to_string());
+        }
+        let path = PathBuf::from(positional[0].to_string());
+        ctx.rt.run_file(&path).map_err(|e| format!("run_file: {e}"))?;
+        return Ok(Value::Empty);
+    }
+
     // User-defined and imported functions take precedence over builtins
     // (Python-style shadowing) — must match exec_call_inner so expression-level
     // calls to module functions (e.g. `Count(items)` inside a module) are not
@@ -2566,7 +2587,7 @@ const INDENT_BUILTINS: &[&str] = &[
     "python_exec", "python_run_file", "random_choice", "random_float", "random_int",
     "random_seed", "random_shuffle", "range", "regex_findall", "regex_match",
     "regex_replace", "regex_search", "regex_split", "remove", "repeat_str",
-    "replace", "reverse", "rstrip", "say", "set", "set_add", "set_contains",
+    "replace", "reverse", "rstrip", "run_file", "say", "set", "set_add", "set_contains",
     "set_difference", "set_intersection", "set_remove", "set_union", "sformat",
     "sleep", "slice", "sort", "spawn", "split", "sqlite_exec", "sqlite_query",
     "sqlite_query_one", "starts_with", "str", "str_center", "string", "str_ljust",

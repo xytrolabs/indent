@@ -1,0 +1,5 @@
+#! run_file helper — defines a function and a module-level var
+fun double x
+    give x * 2
+
+var helperMsg = "loaded from helper"

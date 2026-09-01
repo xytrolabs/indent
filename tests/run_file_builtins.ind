@@ -1,0 +1,28 @@
+#! run_file: launch another Indent file in the current runtime
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+#! run the helper — its function + module-level var become available
+run_file "run_file_helper.ind"
+
+#! the helper's function is now callable
+var d = double 21
+say "double(21) = " + string(d)
+assert_eq(d, 42)
+
+#! the helper's module-level var is now available
+say "helperMsg = " + helperMsg
+assert_eq(helperMsg, "loaded from helper")
+
+#! run_file is discoverable via builtins()
+var b = builtins()
+var found = 0
+repeat item in b
+    if item == "run_file"
+        found is 1
+if found
+    say "run_file in builtins(): YES"
+
+say "run_file: ALL PASS"
