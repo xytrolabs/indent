@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v1.6.1)
+# Indent Built-in Functions — API Reference (v1.6.2)
 
-> Complete reference for every built-in function available in Indent 1.6.1.
+> Complete reference for every built-in function available in Indent 1.6.2.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v1.6.2**: `builtins()` returns an organized dict (category → names); type-check helpers `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`
 > **🆕 v1.6.1**: `colored(text, color)` for colored terminal output, `builtins()`, `get <builtin>`
 > **🆕 v1.6**: async I/O (`http_get_async` & co), set ops (`set_union`/`set_intersection`/`set_difference`), YAML (`yaml_loads`/`yaml_dumps`), path helpers (`path_ext`/`path_stem`/`path_abs`/`path_expand`/`path_norm`), string methods (`str_zfill` & co)
 > **🆕 v1.5**: async tasks (`spawn`/`task_wait`/`parallel`), SQLite, CSV, `walk`, `os_run`, TOML, gzip/zip, typed errors, `log`, `counter`
@@ -18,12 +19,19 @@
 
 ## How to get a builtin
 
-**List every builtin** with `builtins()` (like Python's `dir(__builtins__)`):
+**Browse every builtin** with `builtins()`, which returns an **organized dict**
+grouped by category (like Python's `dir(__builtins__)`, but tidier):
 
 ```indent
-var names = builtins()      # → ["abs", "add_int", "len", ..., "zip_list"]
-say len names               # → 236
+var b = builtins()          # → {string: [...], math: [...], os/file: [...], ...}
+var cats = keys b           # → [async, crypto, data, dict, ...]
+var math = b["math"]        # → ["abs", "math_abs", "math_pow", ...]
+var osf  = b["os/file"]     # → ["os_exists", "file_read_text", "walk", ...]
 ```
+
+> Categories: `string`, `list`, `dict`, `group`, `math`, `data`, `text`, `path`,
+> `os/file`, `http/net`, `time/random`, `crypto`, `async`, `errors`, `result`,
+> `types`, `io`, `system`, `interop`, `misc`.
 
 **Bind a builtin as a value** with `get <builtin>`, so you can pass it around or
 call it through a variable (like `import`-ing a module function, but for the
@@ -43,6 +51,30 @@ var shout = upper "hi"     # → "HI"
 > `get <builtin>` is equivalent to `get <name> from module` for module functions,
 > but pulls from the builtin table. Builtins passed by value follow the same
 > rules as any function value.
+
+---
+
+## Type Checks (🆕 v1.6.2)
+
+Quick boolean tests for a value's type:
+
+| Function | Returns | Description |
+|---|---|---|
+| `is_list(v)` | boolean | True if `v` is a list |
+| `is_dict(v)` | boolean | True if `v` is a dict |
+| `is_string(v)` | boolean | True if `v` is a string |
+| `is_number(v)` | boolean | True if `v` is an int or float |
+| `is_int(v)` | boolean | True if `v` is an int |
+| `is_float(v)` | boolean | True if `v` is a float |
+| `is_bool(v)` | boolean | True if `v` is a boolean |
+| `is_group(v)` | boolean | True if `v` is a group/set |
+
+```indent
+is_list([1, 2])   # → TRUE
+is_dict({"a": 1}) # → TRUE
+is_number(42)     # → TRUE
+is_string("hi")   # → TRUE
+```
 
 ---
 
@@ -70,6 +102,22 @@ say colored "Warning!" accent
 ```
 
 `colored` returns a string, so you can embed it in larger output with `+`.
+
+### `debug` package (🆕 v1.6.2)
+
+For quick colored logging, the `debug` std module wraps `colored`:
+
+```indent
+get warn from debug
+get error from debug
+get success from debug
+get info from debug
+
+warn "this is a warning"     # yellow
+error "this is an error"     # red
+success "this is a success"  # green
+info "this is info"          # cyan
+```
 
 ---
 
@@ -328,7 +376,7 @@ say helperMsg              # var from the other file is now in scope
 | Form | Returns | Notes |
 |---|---|---|
 | `launch "path"` | — | **Canonical** keyword form |
-| `run_file("path")` | — | Function alias of `launch` |
+| `run_file("path")` | — | **Deprecated** — alias of `launch`; kept for compatibility |
 
 > Both forms run the file's top-level code in your script's runtime. To run a
 > file as a **separate process** (isolated, via the `indent` binary), use

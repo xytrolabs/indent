@@ -1,5 +1,31 @@
 # Indent Changelog
 
+## 1.6.2 — 2026-08-31 (Organized builtins + type checks + debug pkg + errors)
+
+### 🗂 `builtins()` returns an organized dict
+- `builtins()` now returns `{category: [names]}` grouped by category instead of a
+  flat list — browse string, math, os/file, async, … separately.
+
+### ✅ Type-check helpers
+- `is_list`, `is_dict`, `is_string`, `is_number`, `is_int`, `is_float`, `is_bool`,
+  `is_group` — quick boolean tests for a value's type.
+- Test: `tests/type_checks_builtins.ind`.
+
+### 🐞 `debug` package
+- New std module `debug` with colored logging: `warn(msg)` (yellow), `error(msg)`
+  (red), `success(msg)` (green), `info(msg)` (cyan) — built on the `colored`
+  builtin. `get warn from debug`.
+- Test: `tests/debug_builtins.ind`.
+
+### ✨ Nicer error output
+- Errors now render once with a colored header showing the human-readable type
+  (e.g. `type_error`), the message, and a `help:` hint, framed by rules. The
+  double-render (runtime nesting) is fixed by formatting once at the top level.
+
+### 🏷 `launch` is canonical; `run_file` deprecated
+- `launch "path"` is the canonical way to run another Indent file in the current
+  runtime; `run_file(path)` is kept as a deprecated alias.
+
 ## 1.6.1 — 2026-08-31 (Colored output + builtin discovery)
 
 ### 🎨 Colored text output

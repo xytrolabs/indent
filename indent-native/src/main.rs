@@ -810,16 +810,14 @@ impl Runtime {
     }
 
     fn run_source(&mut self, source: &str) -> Result<(), String> {
-        let lines = preprocess(source)
-            .map_err(|e| format_error_with_source(source, &e))?;
+        // Errors are propagated raw here and formatted ONCE by the top-level
+        // handler (format_error_with_source), which re-reads the source file
+        // and locates the line. Formatting earlier would double-render.
+        let lines = preprocess(source)?;
         let mut parser = Parser::new(lines);
-        let program = parser
-            .parse()
-            .map_err(|e| format_error_with_source(source, &e))?;
+        let program = parser.parse()?;
         let mut ctx = ExecContext::new(self);
-        exec_block(&program, &mut ctx)
-            .map(|_| ())
-            .map_err(|e| format_error_with_source(source, &e))
+        exec_block(&program, &mut ctx).map(|_| ())
     }
 }
 
@@ -871,7 +869,27 @@ fn format_error_with_source(source: &str, err: &str) -> String {
         "E000" // generic error
     };
 
-    let mut out = format!("\x1b[1;31merror[{code}]\x1b[0m: {err}\n");
+    let name = error_code_to_name(code);
+    // Display-only: collapse repeated "error[EXXX]: " prefixes (the runtime
+    // sometimes nests them). The raw `err` is left untouched so `error_type` /
+    // `error_message` still parse it correctly.
+    let mut err_display = err.trim().to_string();
+    loop {
+        let t = err_display.trim_start();
+        if let Some(rest) = t.strip_prefix("error[") {
+            if let Some(end) = rest.find(']') {
+                let after = rest[end + 1..].trim_start();
+                err_display = after.trim_start_matches(": ").trim().to_string();
+                continue;
+            }
+        }
+        break;
+    }
+
+    let mut out = format!(
+        "\x1b[90m── \x1b[0m\x1b[1;31m{}\x1b[0m\x1b[90m ──────────────────────\x1b[0m\n  {}\n",
+        name, err_display
+    );
 
     if let Some(ln) = line_no {
         if ln > 0 && ln <= lines.len() {
@@ -880,18 +898,19 @@ fn format_error_with_source(source: &str, err: &str) -> String {
             let indent = source_line.len() - trimmed.len();
 
             // Show the source line
-            out.push_str(&format!("  \x1b[1m{}\x1b[0m {}\n", arrow_style_right(ln, lines.len()), lines[ln - 1]));
+            out.push_str(&format!("  \x1b[1;34m{}\x1b[0m {} \x1b[2m{}\x1b[0m\n", arrow_style_right(ln, lines.len()), lines[ln - 1], ""));
 
-            // Underline with carets — point to the approximate error position
-            let caret_pos = if trimmed.is_empty() { 0 } else { trimmed.len() / 2 };
-            let spaces = " ".repeat(indent + caret_pos + 2); // +2 for "→ "
-            out.push_str(&format!("  {} \x1b[1;31m{}^\x1b[0m\n", arrow_style_empty(), spaces));
+            // Underline with carets — point at the approximate error position
+            // (first non-space token, or the middle for short lines).
+            let caret_pos = if trimmed.is_empty() { 0 } else { (trimmed.len().min(2)).max(trimmed.len() / 2) };
+            let spaces = " ".repeat(indent + caret_pos + 2); // +2 for the arrow column
+            out.push_str(&format!("  \x1b[1;34m{}\x1b[0m \x1b[1;31m{}^\x1b[0m\n", arrow_style_empty(), spaces));
 
             // Show surrounding context
             let start = ln.saturating_sub(2).max(1);
             let end = (ln + 1).min(lines.len());
             if start < ln {
-                out.push_str(&format!("  {} \x1b[90m(see lines {}-{})\x1b[0m\n", arrow_style_empty(), start, end));
+                out.push_str(&format!("  \x1b[1;34m{}\x1b[0m \x1b[90m(see lines {}-{})\x1b[0m\n", arrow_style_empty(), start, end));
             }
         }
     }
@@ -940,6 +959,8 @@ fn format_error_with_source(source: &str, err: &str) -> String {
     if err.contains("connection") || err.contains("refused") || err.contains("timeout") {
         out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check the URL and your network connection. The server may be down or the address may be wrong.\n", arrow_style_empty()));
     }
+
+    out.push_str("\x1b[90m────────────────────────────────────\x1b[0m\n");
 
     out
 }
@@ -2610,6 +2631,7 @@ const INDENT_BUILTINS: &[&str] = &[
     "task_result", "task_wait", "task_wait_all", "task_wait_timeout", "time_format",
     "time_now", "time_parse", "time_perf_counter", "time_sleep", "time_utc",
     "title", "toml_dumps", "toml_loads", "trim", "true", "try", "type_of", "typeof",
+    "is_list", "is_dict", "is_string", "is_number", "is_int", "is_float", "is_bool", "is_group",
     "unwrap", "upper", "uuid", "values", "walk", "ws_close", "ws_connect",
     "ws_recv_text", "ws_recv_text_timeout", "ws_send_text", "yaml_dumps",
     "yaml_loads", "zip", "zip_extract", "zip_list",
@@ -2623,6 +2645,52 @@ fn invoke_builtin_callable(name: &str, positional: &[Value], named: &HashMap<Str
     invoke_builtin(name, positional).unwrap_or_else(|| Err(format!("Unknown builtin '{name}'")))
 }
 
+/// Category for a builtin name, used to organize the dict returned by
+/// `builtins()`. Falls back to "misc".
+fn builtin_category(name: &str) -> &'static str {
+    if name.starts_with("math_") { return "math"; }
+    if name.starts_with("str_") { return "string"; }
+    if name.starts_with("path_") { return "path"; }
+    if name.starts_with("os_") || name.starts_with("file_") { return "os/file"; }
+    if name.starts_with("http_") || name.starts_with("ws_") { return "http/net"; }
+    if name.starts_with("json_") || name.starts_with("toml_") || name.starts_with("yaml_")
+        || name.starts_with("sqlite_") || name.starts_with("csv_") { return "data"; }
+    if name.starts_with("regex_") { return "text"; }
+    if name.starts_with("time_") || name.starts_with("random_") { return "time/random"; }
+    if name.starts_with("sys_") { return "system"; }
+    if name.starts_with("task_") || name.starts_with("future_") || name.starts_with("async_")
+        || matches!(name, "spawn" | "parallel" | "future" | "gather" | "sleep" | "coop" | "wait" | "await") {
+        return "async";
+    }
+    if name.starts_with("error_") { return "errors"; }
+    if name.starts_with("python_") { return "interop"; }
+    if name.starts_with("base64_") || name.starts_with("hash_") || name == "uuid" { return "crypto"; }
+    if name.starts_with("set_") || name == "set" || name == "group" { return "group"; }
+    if name.starts_with("dict_") || matches!(name, "keys" | "values" | "items" | "has_key") { return "dict"; }
+    if matches!(name, "ok" | "err" | "is_ok" | "is_err" | "unwrap" | "try") { return "result"; }
+    if matches!(name, "is_list" | "is_dict" | "is_string" | "is_number" | "is_int"
+        | "is_float" | "is_bool" | "is_group" | "type_of" | "typeof" | "type_name") {
+        return "types";
+    }
+
+    match name {
+        "upper" | "lower" | "trim" | "lstrip" | "rstrip" | "capitalize" | "title"
+        | "swapcase" | "replace" | "split" | "join" | "starts_with" | "ends_with"
+        | "contains" | "find" | "slice" | "len" | "reverse" | "format" | "sformat"
+        | "repeat_str" | "pad_left" | "pad_right" | "string" => "string",
+        "append" | "extend" | "insert" | "pop" | "remove" | "sort" | "enumerate"
+        | "zip" | "range" | "count" | "index" | "sum" | "min" | "max" | "any" | "all"
+        | "filter" | "map" | "copy" | "clear" => "list",
+        "abs" | "int" | "float" | "int_or" | "float_or" | "between_int" | "is_even"
+        | "is_odd" | "inc" | "dec" | "add_int" | "sub_int" | "mul_int" | "div_int"
+        | "mod_int" | "bool" | "boolean" | "clamp" | "counter" => "math",
+        "say" | "print" | "ask" | "log" | "colored" | "colorize" => "io",
+        "assert" | "assert_eq" | "builtins" | "is_missing" | "default" | "coalesce"
+        | "process_exit" | "run_file" | "launch" => "misc",
+        _ => "misc",
+    }
+}
+
 fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, String>> {
     let builtin = callee.to_ascii_lowercase();
     match builtin.as_str() {
@@ -2630,9 +2698,19 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             if !positional.is_empty() {
                 return Some(Err("builtins takes no arguments".to_string()));
             }
-            Some(Ok(Value::List(
-                INDENT_BUILTINS.iter().map(|n| Value::Str(n.to_string())).collect(),
-            )))
+            // Return an organized dict: category -> [builtin names].
+            let mut groups: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+            for n in INDENT_BUILTINS {
+                groups
+                    .entry(builtin_category(n).to_string())
+                    .or_default()
+                    .push(Value::Str(n.to_string()));
+            }
+            let mut out = HashMap::new();
+            for (cat, names) in groups {
+                out.insert(cat, Value::List(names));
+            }
+            Some(Ok(Value::Dict(out)))
         }
         "say" | "print" => {
             if positional.is_empty() {
@@ -4422,6 +4500,24 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Empty => "empty",
             };
             Some(Ok(Value::Str(ty.to_string())))
+        }
+        "is_list" | "is_dict" | "is_string" | "is_number" | "is_int" | "is_float"
+        | "is_bool" | "is_group" => {
+            if positional.len() != 1 {
+                return Some(Err(format!("{} expects exactly 1 argument", callee)));
+            }
+            let matches = match callee {
+                "is_list" => matches!(positional[0], Value::List(_)),
+                "is_dict" => matches!(positional[0], Value::Dict(_)),
+                "is_string" => matches!(positional[0], Value::Str(_)),
+                "is_int" => matches!(positional[0], Value::Int(_)),
+                "is_float" => matches!(positional[0], Value::Float(_)),
+                "is_bool" => matches!(positional[0], Value::Bool(_)),
+                "is_group" => matches!(positional[0], Value::Set(_)),
+                "is_number" => matches!(positional[0], Value::Int(_) | Value::Float(_)),
+                _ => false,
+            };
+            Some(Ok(Value::Bool(matches)))
         }
         "http_get" => {
             if positional.is_empty() || positional.len() > 2 {

@@ -1,11 +1,25 @@
-# Your Journey with Indent 1.6.1
+# Your Journey with Indent 1.6.2
 
-> Indent 1.6.1 adds **colored terminal output** (`colored`), builtin discovery
-> (`builtins()`) and `get <builtin>`; 1.6 adds async I/O, set operations, YAML,
-> path helpers, and more Python `str` methods — all with the same simple,
-> lovable syntax.
+> Indent 1.6.2 adds an **organized `builtins()`** (grouped by category) and
+> **type-check helpers**; 1.6.1 added colored output and builtin discovery;
+> 1.6 added async I/O, set operations, YAML, path helpers, and more Python `str`
+> methods — all with the same simple, lovable syntax.
 
 > Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
+
+---
+
+## What's New in 1.6.2
+
+- **Organized `builtins()`** — now returns a dict grouped by category:
+  ```indent
+  var b = builtins()          # {string: [...], math: [...], os/file: [...], ...}
+  var math = b["math"]
+  ```
+- **Type checks** — `is_list`, `is_dict`, `is_string`, `is_number`, `is_int`,
+  `is_float`, `is_bool`, `is_group`.
+- **`launch` is canonical** for running another Indent file; `run_file` is a
+  deprecated alias.
 
 ---
 

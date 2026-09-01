@@ -1,16 +1,47 @@
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+#! builtins() now returns an organized dict: category -> [names]
 var b = builtins()
-var n = len b
+var cats = keys b
+say "categories: " + string(cats)
+var ncats = len cats
+assert(ncats >= 5)
+
+#! helper: gather all names across every category into a flat list
+var all = []
+repeat cat in cats
+    var names = dict_get b cat []
+    all is extend all names
+
+var n = len all
 say "builtin count: " + string(n)
+assert(n > 200)
+
+#! verify a few builtins exist
 var hasSqlite = 0
-repeat item in b
+var hasSpawn = 0
+var hasRunFile = 0
+repeat item in all
     if item == "sqlite_query"
         hasSqlite is 1
-if hasSqlite
-    say "sqlite_query present: YES"
-var hasSpawn = 0
-repeat item in b
     if item == "spawn"
         hasSpawn is 1
-if hasSpawn
-    say "spawn present: YES"
+    if item == "run_file"
+        hasRunFile is 1
+assert(hasSqlite)
+assert(hasSpawn)
+assert(hasRunFile)
+say "sqlite_query + spawn + run_file present: YES"
+
+#! the "data" category should contain sqlite_query
+var data = dict_get b "data" []
+var hasSqliteInData = 0
+repeat item in data
+    if item == "sqlite_query"
+        hasSqliteInData is 1
+assert(hasSqliteInData)
+
 say "all builtins ok"

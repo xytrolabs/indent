@@ -1,6 +1,7 @@
-# Indent Quick Reference (v1.6.1)
+# Indent Quick Reference (v1.6.2)
 
 > Complete syntax reference for the Indent programming language.
+> **New in 1.6.2**: `builtins()` grouped by category; type checks `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`; `launch` canonical.
 > **New in 1.6.1**: `colored(text, color)` terminal colors, `builtins()`, `get <builtin>`.
 > **New in 1.6**: async I/O (`http_*_async`), set ops (`set_union`/`set_intersection`/`set_difference`), YAML, path helpers, `str_*` methods.
 > **New in 1.5**: async tasks (`spawn`/`parallel`), `async fun`/`wait`/`gather`/`coop`, SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.

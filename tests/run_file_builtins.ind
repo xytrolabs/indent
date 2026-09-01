@@ -19,9 +19,11 @@ assert_eq(helperMsg, "loaded from helper")
 #! run_file is discoverable via builtins()
 var b = builtins()
 var found = 0
-repeat item in b
-    if item == "run_file"
-        found is 1
+repeat cat in keys b
+    var names = dict_get b cat []
+    repeat item in names
+        if item == "run_file"
+            found is 1
 if found
     say "run_file in builtins(): YES"
 

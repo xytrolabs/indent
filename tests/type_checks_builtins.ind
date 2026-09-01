@@ -1,0 +1,47 @@
+#! type-check helper builtins regression test
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+var li = [1, 2, 3]
+var di = {"a": 1}
+var st = "hello"
+var num = 42
+var fl = 3.5
+var bo = TRUE
+var gr = group [1, 2]
+
+var t1 = is_list li
+assert(t1)
+var t2 = is_list di
+assert(not t2)
+var t3 = is_dict di
+assert(t3)
+var t4 = is_string st
+assert(t4)
+var t5 = is_number num
+assert(t5)
+var t6 = is_number fl
+assert(t6)
+var t7 = is_int num
+assert(t7)
+var t8 = is_int fl
+assert(not t8)
+var t9 = is_float fl
+assert(t9)
+var t10 = is_bool bo
+assert(t10)
+var t11 = is_group gr
+assert(t11)
+
+say "is_list: OK"
+say "is_dict: OK"
+say "is_string: OK"
+say "is_number: OK"
+say "is_int: OK"
+say "is_float: OK"
+say "is_bool: OK"
+say "is_group: OK"
+
+say "type checks: ALL PASS"

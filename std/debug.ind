@@ -1,0 +1,19 @@
+#! debug.ind — friendly, colored logging helpers
+#! Wraps the native `colored(text, color)` builtin.
+
+#! warn: yellow
+fun warn message
+    say colored message "#facc15"
+
+#! error: red
+fun error message
+    say colored message "#ff4d4d"
+
+#! success: green
+fun success message
+    say colored message "#32c671"
+
+#! info: cyan
+fun info message
+    say colored message "#06b6d4"
+

@@ -1,0 +1,12 @@
+#! debug package: colored logging helpers
+get warn from debug
+get error from debug
+get success from debug
+get info from debug
+
+warn "this is a warning"
+error "this is an error"
+success "this is a success"
+info "this is info"
+
+say "debug: OK"
