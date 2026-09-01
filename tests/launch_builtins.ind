@@ -1,0 +1,17 @@
+#! launch keyword: run another Indent file in this runtime
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+#! launch runs the helper file — its function + var become available
+launch "run_file_helper.ind"
+
+var d = double 21
+say "double(21) = " + string(d)
+assert_eq(d, 42)
+
+say "helperMsg = " + helperMsg
+assert_eq(helperMsg, "loaded from helper")
+
+say "launch: ALL PASS"

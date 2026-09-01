@@ -262,6 +262,11 @@ enum Stmt {
         line: usize,
         expr: String,
     },
+    /// Launch: `launch <path>` — run another Indent file in this runtime.
+    Launch {
+        line: usize,
+        expr: String,
+    },
     /// Async context: `async with <future> as name:` — awaits, binds, runs body
     AsyncWith {
         line: usize,
@@ -1353,6 +1358,13 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             }
             Ok(Control::None)
         }
+        Stmt::Launch { expr, line } => {
+            // launch <path> — run another Indent file in this runtime.
+            let path_val = eval_expr(expr, ctx)?;
+            let path = PathBuf::from(path_val.to_string());
+            ctx.rt.run_file(&path).map_err(|e| format!("Line {line}: launch: {e}"))?;
+            Ok(Control::None)
+        }
         Stmt::AsyncWith { expr, binding, body, .. } => {
             // Await the future, bind its result, run the body.
             let future_val = eval_expr(expr, ctx)?;
@@ -1455,6 +1467,7 @@ fn stmt_line(stmt: &Stmt) -> usize {
         | Stmt::Loop { line, .. }
         | Stmt::Await { line, .. }
         | Stmt::Wait { line, .. }
+        | Stmt::Launch { line, .. }
         | Stmt::AsyncWith { line, .. } => *line,
     }
 }
@@ -10107,6 +10120,15 @@ impl Parser {
             });
         }
 
+        // Launch: launch <path>  — run another Indent file in this runtime
+        if text.starts_with("launch ") || text.starts_with("Launch ") {
+            let expr = text[7..].trim().to_string();
+            return Ok(Stmt::Launch {
+                line: line.line_no,
+                expr,
+            });
+        }
+
         // Async: async with <future> as name:
         if text.starts_with("async with ") || text.starts_with("Async with ") {
             let rest = text[11..].trim().to_string(); // strip "async with "
@@ -11955,6 +11977,7 @@ fn touch_lines(stmt: &Stmt) {
         | Stmt::Loop { line, .. }
         | Stmt::Await { line, .. }
         | Stmt::Wait { line, .. }
+        | Stmt::Launch { line, .. }
         | Stmt::AsyncWith { line, .. } => {
             let _ = *line;
         }

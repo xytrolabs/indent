@@ -313,16 +313,20 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 | `walk(path)` | list | Recursively list **every** file under `path` (sorted depth-first; like `os.walk` / `glob("**/*")`) |
 | `run_file(path)` | — | Run another Indent file **in the current runtime** — its functions and module-level vars become available here (include-like) |
 
+There is also a **`launch` keyword** — `launch "path.ind"` is the statement form
+of `run_file`:
+
 ```indent
 # run_file.ind defines: fun double x  and  var helperMsg = "..."
-run_file "run_file.ind"
-var d = double 21        # → 42  (function from the other file)
-say helperMsg            # var from the other file is now in scope
+launch "run_file.ind"      # same as: run_file "run_file.ind"
+var d = double 21          # → 42  (function from the other file)
+say helperMsg              # var from the other file is now in scope
 ```
 
-> `run_file` runs the file's top-level code in your script's runtime. To launch a
-> file as a **separate process** (isolated, via the `indent` binary), use
-> `os_run "indent path.ind"` — which returns `{ok, status, stdout, stderr}`.
+> `launch "path"` / `run_file "path"` run the file's top-level code in your
+> script's runtime. To launch a file as a **separate process** (isolated, via the
+> `indent` binary), use `os_run "indent path.ind"` — which returns
+> `{ok, status, stdout, stderr}`.
 
 ---
 
