@@ -245,6 +245,7 @@ enum Stmt {
         parent: Option<String>,
         fields: Vec<ClassField>,
         methods: Vec<Stmt>,
+        is_dataclass: bool,
     },
     Flag { line: usize, expr: String },
     /// Async event loop: `loop { ... }` — runs until all futures complete
@@ -356,6 +357,7 @@ struct ClassDef {
     parent: Option<String>,
     fields: Vec<ClassField>,
     methods: HashMap<String, FunctionDef>,
+    is_dataclass: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -387,6 +389,7 @@ enum Value {
         class_name: String,
         fields: HashMap<String, Value>,
         methods: HashMap<String, FunctionDef>,
+        is_dataclass: bool,
     },
     Func(String),
     Module(Arc<ModuleInstance>),
@@ -761,6 +764,7 @@ fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &HashMap<Str
         class_name: class_def.name.clone(),
         fields,
         methods,
+        is_dataclass: class_def.is_dataclass,
     }
 }
 
@@ -1187,7 +1191,11 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
 
     match stmt {
         Stmt::Say { expr, line } => {
-            let v = eval_expr(expr, ctx).map_err(|e| format!("Line {}: {}", line, e))?;
+            let mut v = eval_expr(expr, ctx).map_err(|e| format!("Line {}: {}", line, e))?;
+            // Object `to_string` special method (natural name) — use it when printing.
+            if let Some(r) = call_object_method_value(&v, "to_string", &[], ctx) {
+                v = r?;
+            }
             let interpolated = match v {
                 Value::Str(ref s) => Value::Str(interpolate_string(s, ctx)),
                 _ => v,
@@ -1223,6 +1231,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             parent,
             fields,
             methods,
+            is_dataclass,
             ..
         } => {
             let mut method_map = HashMap::new();
@@ -1252,6 +1261,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                     parent: parent.clone(),
                     fields: fields.clone(),
                     methods: method_map,
+                    is_dataclass: *is_dataclass,
                 },
             );
             Ok(Control::None)
@@ -1265,7 +1275,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             let rhs = eval_value_source(value, ctx)?;
             let lhs = ctx.get_var(name)
                 .ok_or_else(|| format!("Line {}: variable '{}' is not defined", line, name))?;
-            let result = eval_binary(&op[..op.len()-1], lhs, rhs)
+            let result = eval_binary(&op[..op.len()-1], lhs, rhs, ctx)
                 .map_err(|e| format!("Line {}: {}", line, e))?;
             assign_var_chain(name, result, ctx);
             Ok(Control::None)
@@ -2080,6 +2090,13 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return Ok(instantiate_class(&class_def, &positional, &ctx.rt.classes));
     }
 
+    // Object `len` special method (natural name).
+    if callee == "len" && positional.len() == 1 {
+        if let Some(r) = call_object_method_value(&positional[0], "len", &[], ctx) {
+            return r;
+        }
+    }
+
     // Handle call_func builtin — dynamic function invocation by name
     if callee == "call_func" {
         if positional.is_empty() {
@@ -2266,14 +2283,17 @@ fn invoke_object_method(
     method_def: &FunctionDef,
     fields: &HashMap<String, Value>,
     args: &[Value],
-    _ctx: &ExecContext<'_>,
+    ctx: &ExecContext<'_>,
 ) -> Result<Value, String> {
     // We need a mutable context for exec_block. Create a temporary runtime wrapper.
     // The method body executes with fields as local variables.
-    // For now, we use a simplified approach — create a standalone scope.
-    
+    // Inherit classes/functions from the caller so methods can instantiate
+    // classes and call other functions.
     let mut temp_rt = Runtime::new(PathBuf::from("."));
     temp_rt.vars = fields.clone();
+    temp_rt.classes = ctx.rt.classes.clone();
+    temp_rt.funcs = ctx.rt.funcs.clone();
+    temp_rt.callables = ctx.rt.callables.clone();
     let mut temp_ctx = ExecContext::new(&mut temp_rt);
     temp_ctx.push_frame();
     
@@ -2294,6 +2314,71 @@ fn invoke_object_method(
         Control::None => Ok(Value::Empty),
         _ => Err("STOP/NEXT/RESET cannot be used in a method".to_string()),
     }
+}
+
+/// Call an object's method by its natural-language name, if defined.
+/// Returns `Some(result)` when `receiver` is an Object that defines `method`
+/// (matched case-insensitively), otherwise `None` so callers can fall back to
+/// default behavior. Used for special methods like `to_string`, `equals`, `add`.
+fn call_object_method_value(
+    receiver: &Value,
+    method: &str,
+    args: &[Value],
+    ctx: &ExecContext<'_>,
+) -> Option<Result<Value, String>> {
+    if let Value::Object {
+        fields,
+        methods,
+        class_name,
+        is_dataclass,
+    } = receiver
+    {
+        let lc = method.to_ascii_lowercase();
+        for (name, mdef) in methods {
+            if name.to_ascii_lowercase() == lc {
+                return Some(invoke_object_method(mdef, fields, args, ctx));
+            }
+        }
+        // dataclass auto-generated defaults (when no user method is defined).
+        if *is_dataclass {
+            if lc == "to_string" {
+                let mut names: Vec<&String> = fields.keys().collect();
+                names.sort();
+                let parts: Vec<String> = names
+                    .iter()
+                    .map(|k| format!("{}: {}", k, fields.get(*k).unwrap()))
+                    .collect();
+                return Some(Ok(Value::Str(format!("{}({})", class_name, parts.join(", ")))));
+            }
+            if lc == "equals" {
+                if let Some(other) = args.first() {
+                    if let Value::Object {
+                        class_name: cn2,
+                        fields: f2,
+                        ..
+                    } = other
+                    {
+                        if cn2 != class_name || fields.len() != f2.len() {
+                            return Some(Ok(Value::Bool(false)));
+                        }
+                        let mut eq = true;
+                        for (k, v) in fields {
+                            match f2.get(k) {
+                                Some(v2) if eq_values(v, v2) => {}
+                                _ => {
+                                    eq = false;
+                                    break;
+                                }
+                            }
+                        }
+                        return Some(Ok(Value::Bool(eq)));
+                    }
+                    return Some(Ok(Value::Bool(false)));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn invoke_object_method_call(
@@ -2326,6 +2411,7 @@ fn invoke_object_method_call(
         fields,
         methods,
         class_name,
+        ..
     } = &receiver
     {
         let method_lc = method_name.to_ascii_lowercase();
@@ -2580,6 +2666,13 @@ fn invoke_callable_expr(
     let mut positional = Vec::with_capacity(args.len());
     for arg in args {
         positional.push(eval_ast(arg, ctx)?);
+    }
+
+    // Object `len` special method (natural name).
+    if callee == "len" && positional.len() == 1 {
+        if let Some(r) = call_object_method_value(&positional[0], "len", &[], ctx) {
+            return r;
+        }
     }
 
     if let Some(target) = callee.strip_prefix("py.") {
@@ -9092,6 +9185,10 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
         Expr::Index { target, index } => {
             let target_val = eval_ast(target, ctx)?;
             let index_val = eval_ast(index, ctx)?;
+            // Object `get_item` special method (natural name).
+            if let Some(r) = call_object_method_value(&target_val, "get_item", &[index_val.clone()], ctx) {
+                return r;
+            }
             resolve_index(target_val, index_val)
         }
         Expr::Slice {
@@ -9170,7 +9267,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             }
             let a = eval_ast(lhs, ctx)?;
             let b = eval_ast(rhs, ctx)?;
-            eval_binary(op, a, b)
+            eval_binary(op, a, b, ctx)
         }
         Expr::Comprehension { kind, result_expr, key_expr, item_name, iterable, condition } => {
             let iter = eval_ast(iterable, ctx)?;
@@ -9568,7 +9665,63 @@ fn assign_slice_value(
     }
 }
 
-fn eval_binary(op: &str, a: Value, b: Value) -> Result<Value, String> {
+fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    // Object special-method dispatch using natural-language names. If either
+    // operand is an Object that defines the matching method, call it and use
+    // its result instead of the built-in behavior.
+    match op {
+        "+" => {
+            if let Some(r) = call_object_method_value(&a, "add", &[b.clone()], ctx) {
+                return r;
+            }
+            if let Some(r) = call_object_method_value(&b, "add", &[a.clone()], ctx) {
+                return r;
+            }
+        }
+        "-" => {
+            if let Some(r) = call_object_method_value(&a, "subtract", &[b.clone()], ctx) {
+                return r;
+            }
+        }
+        "*" => {
+            if let Some(r) = call_object_method_value(&a, "multiply", &[b.clone()], ctx) {
+                return r;
+            }
+        }
+        "/" => {
+            if let Some(r) = call_object_method_value(&a, "divide", &[b.clone()], ctx) {
+                return r;
+            }
+        }
+        "==" => {
+            if let Some(r) = call_object_method_value(&a, "equals", &[b.clone()], ctx) {
+                return r.map(|v| Value::Bool(v.to_bool()));
+            }
+            if let Some(r) = call_object_method_value(&b, "equals", &[a.clone()], ctx) {
+                return r.map(|v| Value::Bool(v.to_bool()));
+            }
+        }
+        "!=" => {
+            if let Some(r) = call_object_method_value(&a, "equals", &[b.clone()], ctx) {
+                return r.map(|v| Value::Bool(!v.to_bool()));
+            }
+            if let Some(r) = call_object_method_value(&b, "equals", &[a.clone()], ctx) {
+                return r.map(|v| Value::Bool(!v.to_bool()));
+            }
+        }
+        "in" => {
+            if let Some(r) = call_object_method_value(&b, "contains", &[a.clone()], ctx) {
+                return r.map(|v| Value::Bool(v.to_bool()));
+            }
+        }
+        "not in" => {
+            if let Some(r) = call_object_method_value(&b, "contains", &[a.clone()], ctx) {
+                return r.map(|v| Value::Bool(!v.to_bool()));
+            }
+        }
+        _ => {}
+    }
+
     match op {
         "+" => {
             let a_type = a.type_name();
@@ -11062,8 +11215,12 @@ impl Parser {
             });
         }
 
-        // ---- Indent-2: class Name with fields and methods ----
-        if let Some(rest) = text.strip_prefix("class ") {
+        // ---- Indent-2: class / dataclass Name with fields and methods ----
+        if let Some(rest) = text
+            .strip_prefix("class ")
+            .or_else(|| text.strip_prefix("dataclass "))
+        {
+            let is_dataclass = text.starts_with("dataclass ");
             let rest = rest.trim();
             let (name, parent) = if let Some((n, p)) = rest.split_once(" from ") {
                 (n.trim().to_string(), Some(p.trim().to_string()))
@@ -11135,6 +11292,7 @@ impl Parser {
                 parent,
                 fields,
                 methods,
+                is_dataclass,
             });
         }
 

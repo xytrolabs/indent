@@ -1,0 +1,145 @@
+#! class_special_methods.ind — Indent 2.0 class special methods + dataclass
+#! Natural-conversation names: to_string, equals, add, subtract, multiply,
+#! divide, len, get_item, contains.
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check_eq got expected
+    var ok = got == expected
+    if not ok
+        var msg = "expected '" + expected + "' got '" + got + "'"
+        fail msg
+
+fun check cond
+    if not cond
+        fail "assertion failed"
+
+#! ── a Vector class with natural special methods ───────────────────
+class Vector
+    var x int
+    var y int
+
+    fun to_string
+        var px = string(x)
+        var py = string(y)
+        give "Vector(" + px + ", " + py + ")"
+
+    fun add other
+        var nx = x + other.x
+        var ny = y + other.y
+        give Vector(nx, ny)
+
+    fun subtract other
+        var nx = x - other.x
+        var ny = y - other.y
+        give Vector(nx, ny)
+
+    fun multiply s
+        give Vector(x * s, y * s)
+
+    fun equals other
+        var sx = x == other.x
+        if not sx
+            give false
+        var sy = y == other.y
+        give sy
+
+    fun len
+        give 2
+
+    fun get_item i
+        var isZero = i == 0
+        if isZero
+            give x
+        give y
+
+    fun contains name
+        var isX = name == "x"
+        if isX
+            give true
+        var isY = name == "y"
+        give isY
+
+var v1 = Vector(3, 4)
+var v2 = Vector(1, 2)
+
+#! to_string via say
+say v1
+say v1 + v2
+
+#! equals
+var eq1 = v1 == Vector(3, 4)
+check (eq1)
+var eq2 = v1 == v2
+var notEq2 = not eq2
+check (notEq2)
+var ne = v1 != v2
+check (ne)
+
+#! add / subtract / multiply
+var sum = v1 + v2
+var sumStr = string(sum)
+check_eq sumStr "Vector(x: 4, y: 6)"
+
+var diff = v1 - v2
+var diffStr = string(diff)
+check_eq diffStr "Vector(x: 2, y: 2)"
+
+var scaled = v1 * 2
+var scaledStr = string(scaled)
+check_eq scaledStr "Vector(x: 6, y: 8)"
+
+#! len
+var n = len v1
+check_eq (string(n)) "2"
+
+#! get_item
+var ix = v1[0]
+check_eq (string(ix)) "3"
+var iy = v1[1]
+check_eq (string(iy)) "4"
+
+#! contains (in)
+var inX = false
+if "x" in v1
+    var inX = true
+check (inX)
+var inZ = false
+if "z" in v1
+    var inZ = true
+var notInZ = not inZ
+check (notInZ)
+
+#! ── dataclass (auto to_string + equals) ───────────────────────────
+dataclass Point
+    var px int
+    var py int
+
+var p1 = Point(1, 2)
+var p2 = Point(1, 2)
+var p3 = Point(3, 4)
+
+say p1
+var dEq = p1 == p2
+check (dEq)
+var dNeq = p1 == p3
+var notDNeq = not dNeq
+check (notDNeq)
+var dNeq2 = p1 != p3
+check (dNeq2)
+
+#! dataclass can still have its own methods
+dataclass Money
+    var amount int
+    var currency string
+    fun double
+        give Money(amount * 2, currency)
+
+var m1 = Money(5, "usd")
+var m2 = m1.double()
+var m2Str = string(m2)
+check_eq m2Str "Money(amount: 10, currency: usd)"
+
+say "class special methods: ALL PASS"

@@ -46,6 +46,15 @@ Added higher-order list builtins (all additive, no new syntax):
 - `first(list, n)` / `last(list, n)`.
 - Test: `tests/final_builtins.ind`.
 
+### 🧩 Class special methods — natural names
+- Plain-English special methods instead of Python dunders: `to_string` (`say`),
+  `add` (`+`), `subtract` (`-`), `multiply` (`*`), `divide` (`/`),
+  `equals` (`==`/`!=`), `len` (`len()`), `get_item` (`obj[i]`),
+  `contains` (`x in obj`).
+- `dataclass Name` — like `class` but auto-generates `to_string` + `equals`;
+  user methods still allowed.
+- Test: `tests/class_special_methods.ind`.
+
 
 ### 🗂 `builtins()` returns an organized dict
 - `builtins()` now returns `{category: [names]}` grouped by category instead of a

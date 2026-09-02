@@ -1,7 +1,7 @@
 # Indent Quick Reference (v2.0)
 
 > Complete syntax reference for the Indent programming language.
-> **New in 2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`; std-lib breadth — `chain`/`flatten`/`chunk`/`product`/`permutations`/`combinations`/`accumulate`/`cycle`/`repeat_item`/`takewhile`/`dropwhile`/`unique`/`partition`/`group_by`/`max_key`/`min_key`/`reduce`, math extras, random extras.
+> **New in 2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`; std-lib breadth — `chain`/`flatten`/`chunk`/`product`/`permutations`/`combinations`/`accumulate`/`cycle`/`repeat_item`/`takewhile`/`dropwhile`/`unique`/`partition`/`group_by`/`max_key`/`min_key`/`reduce`, math extras, random extras; **class special methods** (natural names: `to_string`, `add`, `equals`, `len`, `get_item`, `contains`) + `dataclass`.
 > **New in 1.6.2**: `builtins()` grouped by category; type checks `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`; `launch` canonical.
 > **New in 1.6.1**: `colored(text, color)` terminal colors, `builtins()`, `get <builtin>`.
 > **New in 1.6**: async I/O (`http_*_async`), set ops (`set_union`/`set_intersection`/`set_difference`), YAML, path helpers, `str_*` methods.
