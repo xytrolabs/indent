@@ -55,6 +55,12 @@ Added higher-order list builtins (all additive, no new syntax):
   user methods still allowed.
 - Test: `tests/class_special_methods.ind`.
 
+### 🛠 `not <funcCall args>` now parses
+- `if not has_key d "k"`, `if not is_positive x`, etc. previously failed to
+  parse (space-arg call wrapped in `not`). Fixed by preprocessing a leading
+  `not ` before the space-separated-call rewrite. `x not in y` unaffected.
+- Test: `tests/not_call_builtins.ind`.
+
 
 ### 🗂 `builtins()` returns an organized dict
 - `builtins()` now returns `{category: [names]}` grouped by category instead of a

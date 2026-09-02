@@ -9119,6 +9119,12 @@ fn preprocess_expr_calls(expr: &str) -> String {
     if expr.contains('(') || expr.contains(')') {
         return expr.to_string();
     }
+    // Handle a leading `not ` so `not fn args...` (e.g. `not has_key d k`)
+    // parses correctly — previously the leftover args caused a syntax error.
+    if let Some(rest) = expr.strip_prefix("not ") {
+        let inner = preprocess_expr_calls(rest.trim());
+        return format!("not {}", inner);
+    }
     // Check if it looks like a simple space-separated call: callee arg1 arg2 ...
     if let Some((callee, args_text)) = expr.split_once(' ') {
         if looks_like_callee(callee)

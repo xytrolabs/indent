@@ -1,0 +1,55 @@
+#! not_call_builtins.ind — `not <funcCall args>` must parse (Indent 2.0 fix)
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check cond
+    if not cond
+        fail "assertion failed"
+
+#! helper that returns a bool (to exercise user-fn call under `not`)
+fun is_positive n
+    var ok = n > 0
+    give ok
+
+#! builtin under `not`: not has_key dict key
+var d = dict_set {} "a" 1
+var missingIsTrue = false
+if not has_key d "zzz"
+    var missingIsTrue = true
+check (missingIsTrue)
+
+#! user function under `not`
+var negIsFalse = false
+if not is_positive (-5)
+    var negIsFalse = true
+check (negIsFalse)
+
+#! positive case: condition false, block skipped
+var skipped = false
+if not is_positive 5
+    var skipped = true
+var notSkipped = not skipped
+check (notSkipped)
+
+#! `not` with a bare variable still works
+var flag = false
+var flagNot = false
+if not flag
+    var flagNot = true
+check (flagNot)
+
+#! `not` wrapping a member-lookup call (the original `if not has_key obj.member key` case)
+fun lookup d k
+    var known int = 0
+    if has_key d k
+        var known int = 1
+    give known == 1
+
+var present = false
+if not lookup d "zzz"
+    var present = true
+check (present)
+
+say "not-call: ALL PASS"
