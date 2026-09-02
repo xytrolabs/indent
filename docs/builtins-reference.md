@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v1.6.2)
+# Indent Built-in Functions — API Reference (v2.0)
 
-> Complete reference for every built-in function available in Indent 1.6.2.
+> Complete reference for every built-in function available in Indent 2.0.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint` (see [Colors](#colors-indent-20))
 > **🆕 v1.6.2**: `builtins()` returns an organized dict (category → names); type-check helpers `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`
 > **🆕 v1.6.1**: `colored(text, color)` for colored terminal output, `builtins()`, `get <builtin>`
 > **🆕 v1.6**: async I/O (`http_get_async` & co), set ops (`set_union`/`set_intersection`/`set_difference`), YAML (`yaml_loads`/`yaml_dumps`), path helpers (`path_ext`/`path_stem`/`path_abs`/`path_expand`/`path_norm`), string methods (`str_zfill` & co)
@@ -78,32 +79,84 @@ is_string("hi")   # → TRUE
 
 ---
 
-## Colored output (🆕 v1.6.1)
+## Colors (Indent 2.0)
 
-`colored(text, color)` wraps text in ANSI **truecolor** escape codes, so you can
-print in any color — great for terminal tools, menus, and emphasis.
+The color subsystem wraps text in ANSI **truecolor** escape codes — great for
+terminal tools, menus, emphasis, and dashboards. You can set the **foreground**,
+the **background**, apply **styles**, and even render **gradients**,
+**multi-color** and **rainbow** text.
+
+### Color values
+
+Every `color` argument accepts:
+- a hex literal — `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (with or without `#`)
+- a **named** color (case-insensitive):
+  `RED`, `GREEN`, `BLUE`, `CYAN`, `MAGENTA`, `YELLOW`, `ORANGE`, `PURPLE`,
+  `PINK`, `BLACK`, `WHITE`, `GRAY`/`GREY`, `SILVER`, `MAROON`, `OLIVE`, `LIME`,
+  `TEAL`, `NAVY`, `FUCHSIA`, `BROWN`, `GOLD`, `CORAL`, `SALMON`, `SKY`,
+  `INDIGO`, `VIOLET`, `AMBER`, `EMERALD`, `SLATE`, `ZINC`
+- a **color variable** — `var accent color = "#22c55e"`
+
+### Foreground & background
 
 | Function | Returns | Description |
 |---|---|---|
-| `colored(text, color)` | string | `text` wrapped in ANSI truecolor for `color` |
+| `colored(text, color)` / `fg(text, color)` | string | text in foreground `color` |
+| `bg(text, color)` | string | text on background `color` |
 
-`color` accepts:
-- a hex literal — `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (with or without `#`)
-- a **named** color: `RED`, `GREEN`, `BLUE`, `CYAN`, `MAGENTA`, `YELLOW`, `ORANGE`, `PURPLE`, `PINK`, `BLACK`, `WHITE` (case-insensitive)
-- a **color variable** — `var accent color = "#22c55e"`
+### Styles
 
+| Function | Returns | Description |
+|---|---|---|
+| `style(text, style, ...)` | string | apply one or more styles |
+
+`style` names: `bold`, `dim`, `italic`, `underline`, `blink`, `reverse`,
+`strikethrough`. Pass several as separate args or as a list:
 ```indent
-say colored "This is red" "#ff0000"
-say colored "This is green" "green"
-say colored "This is blue" "#22c55e"
-
-var accent color = "#ff9900"
-say colored "Warning!" accent
+say style "bold text" "bold"
+say style "bold + italic" ["bold", "italic"]
+say style "underlined" "underline"
 ```
 
-`colored` returns a string, so you can embed it in larger output with `+`.
+### Gradients, multi-color & rainbow
 
-### `debug` package (🆕 v1.6.2)
+| Function | Returns | Description |
+|---|---|---|
+| `gradient(text, from, to)` | string | per-character foreground gradient `from`→`to` |
+| `bg_gradient(text, from, to)` | string | per-character background gradient |
+| `multicolor(text, color, ...)` | string | cycle colors per character (foreground) |
+| `bg_multicolor(text, color, ...)` | string | cycle colors per character (background) |
+| `rainbow(text)` | string | classic 7-color foreground rainbow |
+| `bg_rainbow(text)` | string | classic 7-color background rainbow |
+
+`multicolor` accepts either separate color args or a single list:
+```indent
+say gradient "Smooth fade" "#ff0000" "#0000ff"
+say multicolor "Multi" "#ff0000" "#00ff00" "#0000ff"
+say multicolor "Multi" ["#ff0000", "#00ff00", "#0000ff"]
+say rainbow "RAINBOW"
+```
+
+### Combine everything with `paint`
+
+`paint(text, fg, bg, style)` applies a foreground, a background and styles in a
+single call. Pass `""` (or `[]`) to skip any component.
+
+| Function | Returns | Description |
+|---|---|---|
+| `paint(text, fg, bg, style)` | string | combined fg + bg + style |
+
+```indent
+say paint "Painted" "#ffffff" "#222222" ["bold", "underline"]
+say paint "Just background" "" "#ff0000" ""
+say paint "Just bold" "" "" "bold"
+```
+
+> `colored`, `fg`, `bg`, `style`, `gradient`, `multicolor`, `rainbow` and
+> `paint` all return strings, so you can nest and embed them in larger output
+> with `+`.
+
+### `debug` package
 
 For quick colored logging, the `debug` std module wraps `colored`:
 
@@ -207,6 +260,81 @@ var age int = ask("int", "Age: ")
 | `range(end)` | list | `[0, 1, ..., end-1]` |
 | `range(start, end)` | list | `[start, ..., end-1]` |
 | `range(start, end, step)` | list | With custom step |
+
+---
+
+## Std-lib Breadth — itertools / functools / collections (Indent 2.0)
+
+Higher-order and composition helpers, all additive (no new syntax). The
+predicate / key / function arguments are **native builtin names** (matching how
+`map` and `filter` work).
+
+### itertools-style
+
+| Function | Returns | Description |
+|---|---|---|
+| `chain(list, ...)` | list | Concatenate several lists into one |
+| `flatten(list)` | list | Recursively flatten nested lists |
+| `chunk(list, n)` | list | Split into sublists of size `n` |
+| `product(list, list, ...)` | list | Cartesian product → list of lists |
+| `permutations(list, r?)` | list | All `r`-length permutations (default = full length) |
+| `combinations(list, r)` | list | All `r`-length combinations (order-insensitive) |
+| `accumulate(list)` | list | Running prefix sums |
+| `cycle(list, n)` | list | Repeat the whole list `n` times |
+| `repeat_item(item, n)` | list | List of `n` copies of `item` |
+| `takewhile(pred, list)` | list | Take elements while `pred` is true |
+| `dropwhile(pred, list)` | list | Skip elements while `pred` is true, then take the rest |
+| `zip_longest(a, b, fill?)` | list | Pair elements, padding the shorter list with `fill` (default `empty`) |
+| `pairwise(list)` | list | Adjacent pairs: `pairwise([1,2,3])` → `[[1,2],[2,3]]` |
+| `filterfalse(pred, list)` | list | Elements where `pred` is false |
+| `compress(list, selectors)` | list | Elements where the matching selector is truthy |
+| `starmap(fn, list_of_lists)` | list | Apply `fn` to each row, unpacking its args |
+
+### collections-style
+
+| Function | Returns | Description |
+|---|---|---|
+| `unique(list)` | list | Deduplicate, preserving order |
+| `partition(list, pred)` | list | `[matching, non-matching]` |
+| `group_by(list, keyfn)` | dict | `key → [items]` |
+| `max_key(list, keyfn)` | value | Element with the maximum key |
+| `min_key(list, keyfn)` | value | Element with the minimum key |
+| `first(list, n)` | list | First `n` elements |
+| `last(list, n)` | list | Last `n` elements |
+
+### functools-style
+
+| Function | Returns | Description |
+|---|---|---|
+| `reduce(fn, list, initial?)` | value | Fold left over the list |
+
+```indent
+var flat = flatten [[1,2],[3,[4,5]]]        # → [1, 2, 3, 4, 5]
+var pr    = product [1,2] [3,4]             # → [[1, 3], [1, 4], [2, 3], [2, 4]]
+var parts = partition "is_even" [1,2,3,4]   # → [[2, 4], [1, 3]]
+var mx    = max_key ["a","bb","ccc"] "len"  # → "ccc"
+var total = reduce "add_int" [1,2,3,4]      # → 10
+```
+
+### Math extras
+
+| Function | Returns | Description |
+|---|---|---|
+| `math_pi` / `math_e` / `math_tau` | float | Constants |
+| `math_factorial(n)` | int | `n!` |
+| `math_gcd(a, b)` / `math_gcd(list)` | int | Greatest common divisor |
+| `math_lcm(a, b)` | int | Least common multiple |
+| `math_hypot(a, b)` | float | `sqrt(a² + b²)` |
+| `math_log2(x)` | float | Base-2 logarithm |
+| `math_degrees(x)` / `math_radians(x)` | float | Angle conversion |
+
+### Random extras
+
+| Function | Returns | Description |
+|---|---|---|
+| `random_randint(a, b)` | int | Random int in `[a, b]` |
+| `random_uniform(a, b)` | float | Random float in `[a, b)` |
+| `random_sample(list, k)` | list | `k` distinct random elements |
 
 ---
 
@@ -469,6 +597,8 @@ catch as err:
 | `os_setenv(key, value)` | — | Set environment variable |
 | `os_system(command)` | int | Run shell command, returns exit code |
 | `os_run(command)` | dict | Run shell command, capture output → `{ok, status, stdout, stderr}` |
+| `os_run_ok(command)` | bool | `TRUE` if `command` exits 0 |
+| `os_which(command)` | string | Path to an executable on `PATH` (shutil.which); `empty` if not found |
 | `os_copy(src, dst)` | — | Copy a file (shutil.copy) |
 | `os_move(src, dst)` | — | Move/rename a file (shutil.move) |
 | `os_copy_tree(src, dst)` | — | Recursively copy a directory tree (shutil.copytree) |

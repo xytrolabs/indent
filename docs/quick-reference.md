@@ -1,12 +1,13 @@
-# Indent Quick Reference (v1.6.2)
+# Indent Quick Reference (v2.0)
 
 > Complete syntax reference for the Indent programming language.
+> **New in 2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`; std-lib breadth — `chain`/`flatten`/`chunk`/`product`/`permutations`/`combinations`/`accumulate`/`cycle`/`repeat_item`/`takewhile`/`dropwhile`/`unique`/`partition`/`group_by`/`max_key`/`min_key`/`reduce`, math extras, random extras.
 > **New in 1.6.2**: `builtins()` grouped by category; type checks `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`; `launch` canonical.
 > **New in 1.6.1**: `colored(text, color)` terminal colors, `builtins()`, `get <builtin>`.
 > **New in 1.6**: async I/O (`http_*_async`), set ops (`set_union`/`set_intersection`/`set_difference`), YAML, path helpers, `str_*` methods.
 > **New in 1.5**: async tasks (`spawn`/`parallel`), `async fun`/`wait`/`gather`/`coop`, SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.
 > 💡 Unique ordered collections are called **groups** — build one with `group([1,2,3])` **or** `set([1,2,3])`. The `set` **keyword** statement `set x string` is type conversion.
-> 🎨 Print in color: `say colored "hi" "#ff0000"` (hex, named colors, or a color variable).
+> 🎨 Print in color: `say fg "hi" "#ff0000"`, `say bg "warn" "yellow"`, `say gradient "x" "red" "blue"`, `say rainbow "hi"`, `say paint "x" "#fff" "#000" "bold"`.
 > 🔍 Discover builtins: `builtins()`; bind one as a value with `get <builtin>`.<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)

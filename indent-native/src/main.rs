@@ -447,6 +447,7 @@ fn color_to_rgb(s: &str) -> Option<(u8, u8, u8)> {
         h.to_string()
     } else {
         let named = match s.to_ascii_lowercase().as_str() {
+            // base
             "red" => "#ff4d4d",
             "green" => "#32c671",
             "blue" => "#3b82f6",
@@ -458,6 +459,26 @@ fn color_to_rgb(s: &str) -> Option<(u8, u8, u8)> {
             "pink" => "#ec4899",
             "black" => "#0f172a",
             "white" => "#f8fafc",
+            // extended palette
+            "gray" | "grey" => "#9ca3af",
+            "silver" => "#c0c0c0",
+            "maroon" => "#800000",
+            "olive" => "#808000",
+            "lime" => "#a3e635",
+            "teal" => "#14b8a6",
+            "navy" => "#1e3a8a",
+            "fuchsia" => "#c026d3",
+            "brown" => "#92400e",
+            "gold" => "#fbbf24",
+            "coral" => "#ff7f50",
+            "salmon" => "#fa8072",
+            "sky" => "#38bdf8",
+            "indigo" => "#6366f1",
+            "violet" => "#a78bfa",
+            "amber" => "#f59e0b",
+            "emerald" => "#10b981",
+            "slate" => "#64748b",
+            "zinc" => "#71717a",
             _ => return None,
         };
         named.trim_start_matches('#').to_string()
@@ -496,12 +517,106 @@ fn color_to_rgb(s: &str) -> Option<(u8, u8, u8)> {
     }
 }
 
-/// Wrap `text` in ANSI truecolor escape codes for foreground `color`.
-fn colorize_text(text: &str, color: &str) -> Result<String, String> {
-    match color_to_rgb(color) {
-        Some((r, g, b)) => Ok(format!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, text)),
-        None => Err(format!("colored: unknown color '{}'", color)),
+/// Build a single combined ANSI SGR sequence from an optional foreground,
+/// optional background and a list of style codes. Returns plain `text` when no
+/// codes apply (so `paint` can be used with all-empty options).
+fn render_ansi(
+    text: &str,
+    fg: Option<(u8, u8, u8)>,
+    bg: Option<(u8, u8, u8)>,
+    styles: &[u8],
+) -> String {
+    let mut codes: Vec<String> = Vec::new();
+    for s in styles {
+        codes.push(s.to_string());
     }
+    if let Some((r, g, b)) = fg {
+        codes.push(format!("38;2;{r};{g};{b}"));
+    }
+    if let Some((r, g, b)) = bg {
+        codes.push(format!("48;2;{r};{g};{b}"));
+    }
+    if codes.is_empty() {
+        return text.to_string();
+    }
+    format!("\x1b[{}m{}\x1b[0m", codes.join(";"), text)
+}
+
+/// Map a style name to its ANSI SGR code.
+fn style_code(name: &str) -> Option<u8> {
+    match name.to_ascii_lowercase().as_str() {
+        "bold" | "bright" => Some(1),
+        "dim" | "faint" => Some(2),
+        "italic" => Some(3),
+        "underline" => Some(4),
+        "blink" => Some(5),
+        "reverse" | "invert" | "negative" => Some(7),
+        "strikethrough" | "strike" | "crossed" => Some(9),
+        _ => None,
+    }
+}
+
+/// Linearly interpolate one channel.
+fn lerp(a: u8, b: u8, t: f64) -> u8 {
+    (a as f64 + (b as f64 - a as f64) * t).round() as u8
+}
+
+/// Color each character of `text` by interpolating `from` → `to`. `bg` selects
+/// the 48;2 background plane instead of the 38;2 foreground plane.
+fn gradient_text(text: &str, from: (u8, u8, u8), to: (u8, u8, u8), bg: bool) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    if chars.len() == 1 {
+        let (r, g, b) = from;
+        let code = if bg { "48;2" } else { "38;2" };
+        return format!("\x1b[{code};{r};{g};{b}m{text}\x1b[0m");
+    }
+    let mut out = String::new();
+    let n = chars.len();
+    for (i, c) in chars.iter().enumerate() {
+        let t = i as f64 / (n - 1) as f64;
+        let r = lerp(from.0, to.0, t);
+        let g = lerp(from.1, to.1, t);
+        let b = lerp(from.2, to.2, t);
+        let plane = if bg { "48;2" } else { "38;2" };
+        out.push_str(&format!("\x1b[{plane};{r};{g};{b}m{}\x1b[0m", c));
+    }
+    out
+}
+
+/// Color each character of `text` cycling through `colors`. `bg` selects the
+/// background plane.
+fn multicolor_text(text: &str, colors: &[(u8, u8, u8)], bg: bool) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() || colors.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let plane = if bg { "48;2" } else { "38;2" };
+    for (i, c) in chars.iter().enumerate() {
+        let (r, g, b) = colors[i % colors.len()];
+        out.push_str(&format!("\x1b[{plane};{r};{g};{b}m{}\x1b[0m", c));
+    }
+    out
+}
+
+/// Classic 7-color rainbow palette.
+fn rainbow_palette() -> Vec<(u8, u8, u8)> {
+    vec![
+        (255, 77, 77),   // red
+        (251, 146, 60),  // orange
+        (250, 204, 21),  // yellow
+        (50, 198, 113),  // green
+        (6, 182, 212),   // cyan
+        (59, 130, 246),  // blue
+        (139, 92, 246),  // violet
+    ]
+}
+
+fn rainbow_text(text: &str, bg: bool) -> String {
+    multicolor_text(text, &rainbow_palette(), bg)
 }
 
 impl fmt::Display for Value {
@@ -2597,6 +2712,8 @@ const INDENT_BUILTINS: &[&str] = &[
     "abs", "add_int", "all", "any", "append", "ask", "assert", "assert_eq",
     "base64_decode", "base64_encode", "between_int", "bool", "boolean", "builtins",
     "capitalize", "clamp", "clear", "coalesce", "colored", "contains", "coop", "copy", "count",
+    "bg", "bg_gradient", "bg_multicolor", "bg_rainbow", "fg", "gradient", "multicolor",
+    "paint", "rainbow", "style",
     "counter", "csv_read", "csv_write", "dec", "default", "dict_get", "dict_items",
     "dict_remove", "dict_set", "dict_update", "div_int", "ends_with", "enumerate",
     "err", "error_message", "error_type", "extend", "false", "file_append_text",
@@ -2608,18 +2725,24 @@ const INDENT_BUILTINS: &[&str] = &[
     "http_post_json", "http_post_json_async", "http_put_json", "http_put_json_async",
     "http_serve_dir", "inc", "index", "insert", "int", "int_or", "is_err", "is_even",
     "is_missing", "is_odd", "is_ok", "items", "join", "json_dumps", "json_loads",
-    "keys", "len", "log", "lower", "lstrip", "map", "math_abs", "math_acos",
-    "math_asin", "math_atan", "math_atan2", "math_ceil", "math_cos", "math_exp",
-    "math_floor", "math_log", "math_log10", "math_pow", "math_round", "math_sin",
-    "math_sqrt", "math_tan", "max", "min", "mod_int", "mul_int", "ok", "os_chdir",
+    "keys", "len", "log", "lower", "lstrip", "map", "chain", "flatten", "chunk",
+    "product", "permutations", "combinations", "accumulate", "cycle", "repeat_item",
+    "takewhile", "dropwhile", "unique", "partition", "group_by", "max_key", "min_key",
+    "reduce", "zip_longest", "pairwise", "filterfalse", "compress", "starmap", "first", "last",
+    "math_abs", "math_acos", "math_asin", "math_atan", "math_atan2", "math_ceil",
+    "math_cos", "math_degrees", "math_e", "math_exp", "math_factorial", "math_floor",
+    "math_gcd", "math_hypot", "math_lcm", "math_log", "math_log10", "math_log2",
+    "math_pi", "math_pow", "math_radians", "math_round", "math_sin", "math_sqrt",
+    "math_tan", "math_tau", "max", "min", "mod_int", "mul_int", "ok", "os_chdir",
     "os_copy", "os_copy_tree", "os_environ", "os_exists", "os_getcwd", "os_getenv",
     "os_is_dir", "os_is_file", "os_list_dir", "os_mkdir", "os_move", "os_remove",
-    "os_rename", "os_run", "os_setenv", "os_system", "pad_left", "pad_right",
+    "os_rename", "os_run", "os_run_ok", "os_setenv", "os_system", "os_which", "pad_left", "pad_right",
     "parallel", "path_abs", "path_basename", "path_dirname", "path_expand",
     "path_ext", "path_join", "path_norm", "path_stem", "pop", "print",
     "process_exit", "python_available", "python_eval", "python_eval_json",
     "python_exec", "python_run_file", "random_choice", "random_float", "random_int",
-    "random_seed", "random_shuffle", "range", "regex_findall", "regex_match",
+    "random_randint", "random_sample", "random_seed", "random_shuffle", "random_uniform",
+    "range", "regex_findall", "regex_match",
     "regex_replace", "regex_search", "regex_split", "remove", "repeat_str",
     "replace", "reverse", "rstrip", "run_file", "say", "set", "set_add", "set_contains",
     "set_difference", "set_intersection", "set_remove", "set_union", "sformat",
@@ -2643,6 +2766,138 @@ fn invoke_builtin_callable(name: &str, positional: &[Value], named: &HashMap<Str
         return Err(format!("builtin '{}' does not accept named arguments", name));
     }
     invoke_builtin(name, positional).unwrap_or_else(|| Err(format!("Unknown builtin '{name}'")))
+}
+
+/// Dispatch for the color subsystem (Indent 2.0): foreground/background,
+/// styles, gradients, multi-color and rainbow text.
+fn color_builtin(name: &str, positional: &[Value]) -> Result<Value, String> {
+    let resolve = |v: &Value| -> Result<(u8, u8, u8), String> {
+        let s = v.to_string();
+        color_to_rgb(&s).ok_or_else(|| format!("unknown color '{s}'"))
+    };
+    let is_bg = name.starts_with("bg_");
+    match name {
+        "colored" | "colorize" | "fg" => {
+            if positional.len() != 2 {
+                return Err(format!("{name} expects exactly 2 arguments: {name}(text, color)"));
+            }
+            let text = positional[0].to_string();
+            let (r, g, b) = resolve(&positional[1])?;
+            Ok(Value::Str(render_ansi(&text, Some((r, g, b)), None, &[])))
+        }
+        "bg" => {
+            if positional.len() != 2 {
+                return Err("bg expects exactly 2 arguments: bg(text, color)".to_string());
+            }
+            let text = positional[0].to_string();
+            let (r, g, b) = resolve(&positional[1])?;
+            Ok(Value::Str(render_ansi(&text, None, Some((r, g, b)), &[])))
+        }
+        "style" => {
+            if positional.len() < 2 {
+                return Err("style expects at least 2 arguments: style(text, style, ...)".to_string());
+            }
+            let text = positional[0].to_string();
+            let mut codes: Vec<u8> = Vec::new();
+            for arg in &positional[1..] {
+                match arg {
+                    Value::Str(s) => {
+                        let c = style_code(s)
+                            .ok_or_else(|| format!("style: unknown style '{s}'"))?;
+                        codes.push(c);
+                    }
+                    Value::List(items) => {
+                        for it in items {
+                            if let Value::Str(s) = it {
+                                let c = style_code(s)
+                                    .ok_or_else(|| format!("style: unknown style '{s}'"))?;
+                                codes.push(c);
+                            } else {
+                                return Err("style: list entries must be style names".to_string());
+                            }
+                        }
+                    }
+                    _ => return Err("style: arguments must be style names".to_string()),
+                }
+            }
+            Ok(Value::Str(render_ansi(&text, None, None, &codes)))
+        }
+        "gradient" | "bg_gradient" => {
+            if positional.len() != 3 {
+                return Err(format!("{name} expects exactly 3 arguments: {name}(text, from, to)"));
+            }
+            let text = positional[0].to_string();
+            let from = resolve(&positional[1])?;
+            let to = resolve(&positional[2])?;
+            Ok(Value::Str(gradient_text(&text, from, to, is_bg)))
+        }
+        "multicolor" | "bg_multicolor" => {
+            if positional.len() < 2 {
+                return Err(format!("{name} expects at least 2 arguments: {name}(text, color, ...)"));
+            }
+            let text = positional[0].to_string();
+            let mut colors: Vec<(u8, u8, u8)> = Vec::new();
+            for arg in &positional[1..] {
+                match arg {
+                    Value::List(items) => {
+                        for it in items {
+                            colors.push(resolve(it)?);
+                        }
+                    }
+                    _ => colors.push(resolve(arg)?),
+                }
+            }
+            if colors.is_empty() {
+                return Err(format!("{name}: at least one color is required"));
+            }
+            Ok(Value::Str(multicolor_text(&text, &colors, is_bg)))
+        }
+        "rainbow" | "bg_rainbow" => {
+            if positional.len() != 1 {
+                return Err(format!("{name} expects exactly 1 argument: {name}(text)"));
+            }
+            let text = positional[0].to_string();
+            Ok(Value::Str(rainbow_text(&text, is_bg)))
+        }
+        "paint" => {
+            if positional.len() != 4 {
+                return Err("paint expects exactly 4 arguments: paint(text, fg, bg, style) — pass \"\" to skip fg/bg/style".to_string());
+            }
+            let text = positional[0].to_string();
+            let fg_s = positional[1].to_string();
+            let bg_s = positional[2].to_string();
+            let mut fg = None;
+            let mut bgr = None;
+            if !fg_s.is_empty() {
+                fg = Some(color_to_rgb(&fg_s).ok_or_else(|| format!("unknown color '{fg_s}'"))?);
+            }
+            if !bg_s.is_empty() {
+                bgr = Some(color_to_rgb(&bg_s).ok_or_else(|| format!("unknown color '{bg_s}'"))?);
+            }
+            let mut styles: Vec<u8> = Vec::new();
+            match &positional[3] {
+                Value::Str(s) => {
+                    if !s.is_empty() {
+                        styles.push(style_code(s).ok_or_else(|| format!("style: unknown style '{s}'"))?);
+                    }
+                }
+                Value::List(items) => {
+                    for it in items {
+                        if let Value::Str(s) = it {
+                            if !s.is_empty() {
+                                styles.push(style_code(s).ok_or_else(|| format!("style: unknown style '{s}'"))?);
+                            }
+                        } else {
+                            return Err("paint: style list entries must be style names".to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(Value::Str(render_ansi(&text, fg, bgr, &styles)))
+        }
+        _ => Err(format!("Unknown color builtin '{name}'")),
+    }
 }
 
 /// Category for a builtin name, used to organize the dict returned by
@@ -2680,11 +2935,17 @@ fn builtin_category(name: &str) -> &'static str {
         | "repeat_str" | "pad_left" | "pad_right" | "string" => "string",
         "append" | "extend" | "insert" | "pop" | "remove" | "sort" | "enumerate"
         | "zip" | "range" | "count" | "index" | "sum" | "min" | "max" | "any" | "all"
-        | "filter" | "map" | "copy" | "clear" => "list",
+        | "filter" | "map" | "copy" | "clear" | "chain" | "flatten" | "chunk"
+        | "product" | "permutations" | "combinations" | "accumulate" | "cycle"
+        | "repeat_item" | "takewhile" | "dropwhile" | "unique" | "partition" | "group_by"
+        | "max_key" | "min_key" | "reduce" | "zip_longest" | "pairwise"
+        | "filterfalse" | "compress" | "starmap" | "first" | "last" => "list",
         "abs" | "int" | "float" | "int_or" | "float_or" | "between_int" | "is_even"
         | "is_odd" | "inc" | "dec" | "add_int" | "sub_int" | "mul_int" | "div_int"
         | "mod_int" | "bool" | "boolean" | "clamp" | "counter" => "math",
-        "say" | "print" | "ask" | "log" | "colored" | "colorize" => "io",
+        "say" | "print" | "ask" | "log" | "colored" | "colorize" | "fg" | "bg"
+        | "style" | "gradient" | "bg_gradient" | "multicolor" | "bg_multicolor"
+        | "rainbow" | "bg_rainbow" | "paint" => "io",
         "assert" | "assert_eq" | "builtins" | "is_missing" | "default" | "coalesce"
         | "process_exit" | "run_file" | "launch" => "misc",
         _ => "misc",
@@ -2725,14 +2986,9 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             println!("{line}");
             Some(Ok(Value::Empty))
         }
-        "colored" | "colorize" => {
-            if positional.len() != 2 {
-                return Some(Err("colored expects exactly 2 arguments: colored(text, color)".to_string()));
-            }
-            let text = positional[0].to_string();
-            let color = positional[1].to_string();
-            Some(colorize_text(&text, &color).map(Value::Str))
-        }
+        "colored" | "colorize" | "fg" | "bg" | "style" | "gradient"
+        | "bg_gradient" | "multicolor" | "bg_multicolor" | "rainbow"
+        | "bg_rainbow" | "paint" => Some(color_builtin(&builtin, positional)),
         "ask" => {
             if positional.is_empty() || positional.len() > 2 {
                 return Some(Err("ask expects 1 or 2 arguments: ask(prompt) or ask(type, prompt)".to_string()));
@@ -4787,6 +5043,18 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(os_run_builtin(&positional[0].to_string()))
         }
+        "os_run_ok" => {
+            if positional.len() != 1 {
+                return Some(Err("os_run_ok expects exactly 1 argument (command)".to_string()));
+            }
+            Some(os_run_ok_builtin(&positional[0].to_string()))
+        }
+        "os_which" => {
+            if positional.len() != 1 {
+                return Some(Err("os_which expects exactly 1 argument (command)".to_string()));
+            }
+            Some(os_which_builtin(&positional[0].to_string()))
+        }
         "os_copy" => {
             if positional.len() != 2 {
                 return Some(Err("os_copy expects exactly 2 arguments (source, destination)".to_string()));
@@ -4990,6 +5258,57 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(random_shuffle_builtin(&positional[0]))
         }
+        "random_randint" => {
+            if positional.len() != 2 {
+                return Some(Err("random_randint expects exactly 2 arguments (a, b)".to_string()));
+            }
+            let a = match &positional[0] {
+                Value::Int(v) => *v,
+                _ => return Some(Err("random_randint expects integer arguments".to_string())),
+            };
+            let b = match &positional[1] {
+                Value::Int(v) => *v,
+                _ => return Some(Err("random_randint expects integer arguments".to_string())),
+            };
+            Some(random_int_builtin(a, b))
+        }
+        "random_uniform" => {
+            if positional.len() != 2 {
+                return Some(Err("random_uniform expects exactly 2 arguments (a, b)".to_string()));
+            }
+            let a = match value_to_f64("random_uniform", &positional[0]) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            let b = match value_to_f64("random_uniform", &positional[1]) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            Some(Ok(Value::Float(lo + (hi - lo) * random_next_f64())))
+        }
+        "random_sample" => {
+            if positional.len() != 2 {
+                return Some(Err("random_sample expects exactly 2 arguments (list, k)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("random_sample expects a list".to_string())),
+            };
+            let k = match &positional[1] {
+                Value::Int(v) if *v >= 0 => *v as usize,
+                _ => return Some(Err("random_sample: k must be a non-negative integer".to_string())),
+            };
+            if k > items.len() {
+                return Some(Err("random_sample: k cannot exceed list length".to_string()));
+            }
+            let shuffled = match random_shuffle_builtin(&Value::List(items)) {
+                Ok(Value::List(v)) => v,
+                Ok(_) => return Some(Err("random_sample internal error".to_string())),
+                Err(e) => return Some(Err(e)),
+            };
+            Some(Ok(Value::List(shuffled[..k].to_vec())))
+        }
         "math_abs" => {
             if positional.len() != 1 {
                 return Some(Err("math_abs expects exactly 1 argument".to_string()));
@@ -5085,6 +5404,110 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("math_exp expects exactly 1 argument".to_string()));
             }
             Some(math_unary_float_builtin(&positional[0], |v| v.exp()))
+        }
+        "math_pi" => {
+            if !positional.is_empty() {
+                return Some(Err("math_pi expects no arguments".to_string()));
+            }
+            Some(Ok(Value::Float(std::f64::consts::PI)))
+        }
+        "math_e" => {
+            if !positional.is_empty() {
+                return Some(Err("math_e expects no arguments".to_string()));
+            }
+            Some(Ok(Value::Float(std::f64::consts::E)))
+        }
+        "math_tau" => {
+            if !positional.is_empty() {
+                return Some(Err("math_tau expects no arguments".to_string()));
+            }
+            Some(Ok(Value::Float(std::f64::consts::TAU)))
+        }
+        "math_factorial" => {
+            if positional.len() != 1 {
+                return Some(Err("math_factorial expects exactly 1 argument".to_string()));
+            }
+            match &positional[0] {
+                Value::Int(v) if *v >= 0 => {
+                    let mut r: i64 = 1;
+                    for i in 2..=*v {
+                        r *= i;
+                    }
+                    Some(Ok(Value::Int(r)))
+                }
+                _ => Some(Err("math_factorial expects a non-negative integer".to_string())),
+            }
+        }
+        "math_gcd" => {
+            let mut nums: Vec<i64> = Vec::new();
+            for p in positional {
+                match p {
+                    Value::Int(v) => nums.push(*v),
+                    Value::List(items) => {
+                        for it in items {
+                            match it {
+                                Value::Int(v) => nums.push(*v),
+                                _ => return Some(Err("math_gcd expects integers".to_string())),
+                            }
+                        }
+                    }
+                    _ => return Some(Err("math_gcd expects integers".to_string())),
+                }
+            }
+            let mut g: i64 = 0;
+            for n in nums {
+                g = gcd_i64(g, n);
+            }
+            Some(Ok(Value::Int(g)))
+        }
+        "math_lcm" => {
+            let mut nums: Vec<i64> = Vec::new();
+            for p in positional {
+                match p {
+                    Value::Int(v) => nums.push(*v),
+                    Value::List(items) => {
+                        for it in items {
+                            match it {
+                                Value::Int(v) => nums.push(*v),
+                                _ => return Some(Err("math_lcm expects integers".to_string())),
+                            }
+                        }
+                    }
+                    _ => return Some(Err("math_lcm expects integers".to_string())),
+                }
+            }
+            let mut l: i64 = 1;
+            for n in nums {
+                if n == 0 {
+                    return Some(Ok(Value::Int(0)));
+                }
+                l = (l / gcd_i64(l, n)) * n;
+            }
+            Some(Ok(Value::Int(l)))
+        }
+        "math_hypot" => {
+            if positional.len() != 2 {
+                return Some(Err("math_hypot expects exactly 2 arguments".to_string()));
+            }
+            Some(math_binary_float_builtin(&positional[0], &positional[1], |a, b| a.hypot(b)))
+        }
+        "math_log2" => {
+            if positional.len() != 1 {
+                return Some(Err("math_log2 expects exactly 1 argument".to_string()));
+            }
+            Some(math_unary_float_builtin(&positional[0], |v| v.log2()))
+        }
+        "math_degrees" => {
+            if positional.len() != 1 {
+                return Some(Err("math_degrees expects exactly 1 argument".to_string()));
+            }
+            Some(math_unary_float_builtin(&positional[0], |v| v.to_degrees()))
+        }
+        "math_radians" => {
+            if positional.len() != 1 {
+                return Some(Err("math_radians expects exactly 1 argument".to_string()));
+            }
+            Some(math_unary_float_builtin(&positional[0], |v| v.to_radians()))
         }
         "python_available" => {
             if !positional.is_empty() {
@@ -5593,6 +6016,470 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(Ok(Value::List(out)))
         }
+        // ── itertools / functools / collections (Indent 2.0) ──
+        "chain" => {
+            if positional.is_empty() {
+                return Some(Err("chain expects at least 1 argument (list, ...)".to_string()));
+            }
+            let mut out = Vec::new();
+            for p in positional {
+                match p {
+                    Value::List(v) => out.extend(v.clone()),
+                    _ => return Some(Err("chain: all arguments must be lists".to_string())),
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "flatten" => {
+            if positional.len() != 1 {
+                return Some(Err("flatten expects exactly 1 argument (list)".to_string()));
+            }
+            fn flatten_rec(v: &Value, out: &mut Vec<Value>) {
+                match v {
+                    Value::List(items) => {
+                        for it in items {
+                            flatten_rec(it, out);
+                        }
+                    }
+                    other => out.push(other.clone()),
+                }
+            }
+            let mut out = Vec::new();
+            flatten_rec(&positional[0], &mut out);
+            Some(Ok(Value::List(out)))
+        }
+        "chunk" => {
+            if positional.len() != 2 {
+                return Some(Err("chunk expects exactly 2 arguments: chunk(list, n)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("chunk expects a list".to_string())),
+            };
+            let n = match &positional[1] {
+                Value::Int(v) if *v > 0 => *v as usize,
+                _ => return Some(Err("chunk: size must be a positive integer".to_string())),
+            };
+            let mut out = Vec::new();
+            for c in items.chunks(n) {
+                out.push(Value::List(c.to_vec()));
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "product" => {
+            let mut lists: Vec<Vec<Value>> = Vec::new();
+            for p in positional {
+                match p {
+                    Value::List(v) => lists.push(v.clone()),
+                    _ => return Some(Err("product: all arguments must be lists".to_string())),
+                }
+            }
+            let mut result: Vec<Vec<Value>> = vec![Vec::new()];
+            for l in &lists {
+                let mut next = Vec::new();
+                for partial in &result {
+                    for item in l {
+                        let mut p = partial.clone();
+                        p.push(item.clone());
+                        next.push(p);
+                    }
+                }
+                result = next;
+            }
+            Some(Ok(Value::List(result.into_iter().map(Value::List).collect())))
+        }
+        "permutations" => {
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("permutations expects a list".to_string())),
+            };
+            let k = if positional.len() == 2 {
+                match &positional[1] {
+                    Value::Int(v) if *v >= 0 => *v as usize,
+                    _ => return Some(Err("permutations: r must be a non-negative integer".to_string())),
+                }
+            } else {
+                items.len()
+            };
+            fn permute(items: &[Value], k: usize, prefix: &mut Vec<Value>, used: &mut Vec<bool>, out: &mut Vec<Value>) {
+                if prefix.len() == k {
+                    out.push(Value::List(prefix.clone()));
+                    return;
+                }
+                for i in 0..items.len() {
+                    if used[i] {
+                        continue;
+                    }
+                    used[i] = true;
+                    prefix.push(items[i].clone());
+                    permute(items, k, prefix, used, out);
+                    prefix.pop();
+                    used[i] = false;
+                }
+            }
+            let mut out = Vec::new();
+            let mut prefix = Vec::new();
+            let mut used = vec![false; items.len()];
+            permute(&items, k, &mut prefix, &mut used, &mut out);
+            Some(Ok(Value::List(out)))
+        }
+        "combinations" => {
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("combinations expects a list".to_string())),
+            };
+            let k = match &positional[1] {
+                Value::Int(v) if *v >= 0 => *v as usize,
+                _ => return Some(Err("combinations: r must be a non-negative integer".to_string())),
+            };
+            fn combine(items: &[Value], start: usize, k: usize, prefix: &mut Vec<Value>, out: &mut Vec<Value>) {
+                if prefix.len() == k {
+                    out.push(Value::List(prefix.clone()));
+                    return;
+                }
+                for i in start..items.len() {
+                    if items.len() - i < k - prefix.len() {
+                        break;
+                    }
+                    prefix.push(items[i].clone());
+                    combine(items, i + 1, k, prefix, out);
+                    prefix.pop();
+                }
+            }
+            let mut out = Vec::new();
+            let mut prefix = Vec::new();
+            combine(&items, 0, k, &mut prefix, &mut out);
+            Some(Ok(Value::List(out)))
+        }
+        "accumulate" => {
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("accumulate expects a list".to_string())),
+            };
+            if items.is_empty() {
+                return Some(Ok(Value::List(Vec::new())));
+            }
+            if items.iter().all(|v| matches!(v, Value::Int(_))) {
+                let mut acc: i64 = 0;
+                let mut out = Vec::new();
+                for it in &items {
+                    if let Value::Int(v) = it {
+                        acc += v;
+                    }
+                    out.push(Value::Int(acc));
+                }
+                Some(Ok(Value::List(out)))
+            } else {
+                let mut acc: f64 = 0.0;
+                let mut out = Vec::new();
+                for it in &items {
+                    acc += match value_to_f64("accumulate", it) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    out.push(Value::Float(acc));
+                }
+                Some(Ok(Value::List(out)))
+            }
+        }
+        "cycle" => {
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("cycle expects a list".to_string())),
+            };
+            let n = match &positional[1] {
+                Value::Int(v) if *v >= 0 => *v as usize,
+                _ => return Some(Err("cycle: n must be a non-negative integer".to_string())),
+            };
+            let mut out = Vec::new();
+            for _ in 0..n {
+                out.extend(items.clone());
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "repeat_item" => {
+            if positional.len() != 2 {
+                return Some(Err("repeat_item expects exactly 2 arguments: repeat_item(item, n)".to_string()));
+            }
+            let n = match &positional[1] {
+                Value::Int(v) if *v >= 0 => *v as usize,
+                _ => return Some(Err("repeat: n must be a non-negative integer".to_string())),
+            };
+            let item = positional[0].clone();
+            Some(Ok(Value::List(vec![item; n])))
+        }
+        "takewhile" => {
+            if positional.len() != 2 {
+                return Some(Err("takewhile expects exactly 2 arguments: takewhile(predicate, list)".to_string()));
+            }
+            let pred = positional[0].to_string();
+            let items = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("takewhile expects a list".to_string())),
+            };
+            let mut out = Vec::new();
+            for it in &items {
+                match apply_builtin1(&pred, it) {
+                    Ok(r) if r.to_bool() => out.push(it.clone()),
+                    Ok(_) => break,
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "dropwhile" => {
+            if positional.len() != 2 {
+                return Some(Err("dropwhile expects exactly 2 arguments: dropwhile(predicate, list)".to_string()));
+            }
+            let pred = positional[0].to_string();
+            let items = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("dropwhile expects a list".to_string())),
+            };
+            let mut out = Vec::new();
+            let mut dropping = true;
+            for it in &items {
+                if dropping {
+                    match apply_builtin1(&pred, it) {
+                        Ok(r) if r.to_bool() => continue,
+                        Ok(_) => dropping = false,
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                out.push(it.clone());
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "unique" => {
+            if positional.len() != 1 {
+                return Some(Err("unique expects exactly 1 argument (list)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("unique expects a list".to_string())),
+            };
+            let mut out: Vec<Value> = Vec::new();
+            for it in &items {
+                if !out.iter().any(|x| eq_values(x, it)) {
+                    out.push(it.clone());
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "partition" => {
+            if positional.len() != 2 {
+                return Some(Err("partition expects exactly 2 arguments: partition(list, predicate)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("partition expects a list".to_string())),
+            };
+            let pred = positional[1].to_string();
+            let mut yes = Vec::new();
+            let mut no = Vec::new();
+            for it in &items {
+                match apply_builtin1(&pred, it) {
+                    Ok(r) if r.to_bool() => yes.push(it.clone()),
+                    Ok(_) => no.push(it.clone()),
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            Some(Ok(Value::List(vec![Value::List(yes), Value::List(no)])))
+        }
+        "group_by" => {
+            if positional.len() != 2 {
+                return Some(Err("group_by expects exactly 2 arguments: group_by(list, keyfn)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("group_by expects a list".to_string())),
+            };
+            let keyfn = positional[1].to_string();
+            let mut groups: HashMap<String, Vec<Value>> = HashMap::new();
+            for it in &items {
+                let key = match apply_builtin1(&keyfn, it) {
+                    Ok(k) => k.to_string(),
+                    Err(e) => return Some(Err(e)),
+                };
+                groups.entry(key).or_default().push(it.clone());
+            }
+            let mut out = HashMap::new();
+            for (k, v) in groups {
+                out.insert(k, Value::List(v));
+            }
+            Some(Ok(Value::Dict(out)))
+        }
+        "max_key" | "min_key" => {
+            if positional.len() != 2 {
+                return Some(Err(format!("{callee} expects exactly 2 arguments: {callee}(list, keyfn)")));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err(format!("{callee} expects a list"))),
+            };
+            if items.is_empty() {
+                return Some(Err(format!("{callee}: cannot operate on an empty list")));
+            }
+            let keyfn = positional[1].to_string();
+            let want_max = callee == "max_key";
+            let mut best = items[0].clone();
+            let mut best_key = match apply_builtin1(&keyfn, &best) {
+                Ok(k) => k,
+                Err(e) => return Some(Err(e)),
+            };
+            for it in &items[1..] {
+                let k = match apply_builtin1(&keyfn, it) {
+                    Ok(k) => k,
+                    Err(e) => return Some(Err(e)),
+                };
+                let ord = compare_values(&k, &best_key);
+                if (want_max && ord == std::cmp::Ordering::Greater)
+                    || (!want_max && ord == std::cmp::Ordering::Less)
+                {
+                    best = it.clone();
+                    best_key = k;
+                }
+            }
+            Some(Ok(best))
+        }
+        "reduce" => {
+            if positional.len() < 2 || positional.len() > 3 {
+                return Some(Err("reduce expects 2 or 3 arguments: reduce(fn, list, initial?)".to_string()));
+            }
+            let fn_name = positional[0].to_string();
+            let items = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("reduce expects a list".to_string())),
+            };
+            let mut acc: Value;
+            let mut start_idx = 0usize;
+            if positional.len() == 3 {
+                acc = positional[2].clone();
+            } else {
+                if items.is_empty() {
+                    return Some(Err("reduce: empty list with no initial value".to_string()));
+                }
+                acc = items[0].clone();
+                start_idx = 1;
+            }
+            for it in &items[start_idx..] {
+                let args = vec![acc, it.clone()];
+                match invoke_builtin(&fn_name, &args) {
+                    Some(Ok(v)) => acc = v,
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return Some(Err(format!("reduce: function '{}' not found", fn_name))),
+                }
+            }
+            Some(Ok(acc))
+        }
+        "zip_longest" => {
+            if positional.len() < 2 || positional.len() > 3 {
+                return Some(Err("zip_longest expects 2 or 3 arguments: zip_longest(a, b, fill?)".to_string()));
+            }
+            let a = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("zip_longest expects lists".to_string())),
+            };
+            let b = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("zip_longest expects lists".to_string())),
+            };
+            let fill = positional.get(2).cloned().unwrap_or(Value::Empty);
+            let n = a.len().max(b.len());
+            let mut out = Vec::new();
+            for i in 0..n {
+                let x = a.get(i).cloned().unwrap_or_else(|| fill.clone());
+                let y = b.get(i).cloned().unwrap_or_else(|| fill.clone());
+                out.push(Value::List(vec![x, y]));
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "pairwise" => {
+            if positional.len() != 1 {
+                return Some(Err("pairwise expects exactly 1 argument (list)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("pairwise expects a list".to_string())),
+            };
+            Some(Ok(pairwise_builtin(&items)))
+        }
+        "filterfalse" => {
+            if positional.len() != 2 {
+                return Some(Err("filterfalse expects exactly 2 arguments: filterfalse(predicate, list)".to_string()));
+            }
+            let pred = positional[0].to_string();
+            let items = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("filterfalse expects a list".to_string())),
+            };
+            let mut out = Vec::new();
+            for it in &items {
+                match apply_builtin1(&pred, it) {
+                    Ok(r) if !r.to_bool() => out.push(it.clone()),
+                    Ok(_) => {}
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "compress" => {
+            if positional.len() != 2 {
+                return Some(Err("compress expects exactly 2 arguments: compress(list, selectors)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("compress expects a list".to_string())),
+            };
+            let selectors = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("compress: selectors must be a list".to_string())),
+            };
+            let mut out = Vec::new();
+            for (i, it) in items.iter().enumerate() {
+                if i < selectors.len() && selectors[i].to_bool() {
+                    out.push(it.clone());
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "starmap" => {
+            if positional.len() != 2 {
+                return Some(Err("starmap expects exactly 2 arguments: starmap(fn, list_of_lists)".to_string()));
+            }
+            let fn_name = positional[0].to_string();
+            let rows = match &positional[1] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err("starmap expects a list".to_string())),
+            };
+            let mut out = Vec::new();
+            for row in &rows {
+                let args = match row {
+                    Value::List(v) => v.clone(),
+                    _ => return Some(Err("starmap: each element must be a list of args".to_string())),
+                };
+                match invoke_builtin(&fn_name, &args) {
+                    Some(Ok(v)) => out.push(v),
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return Some(Err(format!("starmap: function '{}' not found", fn_name))),
+                }
+            }
+            Some(Ok(Value::List(out)))
+        }
+        "first" | "last" => {
+            if positional.len() != 2 {
+                return Some(Err(format!("{callee} expects exactly 2 arguments: {callee}(list, n)")));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v.clone(),
+                _ => return Some(Err(format!("{callee} expects a list"))),
+            };
+            let n = match &positional[1] {
+                Value::Int(v) if *v >= 0 => *v as usize,
+                _ => return Some(Err(format!("{callee}: n must be a non-negative integer"))),
+            };
+            Some(Ok(head_tail_builtin(&items, n, callee == "last")))
+        }
         // ── Async tasks ───────────────────────────────────────
         "task_wait" => {
             if positional.len() != 1 {
@@ -5785,6 +6672,74 @@ fn os_run_builtin(command: &str) -> Result<Value, String> {
         Value::Str(String::from_utf8_lossy(&output.stderr).to_string()),
     );
     Ok(Value::Dict(out))
+}
+
+/// Return `true` if `command` exits with status 0 (shutil-style quick check).
+fn os_run_ok_builtin(command: &str) -> Result<Value, String> {
+    #[cfg(target_os = "windows")]
+    let status = Command::new("cmd").args(["/C", command]).status();
+    #[cfg(not(target_os = "windows"))]
+    let status = Command::new("sh").args(["-c", command]).status();
+    let status = status.map_err(|e| format!("os_run_ok failed: {e}"))?;
+    Ok(Value::Bool(status.success()))
+}
+
+/// Locate an executable on PATH (shutil.which equivalent).
+fn os_which_builtin(name: &str) -> Result<Value, String> {
+    if name.contains('/') || name.contains('\\') {
+        let p = Path::new(name);
+        if p.is_file() {
+            return Ok(Value::Str(name.to_string()));
+        }
+        return Ok(Value::Empty);
+    }
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in path_var.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = format!("{}/{}", dir.trim_end_matches('/'), name);
+        let p = Path::new(&candidate);
+        if p.is_file() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = p.metadata() {
+                    if meta.permissions().mode() & 0o111 != 0 {
+                        return Ok(Value::Str(candidate));
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                return Ok(Value::Str(candidate));
+            }
+        }
+    }
+    Ok(Value::Empty)
+}
+
+/// Pair adjacent elements: pairwise([1,2,3]) → [[1,2],[2,3]].
+fn pairwise_builtin(items: &[Value]) -> Value {
+    let mut out = Vec::new();
+    for w in items.windows(2) {
+        out.push(Value::List(vec![w[0].clone(), w[1].clone()]));
+    }
+    Value::List(out)
+}
+
+/// first(list, n) / last(list, n).
+fn head_tail_builtin(items: &[Value], n: usize, from_end: bool) -> Value {
+    if items.is_empty() || n == 0 {
+        return Value::List(Vec::new());
+    }
+    let k = n.min(items.len());
+    let slice = if from_end {
+        &items[items.len() - k..]
+    } else {
+        &items[..k]
+    };
+    Value::List(slice.to_vec())
 }
 
 fn os_copy_builtin(src: &str, dst: &str) -> Result<Value, String> {
@@ -7269,6 +8224,32 @@ fn value_to_f64(name: &str, value: &Value) -> Result<f64, String> {
     value
         .as_number()
         .ok_or_else(|| format!("{name} expects numeric arguments"))
+}
+
+/// Call a builtin with a single argument. Used by the higher-order list
+/// builtins (takewhile/dropwhile/partition/group_by/max_key/min_key). Like the
+/// existing `map`/`filter`, these reach native builtins by name.
+fn apply_builtin1(fn_name: &str, arg: &Value) -> Result<Value, String> {
+    match invoke_builtin(fn_name, &[arg.clone()]) {
+        Some(Ok(v)) => Ok(v),
+        Some(Err(e)) => Err(e),
+        None => Err(format!("function '{}' not found", fn_name)),
+    }
+}
+
+fn gcd_i64(mut a: i64, mut b: i64) -> i64 {
+    if a < 0 {
+        a = -a;
+    }
+    if b < 0 {
+        b = -b;
+    }
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
 }
 
 fn math_unary_float_builtin(value: &Value, op: fn(f64) -> f64) -> Result<Value, String> {

@@ -33,13 +33,21 @@
 
 ## What's New in 1.6.1
 
-- **Colored output** — `colored(text, color)` wraps text in ANSI truecolor codes,
-  so `say colored "hi" "#ff0000"` prints in color. Accepts hex (`#RGB`/`#RRGGBB`),
-  named colors (`RED`, `green`, …), or a color variable:
+- **Colored output** — the color subsystem wraps text in ANSI truecolor codes:
+  - `fg(text, color)` / `colored(text, color)` — foreground color.
+  - `bg(text, color)` — background color.
+  - `style(text, ...)` — `bold`, `italic`, `underline`, `strikethrough`, `dim`, …
+  - `gradient(text, from, to)`, `multicolor(text, ...)`, `rainbow(text)` — and
+    `bg_*` variants for the background plane.
+  - `paint(text, fg, bg, style)` — combine everything in one call.
+  - Accepts hex (`#RGB`/`#RRGGBB`), named colors (`RED`, `green`, `gold`, …), or
+    a color variable:
   ```indent
   var accent color = "#22c55e"
-  say colored "This is green" "green"
-  say colored "This is the accent" accent
+  say fg "This is green" "green"
+  say gradient "Fade" "#ff0000" "#0000ff"
+  say bg "highlight" "#ffff00"
+  say rainbow "RAINBOW"
   ```
 - **`builtins()`** — returns a list of every available builtin (like Python's
   `dir(__builtins__)`), so you can discover what's built in.

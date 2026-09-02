@@ -1,0 +1,84 @@
+#! colors_builtins.ind — Indent 2.0 color subsystem regression test
+#! Covers: fg/bg, styles, gradients, multi-color, rainbow, paint.
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(a) + " got " + string(b)
+        process_exit 1
+
+#! helper: assert a substring is present (avoids paren-arg parse gotcha)
+fun check_contains hay needle
+    var ok = contains hay needle
+    if not ok
+        say "FAIL: missing '" + needle + "'"
+        process_exit 1
+
+#! ── foreground (fg / colored) ─────────────────────────────────────
+var f = fg "Hi" "#ff0000"
+check_contains f "38;2;255;0;0"
+check_contains f "Hi"
+var c = colored "Hi" "#00ff00"
+check_contains c "38;2;0;255;0"
+
+#! ── background (bg) ───────────────────────────────────────────────
+var b = bg "Bg" "#0000ff"
+check_contains b "48;2;0;0;255"
+check_contains b "Bg"
+
+#! ── styles ────────────────────────────────────────────────────────
+var bo = style "Bold" "bold"
+check_contains bo "[1m"
+var bo2 = style "Bi" ["bold", "italic"]
+check_contains bo2 "[1;3m"
+var st = style "Strike" "strikethrough"
+check_contains st "[9m"
+
+#! ── gradient (per-char interpolation) ─────────────────────────────
+#! "AB" from red to blue → A=red(255;0;0), B=blue(0;0;255)
+var g = gradient "AB" "#ff0000" "#0000ff"
+check_contains g "38;2;255;0;0"
+check_contains g "38;2;0;0;255"
+var bg1 = bg_gradient "AB" "#ff0000" "#0000ff"
+check_contains bg1 "48;2;255;0;0"
+check_contains bg1 "48;2;0;0;255"
+
+#! ── multicolor (cycle per char) ───────────────────────────────────
+var m = multicolor "AB" "#ff0000" "#00ff00"
+check_contains m "38;2;255;0;0"
+check_contains m "38;2;0;255;0"
+var m2 = multicolor "ABC" ["#ff0000", "#00ff00"]
+check_contains m2 "38;2;255;0;0"
+var mb = bg_multicolor "AB" "#ff0000" "#00ff00"
+check_contains mb "48;2;255;0;0"
+
+#! ── rainbow ───────────────────────────────────────────────────────
+var r = rainbow "HI"
+check_contains r "38;2;255;77;77"    #! H = red
+check_contains r "38;2;251;146;60"   #! I = orange
+var rb = bg_rainbow "HI"
+check_contains rb "48;2;255;77;77"
+
+#! ── paint (combined fg + bg + style) ──────────────────────────────
+var p = paint "X" "#ff0000" "#00ff00" "bold"
+check_contains p "[1;38;2;255;0;0;48;2;0;255;0"
+var p2 = paint "X" "" "#111111" ""
+check_contains p2 "48;2;17;17;17"
+var p3 = paint "X" "#ffffff" "" ["bold", "underline"]
+check_contains p3 "1;4;38;2;255;255;255"
+
+#! ── extended named colors ─────────────────────────────────────────
+var gold = fg "g" "gold"
+check_contains gold "38;2;251;191;36"
+var tealv = fg "t" "teal"
+check_contains tealv "38;2;20;184;166"
+
+#! ── visible output (real terminal shows color) ────────────────────
+say fg "foreground red" "#ff0000"
+say bg "background blue" "#0000ff"
+say style "bold + italic" ["bold", "italic"]
+say gradient "Gradient Text" "#ff0000" "#0000ff"
+say multicolor "MultiColor" "#ff0000" "#00ff00" "#0000ff"
+say rainbow "RAINBOW"
+say paint "Painted" "#ffffff" "#222222" ["bold", "underline"]
+say fg "done" "green"
+
+say "colors: ALL PASS"

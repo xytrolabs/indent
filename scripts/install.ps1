@@ -6,7 +6,7 @@
 #   powershell -c "irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex"
 #
 # Specific version:
-#   powershell -c "`$v='v2.3.0'; irm ... | iex"
+#   powershell -c "`$v='v2.0.0'; irm ... | iex"
 #
 # Local install:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Local

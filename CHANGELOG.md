@@ -1,6 +1,51 @@
 # Indent Changelog
 
-## 1.6.2 — 2026-08-31 (Organized builtins + type checks + debug pkg + errors)
+## 2.0 — 2026-09-01 (Color subsystem — gradients, backgrounds, styles)
+
+### 🎨 Full color subsystem (truecolor)
+The `colored(text, color)` builtin grew into a complete color API:
+- `fg(text, color)` / `colored(text, color)` — foreground color.
+- `bg(text, color)` — background color (`48;2;r;g;b`).
+- `style(text, style, ...)` — `bold`, `dim`, `italic`, `underline`, `blink`,
+  `reverse`, `strikethrough` (also accepts a list of styles).
+- `gradient(text, from, to)` / `bg_gradient(text, from, to)` — per-character
+  linear color gradient (foreground or background).
+- `multicolor(text, color, ...)` / `bg_multicolor(text, color, ...)` — cycle
+  colors per character (also accepts a list of colors).
+- `rainbow(text)` / `bg_rainbow(text)` — classic 7-color rainbow.
+- `paint(text, fg, bg, style)` — combine foreground, background and styles in
+  one call; pass `""`/`[]` to skip any component.
+- Extended named palette: `GRAY/GREY`, `SILVER`, `MAROON`, `OLIVE`, `LIME`,
+  `TEAL`, `NAVY`, `FUCHSIA`, `BROWN`, `GOLD`, `CORAL`, `SALMON`, `SKY`,
+  `INDIGO`, `VIOLET`, `AMBER`, `EMERALD`, `SLATE`, `ZINC` added.
+- Test: `tests/colors_builtins.ind`.
+
+### 🧰 Std-lib breadth (itertools / functools / collections)
+Added higher-order list builtins (all additive, no new syntax):
+- **itertools-style**: `chain`, `flatten`, `chunk`, `product`, `permutations`,
+  `combinations`, `accumulate`, `cycle`, `repeat_item`, `takewhile`,
+  `dropwhile`.
+- **collections-style**: `unique`, `partition`, `group_by`, `max_key`, `min_key`.
+- **functools-style**: `reduce(fn, list, initial?)`.
+- Higher-order builtins call native builtins by name (matching `map`/`filter`),
+  e.g. `reduce "add_int" [1,2,3,4]` → `10`, `max_key ["a","bb"] "len"` → `"bb"`.
+- Test: `tests/stdlib_breadth_builtins.ind`.
+
+### 🔢 Math extras
+- Constants: `math_pi`, `math_e`, `math_tau`.
+- `math_factorial`, `math_gcd` (also accepts a list), `math_lcm`, `math_hypot`,
+  `math_log2`, `math_degrees`, `math_radians`.
+
+### 🎲 Random extras
+- `random_randint(a, b)` (int in `[a,b]`), `random_uniform(a, b)` (float),
+  `random_sample(list, k)` (k distinct elements, no replacement).
+
+### 🧰 Final additive batch (pre-2.0.0)
+- `os_which(command)` (shutil.which), `os_run_ok(command)` (bool exit status).
+- More itertools: `zip_longest`, `pairwise`, `filterfalse`, `compress`, `starmap`.
+- `first(list, n)` / `last(list, n)`.
+- Test: `tests/final_builtins.ind`.
+
 
 ### 🗂 `builtins()` returns an organized dict
 - `builtins()` now returns `{category: [names]}` grouped by category instead of a
