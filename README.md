@@ -1,4 +1,4 @@
-# Indent Language (.ind) v1.5.0
+# Indent Language (.ind) v2.0.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -6,6 +6,14 @@ Indent is a simple, readable programming language. No braces, no parentheses, no
 var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
+
+> ### 🎉 What's New in 2.0.0
+> - 🎨 **Full color output** — `fg`, `bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`
+> - 🧰 **Std-lib breadth** — itertools/functools/collections helpers, math & random extras, `os_which`, `os_run_ok`
+> - 🧩 **Class special methods** (natural names: `to_string`, `add`, `equals`, `len`, `get_item`, `contains`) + **`dataclass`**
+> - ⚙️ **Generators / `yield`** — iterate with `for`, materialize with `to_list`, test with `is_generator`
+> - 🛠 `not <funcCall args>` parse fix
+> - See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ---
 
@@ -92,8 +100,18 @@ Indent reads like English. `fun` defines a function. `give` returns a value. `re
 - **Identity**: `x is empty`, `x is not y`
 - **Membership**: `"banana" in fruits`
 
-### Built-in Functions (130+)
-String ops, list/group/dict ops, math, random, time, regex, JSON, HTTP, WebSocket, file I/O, OS, crypto, path helpers, functional (`map`, `filter`), assertions. See [`docs/quick-reference.md`](docs/quick-reference.md).
+### Colors (truecolor terminal output)
+```indent
+say fg "red text" "#ff0000"
+say bg "highlighted" "yellow"
+say gradient "smooth fade" "#ff0000" "#0000ff"
+say rainbow "RAINBOW"
+say style "bold" "bold"
+say paint "styled" "#ffffff" "#222222" ["bold", "underline"]
+```
+
+### Built-in Functions (280+)
+String ops, list/group/dict ops, math, random, time, regex, JSON, HTTP, WebSocket, file I/O, OS, crypto, path helpers, functional (`map`, `filter`, `reduce`, `chain`, `group_by`, …), **colors** (`fg`/`bg`/`style`/`gradient`/`rainbow`/`paint`), **generators** (`is_generator`, `to_list`), assertions. See [`docs/builtins-reference.md`](docs/builtins-reference.md).
 
 ### Classes
 ```indent
@@ -105,6 +123,49 @@ class Person
 
 var p dynamic = Person "Ada" 28
 p.greet()
+```
+
+### Class special methods (natural names)
+Instead of Python's `__str__`/`__add__`/`__eq__`, Indent uses plain-English method names the runtime calls automatically:
+```indent
+class Vector
+    var x int
+    var y int
+    fun to_string        #! used by say / print
+        give "Vector(" + string(x) + ", " + string(y) + ")"
+    fun add other        #! used by +
+        give Vector(x + other.x, y + other.y)
+    fun equals other     #! used by == and !=
+        give x == other.x
+
+say Vector(3, 4) + Vector(1, 2)   # → Vector(4, 6)
+```
+Also supported: `subtract`, `multiply`, `divide`, `len`, `get_item`, `contains`.
+
+### dataclass
+`dataclass Name` is like `class`, but auto-generates `to_string` and `equals`:
+```indent
+dataclass Point
+    var px int
+    var py int
+
+say Point(1, 2)                    # → Point(px: 1, py: 2)
+say Point(1,2) == Point(1,2)       # → TRUE
+```
+
+### Generators / `yield`
+A function containing `yield` is a generator — iterate it with `for`:
+```indent
+fun countdown n
+    yield n
+    yield n - 1
+    yield n - 2
+
+for x in countdown 3    # 3, 2, 1
+    say x
+
+to_list (countdown 3)   # → [3, 2, 1]
+is_generator g          # → TRUE
 ```
 
 ### Tooling
@@ -226,6 +287,7 @@ Working programs in [`examples/`](examples/): AI package demo (`ai_pkg.ind`), AI
 | [`docs/learn/01-quickstart.md`](docs/learn/01-quickstart.md) | 15-minute quickstart |
 | [`docs/learn/COURSE_INDEX.md`](docs/learn/COURSE_INDEX.md) | Full course (11 lessons) |
 | [`docs/packages-reference.md`](docs/packages-reference.md) | Registry package reference |
+| [`docs/known-limitations.md`](docs/known-limitations.md) | Known limitations & gotchas |
 | [`CHANGELOG.md`](CHANGELOG.md) | Version history |
 
 ### First-party package docs (Xytro-maintained)
