@@ -803,6 +803,50 @@ fn is_missing_value(value: &Value) -> bool {
     }
 }
 
+/// Whether a single statement (recursively) contains a `yield`, marking the
+/// enclosing function as a generator.
+fn stmt_contain_yield(s: &Stmt) -> bool {
+    match s {
+        Stmt::Yield { .. } => true,
+        Stmt::IfChain { branches, .. } => branches.iter().any(|(_, b)| stmts_contain_yield(b)),
+        Stmt::Match { branches, otherwise_body, .. } => {
+            branches.iter().any(|(_, b)| stmts_contain_yield(b))
+                || otherwise_body.as_ref().map_or(false, |b| stmts_contain_yield(b))
+        }
+        Stmt::DoChain { do_body, catches, otherwise_body, lastly_body, .. } => {
+            stmts_contain_yield(do_body)
+                || catches.iter().any(|(_, b)| stmts_contain_yield(b))
+                || otherwise_body.as_ref().map_or(false, |b| stmts_contain_yield(b))
+                || lastly_body.as_ref().map_or(false, |b| stmts_contain_yield(b))
+        }
+        Stmt::Repeat { body, .. } => stmts_contain_yield(body),
+        Stmt::Loop { body, .. } => stmts_contain_yield(body),
+        Stmt::AsyncWith { body, .. } => stmts_contain_yield(body),
+        Stmt::Open { body, .. } => stmts_contain_yield(body),
+        Stmt::Decorator { target, .. } => stmt_contain_yield(target),
+        _ => false,
+    }
+}
+
+fn stmts_contain_yield(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contain_yield)
+}
+
+/// Convert an iterable (list, set, or generator) into its items.
+fn iterable_items(value: &Value) -> Option<Vec<Value>> {
+    match value {
+        Value::List(v) => Some(v.clone()),
+        Value::Set(v) => Some(v.clone()),
+        Value::Dict(m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
+            match m.get("__gen_values__") {
+                Some(Value::List(v)) => Some(v.clone()),
+                _ => Some(Vec::new()),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Interpolate %varname% placeholders in a string with values from the execution context.
 fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
     let mut out = String::with_capacity(s.len());
@@ -1096,11 +1140,18 @@ fn arrow_style_empty() -> String {
 struct ExecContext<'a> {
     rt: &'a mut Runtime,
     frames: Vec<HashMap<String, Value>>,
+    collect_yields: bool,
+    yielded_values: Vec<Value>,
 }
 
 impl<'a> ExecContext<'a> {
     fn new(rt: &'a mut Runtime) -> Self {
-        Self { rt, frames: vec![] }
+        Self {
+            rt,
+            frames: vec![],
+            collect_yields: false,
+            yielded_values: vec![],
+        }
     }
 
     fn push_frame(&mut self) {
@@ -1159,8 +1210,12 @@ fn exec_block(body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, Strin
         match control {
             Control::None => {}
             Control::Yield(v) => {
-                // In a generator context, accumulate and continue
-                // For now, propagate yield up to the function caller
+                // In a generator body, record the yielded value and keep
+                // executing so every `yield` is collected. Otherwise propagate.
+                if ctx.collect_yields {
+                    ctx.yielded_values.push(v);
+                    continue;
+                }
                 return Ok(Control::Yield(v));
             }
             _ => return Ok(control),
@@ -1249,7 +1304,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                             params: params.clone(),
                             return_type: None,
                             body: body.clone(),
-                            is_generator: false,
+                            is_generator: stmts_contain_yield(body),
                         },
                     );
                 }
@@ -1780,10 +1835,9 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
         }
         RepeatMode::ForEach(expr) => {
             let iterable = eval_expr(expr, ctx)?;
-            let items = match iterable {
-                Value::List(v) => v,
-                Value::Set(v) => v,
-                _ => return Err("Repeat for expects a list or set".to_string()),
+            let items = match iterable_items(&iterable) {
+                Some(v) => v,
+                None => return Err("Repeat for expects a list, set, or generator".to_string()),
             };
             let mut reps = 0usize;
             for item in items {
@@ -1801,10 +1855,9 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
             iterable_expr,
         } => {
             let iterable = eval_expr(iterable_expr, ctx)?;
-            let items = match iterable {
-                Value::List(v) => v,
-                Value::Set(v) => v,
-                _ => return Err("Repeat for <Item> in expects a list or set".to_string()),
+            let items = match iterable_items(&iterable) {
+                Some(v) => v,
+                None => return Err("Repeat for <Item> in expects a list, set, or generator".to_string()),
             };
             let mut reps = 0usize;
             for item in items {
@@ -2608,26 +2661,17 @@ fn invoke_function(
     }
 
     let output = if f.is_generator {
-        // Generator: execute body, collect all yields into a list
-        let mut yielded_values = Vec::new();
-        loop {
-            match exec_block(&f.body, ctx)? {
-                Control::Yield(v) => {
-                    yielded_values.push(v);
-                    // Continue collecting — generators yield multiple values
-                    // Simple model: yield from top-level only, no re-entry
-                    // For now, break after first yield (simplified generator)
-                    break;
-                }
-                Control::Return(v) => {
-                    yielded_values.push(v);
-                    break;
-                }
-                Control::None => break,
-                _ => return Err("STOP/NEXT/RESET cannot be used outside a loop".to_string()),
-            }
-        }
-        Ok(Value::List(yielded_values))
+        // Generator: run the body once, collecting every `yield` into a list,
+        // then wrap them in a Generator value that `for` can iterate.
+        ctx.collect_yields = true;
+        ctx.yielded_values = Vec::new();
+        let _ = exec_block(&f.body, ctx)?;
+        ctx.collect_yields = false;
+        let values = std::mem::take(&mut ctx.yielded_values);
+        let mut g = HashMap::new();
+        g.insert("__generator__".to_string(), Value::Bool(true));
+        g.insert("__gen_values__".to_string(), Value::List(values));
+        Ok(Value::Dict(g))
     } else {
         match exec_block(&f.body, ctx)? {
             Control::Return(v) => {
@@ -2846,9 +2890,9 @@ const INDENT_BUILTINS: &[&str] = &[
     "sys_argv", "sys_executable", "sys_platform", "sys_version", "task_done",
     "task_result", "task_wait", "task_wait_all", "task_wait_timeout", "time_format",
     "time_now", "time_parse", "time_perf_counter", "time_sleep", "time_utc",
-    "title", "toml_dumps", "toml_loads", "trim", "true", "try", "type_of", "typeof",
+    "title", "to_list", "toml_dumps", "toml_loads", "trim", "true", "try", "type_of", "typeof",
     "is_list", "is_dict", "is_string", "is_number", "is_int", "is_float", "is_bool", "is_group",
-    "unwrap", "upper", "uuid", "values", "walk", "ws_close", "ws_connect",
+    "is_generator", "unwrap", "upper", "uuid", "values", "walk", "ws_close", "ws_connect",
     "ws_recv_text", "ws_recv_text_timeout", "ws_send_text", "yaml_dumps",
     "yaml_loads", "zip", "zip_extract", "zip_list",
 ];
@@ -3017,7 +3061,7 @@ fn builtin_category(name: &str) -> &'static str {
     if name.starts_with("dict_") || matches!(name, "keys" | "values" | "items" | "has_key") { return "dict"; }
     if matches!(name, "ok" | "err" | "is_ok" | "is_err" | "unwrap" | "try") { return "result"; }
     if matches!(name, "is_list" | "is_dict" | "is_string" | "is_number" | "is_int"
-        | "is_float" | "is_bool" | "is_group" | "type_of" | "typeof" | "type_name") {
+        | "is_float" | "is_bool" | "is_group" | "is_generator" | "type_of" | "typeof" | "type_name") {
         return "types";
     }
 
@@ -3032,7 +3076,7 @@ fn builtin_category(name: &str) -> &'static str {
         | "product" | "permutations" | "combinations" | "accumulate" | "cycle"
         | "repeat_item" | "takewhile" | "dropwhile" | "unique" | "partition" | "group_by"
         | "max_key" | "min_key" | "reduce" | "zip_longest" | "pairwise"
-        | "filterfalse" | "compress" | "starmap" | "first" | "last" => "list",
+        | "filterfalse" | "compress" | "starmap" | "first" | "last" | "to_list" => "list",
         "abs" | "int" | "float" | "int_or" | "float_or" | "between_int" | "is_even"
         | "is_odd" | "inc" | "dec" | "add_int" | "sub_int" | "mul_int" | "div_int"
         | "mod_int" | "bool" | "boolean" | "clamp" | "counter" => "math",
@@ -4851,7 +4895,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             Some(Ok(Value::Str(ty.to_string())))
         }
         "is_list" | "is_dict" | "is_string" | "is_number" | "is_int" | "is_float"
-        | "is_bool" | "is_group" => {
+        | "is_bool" | "is_group" | "is_generator" => {
             if positional.len() != 1 {
                 return Some(Err(format!("{} expects exactly 1 argument", callee)));
             }
@@ -4863,10 +4907,23 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 "is_float" => matches!(positional[0], Value::Float(_)),
                 "is_bool" => matches!(positional[0], Value::Bool(_)),
                 "is_group" => matches!(positional[0], Value::Set(_)),
+                "is_generator" => matches!(&positional[0], Value::Dict(m) if m.get("__generator__").map_or(false, |v| v.to_bool())),
                 "is_number" => matches!(positional[0], Value::Int(_) | Value::Float(_)),
                 _ => false,
             };
             Some(Ok(Value::Bool(matches)))
+        }
+        "to_list" => {
+            if positional.len() != 1 {
+                return Some(Err("to_list expects exactly 1 argument".to_string()));
+            }
+            match iterable_items(&positional[0]) {
+                Some(v) => Some(Ok(Value::List(v))),
+                None => Some(Err(format!(
+                    "to_list expects a list, set, or generator, got {}",
+                    positional[0].type_name()
+                ))),
+            }
         }
         "http_get" => {
             if positional.is_empty() || positional.len() > 2 {
@@ -11149,8 +11206,8 @@ impl Parser {
                     name,
                     params,
                     return_type,
-                    body,
-                    is_generator: false,
+                    body: body.clone(),
+                    is_generator: stmts_contain_yield(&body),
                     is_async: def_is_async,
                 });
             }
@@ -11215,8 +11272,8 @@ impl Parser {
                 name,
                 params,
                 return_type,
-                body,
-                is_generator: false,
+                body: body.clone(),
+                is_generator: stmts_contain_yield(&body),
                 is_async: def_is_async,
             });
         }

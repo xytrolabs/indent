@@ -6,9 +6,11 @@ you know what to expect (and what not to fight).
 
 ## Language
 
-- **Generators / `yield` are not yet implemented.** `yield` is only a stub and
-  stops after the first value. Lazy iteration over large/infinite sequences is
-  a planned future feature, not something you can rely on today.
+- **Generators are finite and eager.** Functions that `yield` work and can be
+  iterated with `for` (also `is_generator(gen)` and `to_list(gen)`), but the
+  values are collected up-front — there is **no true lazy/resumable execution
+  yet**. Infinite sequences and stateful lazy iteration are a planned future
+  feature, not something you can rely on today.
 - **No decorators, properties, or `dataclass` field validation.** Classes
   support single inheritance, fields, methods, and the natural-name special
   methods (`to_string`, `equals`, `add`, …), but not Python-style decorators or

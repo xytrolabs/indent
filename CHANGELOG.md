@@ -61,6 +61,15 @@ Added higher-order list builtins (all additive, no new syntax):
   `not ` before the space-separated-call rewrite. `x not in y` unaffected.
 - Test: `tests/not_call_builtins.ind`.
 
+### ⚙️ Generators / `yield`
+- A function containing `yield` is a **generator**: calling it returns a
+  generator you can iterate with `for x in gen`, materialize with
+  `to_list(gen)`, or test with `is_generator(gen)`.
+- Supports multiple `yield`s and `yield` inside loops. (Finite/eager for now;
+  lazy/infinite generators are a documented follow-on.)
+- `is_generator` added to the type-check helpers.
+- Test: `tests/generators_builtins.ind`.
+
 
 ### 🗂 `builtins()` returns an organized dict
 - `builtins()` now returns `{category: [names]}` grouped by category instead of a

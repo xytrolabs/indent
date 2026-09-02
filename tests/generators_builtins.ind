@@ -1,0 +1,69 @@
+#! generators_builtins.ind — Indent 2.0 generators / yield
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check_eq got expected
+    var ok = got == expected
+    if not ok
+        var msg = "expected '" + expected + "' got '" + got + "'"
+        fail msg
+
+fun check cond
+    if not cond
+        fail "assertion failed"
+
+#! generator with multiple top-level yields
+fun countdown n
+    yield n
+    var n1 = n - 1
+    yield n1
+    var n2 = n1 - 1
+    yield n2
+
+var g = countdown 3
+var total = 0
+for x in g
+    total += x
+#! 3 + 2 + 1 = 6
+check_eq (string(total)) "6"
+
+#! generator with yields inside a loop
+fun range_gen start end
+    var i = start
+    while i < end
+        yield i
+        i += 1
+
+var g2 = range_gen 1 4
+var sum2 = 0
+for y in g2
+    sum2 += y
+#! 1 + 2 + 3 = 6
+check_eq (string(sum2)) "6"
+
+#! is_generator
+var isGen = is_generator g
+check (isGen)
+var isList = is_list g
+var notList = not isList
+check (notList)
+
+#! to_list materializes a generator
+var lst = to_list g2
+check_eq (string(lst)) "[1, 2, 3]"
+
+#! empty generator iterates zero times
+fun empty_gen
+    var a = 1
+    #! no yield — not actually a generator
+    give a
+
+var ran = false
+var e = empty_gen
+var eIsGen = is_generator e
+var notGen = not eIsGen
+check (notGen)
+
+say "generators: ALL PASS"
