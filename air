@@ -8,6 +8,7 @@ AIR_PACKAGES="${AIR_HOME}/air-packages"
 AIR_CACHE="${AIR_HOME}/air-cache"
 AIR_REGISTRY="${AIR_REGISTRY:-https://raw.githubusercontent.com/xytrolabs/air/main}"
 AIR_INDEX="${AIR_REGISTRY}/packages/index.txt"
+AIR_DELIVERY_INDEX="${AIR_REGISTRY}/deliveries/index.txt"
 AIR_CONFIG="${AIR_HOME}/air.conf"
 
 # ── Help ────────────────────────────────────────────────────────────
@@ -37,6 +38,15 @@ Examples:
   air search json                  Find json-related packages
   air list                         Show what's installed
   air info math                    Show package metadata
+
+Deliveries (share a whole project as one bundle of packages):
+  air delivery init                Scaffold an air-delivery.toml in this dir
+  air delivery build [dir] [out]   Bundle a project into <name>-<ver>.del
+  air delivery install <src>       Install a delivery (name | file | dir | url)
+  air delivery publish <file> [registry]  Stage a .del into a registry checkout
+  air delivery search <q>          Search the registry for deliveries
+  air delivery list                List registry deliveries
+  air delivery info <name>         Show a registry delivery
 EOF
 }
 
@@ -478,6 +488,400 @@ auto_install_deps() {
   done < "$pkg_file"
 }
 
+# ═══════════════════════════════════════════════════════════════════
+#  DELIVERIES — share a whole project as a bundle of packages
+#
+#  A "Delivery" packages an entire Indent project into ONE distributable
+#  <name>-<version>.del archive (a .tar.gz). Inside it holds:
+#    air-delivery.toml       the manifest (name/version/description)
+#    modules/<import>.ind    module files -> each becomes an importable
+#                            package once installed (get X from <import>)
+#    entry/<file>            optional runnable entry point (kept local)
+#    [dependencies]          registry packages pulled in automatically
+#
+#  So a module is a file, a package is an importable bundle of functions,
+#  and a Delivery is a group of packages you can share/install as a unit.
+# ═══════════════════════════════════════════════════════════════════
+
+DLV_MANIFEST="air-delivery.toml"
+
+# Read  key = "value"  under a TOML [section].
+manifest_get() {
+  local file="$1" section="$2" key="$3"
+  awk -v sec="[$section]" -v key="$key" '
+    /^[[:space:]]*\[/ { cur=$0; gsub(/[ \t]/,"",cur); next }
+    cur==sec && $0 ~ "^[ \t]*"key"[ \t]*=" {
+      sub(/^[ \t]*[^=]*=[ \t]*/, ""); gsub(/^"|"$/, ""); gsub(/[ \t]+$/,""); print; exit }
+  ' "$file"
+}
+
+# Print every  key = value  line under a [section] as "key=value".
+manifest_section() {
+  local file="$1" section="$2"
+  awk -v sec="[$section]" '
+    /^[[:space:]]*\[/ { cur=$0; gsub(/[ \t]/,"",cur); next }
+    cur==sec && /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=/ {
+      sub(/^[ \t]*/, ""); print }
+  ' "$file"
+}
+
+cmd_delivery_init() {
+  if [[ -f "$DLV_MANIFEST" ]]; then
+    echo "air-delivery.toml already exists"
+    return
+  fi
+  local default_name
+  default_name="$(basename "$(pwd)")"
+  cat > "$DLV_MANIFEST" <<EOF
+# $DLV_MANIFEST — declares a Delivery (a whole project shared as one bundle)
+# Build with:  air delivery build
+[delivery]
+name = "$default_name"
+version = "0.1.0"
+description = "An Indent project delivered as one unit"
+
+# [entry] main = runnable entry point (optional; kept local, not imported)
+[entry]
+
+# [modules] <importName> = <path-to-.ind-file>
+# Each becomes importable once the Delivery is installed:
+#   get <Function> from <importName>
+[modules]
+# mylib = "src/mylib.ind"
+
+# [dependencies] <registryPackage> = "version"
+[dependencies]
+EOF
+  echo "✅ Created $DLV_MANIFEST — add module files under [modules], then:"
+  echo "   air delivery build"
+}
+
+# Build a .del archive from a directory containing air-delivery.toml.
+cmd_delivery_build() {
+  local dir="${1:-.}"
+  local out="${2:-$dir/dist}"
+  local mf="$dir/$DLV_MANIFEST"
+  if [[ ! -f "$mf" ]]; then
+    echo "✗ No $DLV_MANIFEST in $dir (run 'air delivery init')" >&2
+    exit 1
+  fi
+
+  local name ver desc
+  name="$(manifest_get "$mf" delivery name)"
+  ver="$(manifest_get "$mf" delivery version)"
+  desc="$(manifest_get "$mf" delivery description)"
+  if [[ -z "$name" ]]; then echo "✗ [delivery] name is required" >&2; exit 1; fi
+  [[ -z "$ver" ]] && ver="0.0.0"
+
+  # Validate module + entry files exist
+  local missing=0 kv key path
+  while IFS= read -r kv; do
+    [[ -z "$kv" ]] && continue
+    key="${kv%%=*}"; path="${kv#*=}"
+    key="$(echo "$key" | xargs)"; path="$(echo "$path" | xargs)"
+    [[ -z "$path" ]] && continue
+    if [[ ! -f "$dir/$path" ]]; then
+      echo "✗ module file not found: $path" >&2; missing=1
+    fi
+  done < <(manifest_section "$mf" modules)
+  local entry_path
+  entry_path="$(manifest_get "$mf" entry main)"
+  if [[ -n "$entry_path" && ! -f "$dir/$entry_path" ]]; then
+    echo "✗ entry not found: $entry_path" >&2; missing=1
+  fi
+  [[ $missing -eq 1 ]] && exit 1
+
+  # Stage
+  mkdir -p "$out"
+  local stage="$out/$name-$ver"
+  rm -rf "$stage"
+  mkdir -p "$stage/modules" "$stage/entry"
+  cp "$mf" "$stage/$DLV_MANIFEST"
+
+  while IFS= read -r kv; do
+    [[ -z "$kv" ]] && continue
+    key="${kv%%=*}"; path="${kv#*=}"
+    key="$(echo "$key" | xargs)"; path="$(echo "$path" | xargs)"
+    [[ -z "$path" ]] && continue
+    cp "$dir/$path" "$stage/modules/$key.ind"
+  done < <(manifest_section "$mf" modules)
+
+  if [[ -n "$entry_path" ]]; then
+    cp "$dir/$entry_path" "$stage/entry/$(basename "$entry_path")"
+  fi
+
+  local tarball="$out/$name-$ver.del"
+  ( cd "$out" && tar -czf "$(basename "$tarball")" "$name-$ver" )
+  local sha; sha="$(sha256sum "$tarball" | awk '{print $1}')"
+
+  echo "✅ Built delivery $name $ver"
+  [[ -n "$desc" ]] && echo "   $desc"
+  echo "   Archive: $tarball"
+  echo "   SHA256:  $sha"
+  echo "   Modules in this Delivery:"
+  local modpath
+  while IFS= read -r kv; do
+    [[ -z "$kv" ]] && continue
+    key="${kv%%=*}"; path="${kv#*=}"
+    key="$(echo "$key" | xargs)"; path="$(echo "$path" | xargs)"
+    [[ -z "$path" ]] && continue
+    modpath="$(echo "$path" | sed 's#^\./##; s#.*/##')"
+    echo "     • ${key}.ind  ←  $path"
+  done < <(manifest_section "$mf" modules)
+  rm -rf "$stage"
+}
+
+# Resolve a delivery source to a local .del archive path, echoing it.
+delivery_resolve_archive() {
+  local src="$1"
+  if [[ -f "$src" && "$src" == *.del ]]; then
+    echo "$src"; return 0
+  fi
+  if [[ -d "$src" && -f "$src/$DLV_MANIFEST" ]]; then
+    # Build it on the fly into a temp out dir
+    local tmpout
+    tmpout="$(mktemp -d)"
+    cmd_delivery_build "$src" "$tmpout" >/dev/null || return 1
+    echo "$tmpout"/*.del
+    return 0
+  fi
+  # Treat as a registry name
+  local index_data line
+  index_data="$(fetch_index "$AIR_DELIVERY_INDEX")" || exit 1
+  line="$(echo "$index_data" | awk -F'|' -v n="$src" '
+    /^[[:space:]]*#/ { next }
+    { gsub(/^[ \t]+|[ \t]+$/, "", $1); if ($1==n) { print; exit } }')"
+  if [[ -z "$line" ]]; then
+    echo "✗ Delivery '$src' not found in registry" >&2; exit 1
+  fi
+  local rel sha
+  rel="$(echo "$line" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
+  sha="$(echo "$line" | awk -F'|' 'NF>=3 {gsub(/^[ \t]+|[ \t]+$/, "", $3); print $3}')"
+  # Index lives in deliveries/index.txt; archive sources are relative to the
+  # deliveries/ dir (mirrors how packages resolve under packages/).
+  local url="$rel"
+  [[ "$url" =~ ^https?:// ]] || url="${AIR_REGISTRY}/deliveries/${rel#./}"
+  if [[ "$url" =~ ^https?:// ]]; then
+    local tmp; tmp="$(mktemp -d)"
+    local arc="$tmp/$(basename "$url")"
+    if ! curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$arc"; then
+      echo "✗ Failed to download delivery: $url" >&2; rm -rf "$tmp"; exit 1
+    fi
+    if [[ "$sha" =~ ^[a-f0-9]{64}$ ]]; then
+      local got; got="$(sha256sum "$arc" | awk '{print $1}')"
+      if [[ "$sha" != "$got" ]]; then
+        echo "⚠ SHA256 mismatch for delivery" >&2; rm -rf "$tmp"; exit 1
+      fi
+    fi
+    echo "$arc"
+  else
+    # Local registry path (e.g. AIR_REGISTRY points at a checkout)
+    if [[ ! -f "$url" ]]; then
+      echo "✗ Delivery archive not found: $url" >&2; exit 1
+    fi
+    echo "$url"
+  fi
+}
+
+cmd_delivery_install() {
+  load_config
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air delivery install <name|file.del|dir|url>" >&2; exit 1
+  fi
+  local src="$1"
+  local arc
+  arc="$(delivery_resolve_archive "$src")" || exit 1
+
+  local tmp
+  tmp="$(mktemp -d)"
+  tar -xzf "$arc" -C "$tmp"
+  # Locate the manifest inside (archive has a <name>-<ver>/ root folder)
+  local mf name ver
+  mf="$(find "$tmp" -maxdepth 2 -name "$DLV_MANIFEST" | head -n1)"
+  if [[ -z "$mf" ]]; then
+    echo "✗ Not a valid Delivery (no $DLV_MANIFEST inside)" >&2
+    rm -rf "$tmp"; exit 1
+  fi
+  local root
+  root="$(dirname "$mf")"
+  name="$(manifest_get "$mf" delivery name)"
+  ver="$(manifest_get "$mf" delivery version)"
+  [[ -z "$ver" ]] && ver="0.0.0"
+  echo "📦 Installing delivery ${name} ${ver}..."
+  local desc
+  desc="$(manifest_get "$mf" delivery description)"
+  [[ -n "$desc" ]] && echo "   $desc"
+
+  mkdir -p "$AIR_PACKAGES" "${AIR_HOME}/deliveries"
+
+  # 1) Modules -> importable packages in air-packages
+  local installed="${AIR_HOME}/installed.txt"
+  touch "$installed"
+  local modfile cnt=0
+  for modfile in "$root"/modules/*.ind; do
+    [[ -e "$modfile" ]] || continue
+    local modname
+    modname="$(basename "$modfile" .ind)"
+    cp "$modfile" "$AIR_PACKAGES/$modname.ind"
+    local modsha; modsha="$(sha256sum "$AIR_PACKAGES/$modname.ind" | awk '{print $1}')"
+    grep -v "^${modname}|" "$installed" > "${installed}.tmp" 2>/dev/null || true
+    mv "${installed}.tmp" "$installed" 2>/dev/null || true
+    echo "${modname}|delivery:${name}@${ver}|${modsha}|$(date -Iseconds)" >> "$installed"
+    echo "   • module ${modname} → ${AIR_PACKAGES}/${modname}.ind"
+    cnt=$((cnt + 1))
+  done
+  if [[ $cnt -eq 0 ]]; then echo "   (no importable modules in this Delivery)"; fi
+
+  # 2) Entry point (optional) kept local under deliveries/<name>-<ver>/
+  local entry_path
+  entry_path="$(manifest_get "$mf" entry main)"
+  if [[ -n "$entry_path" ]]; then
+    local appdir="${AIR_HOME}/deliveries/${name}-${ver}"
+    mkdir -p "$appdir"
+    cp "$root/entry/$(basename "$entry_path")" "$appdir/" 2>/dev/null || true
+    echo "   • entry → ${appdir}/$(basename "$entry_path")"
+  fi
+
+  # 3) Dependencies
+  local depkv depname
+  while IFS= read -r depkv; do
+    [[ -z "$depkv" ]] && continue
+    depname="${depkv%%=*}"; depname="$(echo "$depname" | xargs)"
+    if [[ -f "$installed" ]] && grep -q "^${depname}|" "$installed" 2>/dev/null; then
+      echo "   • dep ${depname} (already installed)"
+    else
+      echo "   • installing dependency ${depname}..."
+      cmd_install "$depname" || echo "   ⚠ could not install dependency ${depname}"
+    fi
+  done < <(manifest_section "$mf" dependencies)
+
+  # Record delivery
+  local dlv_file="${AIR_HOME}/deliveries.txt"
+  touch "$dlv_file"
+  grep -v "^${name}|" "$dlv_file" > "${dlv_file}.tmp" 2>/dev/null || true
+  mv "${dlv_file}.tmp" "$dlv_file" 2>/dev/null || true
+  echo "${name}|${ver}|$(date -Iseconds)" >> "$dlv_file"
+
+  rm -rf "$tmp"
+  echo "✅ Installed delivery ${name} ${ver}"
+}
+
+# Stage a built .del into a local registry checkout (then commit + push).
+cmd_delivery_publish() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air delivery publish <file.del> [registry-dir]" >&2; exit 1
+  fi
+  local arc="$1"
+  if [[ ! -f "$arc" ]]; then echo "✗ Delivery file not found: $arc" >&2; exit 1; fi
+
+  local reg="${2:-.}"
+  local mf tmp name ver desc
+  tmp="$(mktemp -d)"
+  tar -xzf "$arc" -C "$tmp"
+  mf="$(find "$tmp" -maxdepth 2 -name "$DLV_MANIFEST" | head -n1)"
+  if [[ -z "$mf" ]]; then echo "✗ Not a valid Delivery archive" >&2; rm -rf "$tmp"; exit 1; fi
+  name="$(manifest_get "$mf" delivery name)"
+  ver="$(manifest_get "$mf" delivery version)"
+  desc="$(manifest_get "$mf" delivery description)"
+  rm -rf "$tmp"
+  [[ -z "$name" || -z "$ver" ]] && { echo "✗ Delivery must declare name and version" >&2; exit 1; }
+
+  local dlv_dir="$reg/deliveries"
+  mkdir -p "$dlv_dir"
+  local target="$dlv_dir/$name.del"
+  cp "$arc" "$target"
+  local sha; sha="$(sha256sum "$target" | awk '{print $1}')"
+
+  local idx="$dlv_dir/index.txt"
+  touch "$idx"
+  grep -v "^${name}|" "$idx" > "${idx}.tmp" 2>/dev/null || true
+  mv "${idx}.tmp" "$idx" 2>/dev/null || true
+  echo "${name}|${name}.del|${sha}|${desc:-}" >> "$idx"
+
+  echo "✅ Staged delivery ${name} ${ver}"
+  echo "   ${target}"
+  echo "   ${idx} updated"
+  echo ""
+  echo "To upload to the registry, commit and push from the registry repo:"
+  echo "   cd ${reg}"
+  echo "   git add deliveries && git commit -m \"delivery: add ${name} ${ver}\" && git push"
+}
+
+cmd_delivery_search() {
+  load_config
+  if [[ $# -lt 1 ]]; then echo "Usage: air delivery search <query>" >&2; exit 1; fi
+  local q="$1"
+  local index_data; index_data="$(fetch_index "$AIR_DELIVERY_INDEX")" || exit 1
+  echo "🔍 Deliveries matching '$q':"
+  local found=0 name src sha desc
+  while IFS='|' read -r name src sha desc; do
+    [[ "$name" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$name" ]] && continue
+    local hay; hay="$(echo "${name} ${desc}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$hay" == *"$(echo "$q" | tr '[:upper:]' '[:lower:]')"* ]]; then
+      printf "  %-22s %s\n" "$name" "$desc"; found=$((found+1))
+    fi
+  done <<< "$index_data"
+  [[ $found -eq 0 ]] && echo "  (no results)"
+  echo ""
+}
+
+cmd_delivery_list() {
+  load_config
+  local index_data; index_data="$(fetch_index "$AIR_DELIVERY_INDEX")" || exit 1
+  echo "📦 Registry deliveries:"
+  local name src sha desc
+  while IFS='|' read -r name src sha desc; do
+    [[ "$name" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$name" ]] && continue
+    printf "  %-22s %s\n" "$name" "$desc"
+  done <<< "$index_data"
+  echo ""
+}
+
+cmd_delivery_info() {
+  load_config
+  if [[ $# -lt 1 ]]; then echo "Usage: air delivery info <name>" >&2; exit 1; fi
+  local q="$1"
+  local index_data; index_data="$(fetch_index "$AIR_DELIVERY_INDEX")" || exit 1
+  local line
+  line="$(echo "$index_data" | awk -F'|' -v n="$q" '
+    /^[[:space:]]*#/ { next }
+    { gsub(/^[ \t]+|[ \t]+$/, "", $1); if ($1==n) { print; exit } }')"
+  if [[ -z "$line" ]]; then echo "✗ Delivery '$q' not found in registry" >&2; exit 1; fi
+  local name src sha desc
+  name="$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$1); print $1}')"
+  src="$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}')"
+  sha="$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$3); print $3}')"
+  desc="$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$4); print $4}')"
+  echo ""
+  echo "📦 ${name}"
+  echo "   Description: ${desc:-N/A}"
+  echo "   Archive:     ${src}"
+  echo "   SHA256:      ${sha:-N/A}"
+  echo ""
+  echo "Install: air delivery install ${name}"
+}
+
+cmd_delivery() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: air delivery <init|build|install|publish|search|list|info>" >&2
+    exit 1
+  fi
+  local sub="$1"; shift
+  case "$sub" in
+    init)            cmd_delivery_init "$@" ;;
+    build)           cmd_delivery_build "$@" ;;
+    install|add|i)   cmd_delivery_install "$@" ;;
+    publish|push|up) cmd_delivery_publish "$@" ;;
+    search|find|s)   cmd_delivery_search "$@" ;;
+    list|ls)         cmd_delivery_list "$@" ;;
+    info|show)       cmd_delivery_info "$@" ;;
+    help|-h) echo "Usage: air delivery <init|build|install|publish|search|list|info>"; exit 0 ;;
+    *) echo "Unknown delivery command: $sub" >&2; exit 1 ;;
+  esac
+}
+
 # ── Main ────────────────────────────────────────────────────────────
 main() {
   if [[ $# -lt 1 ]]; then
@@ -497,6 +901,7 @@ main() {
     info|show)           cmd_info "$@" ;;
     deps)                cmd_deps "$@" ;;
     init)                cmd_init "$@" ;;
+    delivery|deliver)    cmd_delivery "$@" ;;
     help|--help|-h)      usage ;;
     *)
       echo "Unknown command: $cmd" >&2
