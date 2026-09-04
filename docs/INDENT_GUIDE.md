@@ -1,13 +1,33 @@
-# Your Journey with Indent 1.6.2
+# Your Journey with Indent 2.1
 
-> Indent 1.6.2 adds an **organized `builtins()`** (grouped by category) and
-> **type-check helpers**; 1.6.1 added colored output and builtin discovery;
-> 1.6 added async I/O, set operations, YAML, path helpers, and more Python `str`
-> methods — all with the same simple, lovable syntax.
+> Indent is a language designed for **learning and building**. Its syntax uses
+> indentation instead of braces — like Python, but with simpler keywords and
+> fewer symbols. You can write scripts, web servers, GUI apps, and Discord
+> bots, all in one language.
 
-> Indent is a language designed for **learning and building**. Its syntax uses indentation instead of braces — like Python, but with simpler keywords and fewer symbols. You can write scripts, web servers, GUI apps, and Discord bots, all in one language.
+> **2.1** uses `is` to declare (`var x is 42`) and `=` to reassign (`x = 43`),
+> while still accepting the classic forms. **2.0** added the color subsystem,
+> std-lib breadth, class special methods + `dataclass`, and generators/`yield`.
 
 ---
+
+## What's New in 2.1
+
+- **`is` declares, `=` reassigns** — additive, so both forms work:
+  ```indent
+  var x is 42      #! declare (canonical)  —  var x = 42  also works
+  x = 43           #! reassign (canonical) —  x is 43     also works
+  ```
+
+## What's New in 2.0
+
+- **Colors** — `fg`, `bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`.
+- **Std-lib breadth** — itertools/functools/collections helpers, math & random
+  extras, `os_which`, `os_run_ok`.
+- **Classes** — natural special methods (`to_string`, `add`, `equals`, `len`,
+  `get_item`, `contains`) + `dataclass`.
+- **Generators / `yield`** — functions that `yield` iterate with `for`,
+  `to_list(gen)`, `is_generator(gen)`.
 
 ## What's New in 1.6.2
 

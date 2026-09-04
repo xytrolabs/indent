@@ -217,6 +217,22 @@ gui_show_html("<h1>Hello</h1>", "My App", 800, 600)
 ```
 The `indent-gui` helper builds automatically during install (needs `gcc`, `gtk3`, `webkit2gtk`). See `indent-native/indent-gui.c`.
 
+### Dynamic Web Server
+`http_serve(handler, port)` runs a dynamic web server — it calls your handler
+with a request dict (`method`, `path`, `query`, `headers`, `body`) and uses the
+returned string/dict as the response. Routing is ordinary Indent logic:
+```indent
+fun handle req
+    if req.path == "/"
+        give "<h1>Hello from Indent</h1>"
+    if req.path == "/greet"
+        give "<h1>Hi " + req.query["name"] + "!</h1>"
+    give {"status": 404, "body": "not found", "content_type": "text/plain"}
+
+http_serve handle 8080
+```
+Full example: [`examples/web_server.ind`](examples/web_server.ind).
+
 ### AI
 The `ai` package is like Python's `openai` SDK — an OpenAI-native client that works with **real OpenAI** or a **local Ollama** server (`air install ai`, then `get ai as AI`):
 ```indent

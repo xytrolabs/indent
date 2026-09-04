@@ -2,6 +2,13 @@
 
 ## 2.1 — 2026-09-03 (`is` declares, `=` reassigns)
 
+### 🌐 Dynamic web server — `http_serve(handler, port)`
+- `http_serve` runs a **dynamic** web server: each request is parsed into a
+  `{method, path, query, headers, body}` dict and passed to your `handler`
+  function, whose return value (string or dict with `status`/`body`/
+  `content_type`/`headers`) becomes the response. Routing is plain Indent.
+- Example: `examples/web_server.ind`.
+
 ### ✍️ Assignment syntax — `is` canonical for declarations, `=` for reassignment
 - `var x is 42` now declares (previously `var x = 42`). `=` is also accepted
   after `var` (`var x = 42` still works).

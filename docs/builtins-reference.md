@@ -443,7 +443,37 @@ All HTTP functions return a dict with `status` (int), `body` (string), and `ok` 
 | `http_delete(url)` | DELETE request |
 | `http_delete(url, auth)` | DELETE with Authorization |
 | `http_serve_dir(path, port)` | Start static file server (blocking) |
+| `http_serve(handler, port)` | Start a **dynamic** server that calls `handler(request)` per request (blocking) |
 | `gui_show_html(html, title, width, height)` | Open HTML in native desktop window |
+
+### Dynamic web server — `http_serve(handler, port)`
+
+`http_serve` runs a web server and, for **every request**, calls your
+`handler` function with a **request dict**:
+`{method, path, query: {…}, headers: {…}, body}`. Your handler returns a
+response — a string (→ `200 text/html`) or a dict with optional
+`status`, `body`, `content_type`, and `headers`. Routing is just ordinary
+Indent logic in the handler.
+
+```indent
+fun handle req
+    if req.path == "/"
+        give "<h1>Hello from Indent</h1>"
+    if req.path == "/greet"
+        var q = req.query
+        if not has_key q "name"
+            give {"status": 400, "body": "missing ?name=", "content_type": "text/plain"}
+        give "<h1>Hi " + q["name"] + "!</h1>"
+    if req.path == "/json"
+        give {"status": 200, "body": "{\"ok\": true}", "content_type": "application/json"}
+    give {"status": 404, "body": "not found", "content_type": "text/plain"}
+
+http_serve handle 8080     # blocking: listens until stopped
+```
+
+> `http_serve` blocks the script while serving. Each request runs the handler
+> in a fresh scope (stateless per request). `req.query["x"]` reads the `?x=…`
+> query parameter (URL-decoded). Full example: `examples/web_server.ind`.
 
 ---
 

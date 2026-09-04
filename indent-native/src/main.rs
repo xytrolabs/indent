@@ -2222,6 +2222,20 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return Ok(Value::Empty);
     }
 
+    // Handle http_serve — dynamic web server that dispatches each request to a
+    // handler function.
+    if callee == "http_serve" {
+        if positional.len() != 2 {
+            return Err("http_serve expects exactly 2 arguments: http_serve(handler, port)".to_string());
+        }
+        let handler = positional[0].to_string();
+        let port = match &positional[1] {
+            Value::Int(p) if *p > 0 && *p < 65536 => *p as u16,
+            _ => return Err("http_serve: port must be an integer in 1..65535".to_string()),
+        };
+        return http_serve_builtin(&handler, port, ctx);
+    }
+
     // User-defined and imported functions take precedence over builtins
     // (Python-style shadowing), so std library functions like `Upper` or
     // `Append` are not hidden by case-insensitive builtin lookup.
@@ -2770,6 +2784,20 @@ fn invoke_callable_expr(
         return Ok(Value::Empty);
     }
 
+    // Handle http_serve — dynamic web server that dispatches each request to a
+    // handler function.
+    if callee == "http_serve" {
+        if positional.len() != 2 {
+            return Err("http_serve expects exactly 2 arguments: http_serve(handler, port)".to_string());
+        }
+        let handler = positional[0].to_string();
+        let port = match &positional[1] {
+            Value::Int(p) if *p > 0 && *p < 65536 => *p as u16,
+            _ => return Err("http_serve: port must be an integer in 1..65535".to_string()),
+        };
+        return http_serve_builtin(&handler, port, ctx);
+    }
+
     // User-defined and imported functions take precedence over builtins
     // (Python-style shadowing) — must match exec_call_inner so expression-level
     // calls to module functions (e.g. `Count(items)` inside a module) are not
@@ -2860,7 +2888,7 @@ const INDENT_BUILTINS: &[&str] = &[
     "gzip_compress", "gzip_decompress", "hash_sha256", "has_key", "http_delete",
     "http_delete_async", "http_get", "http_get_async", "http_patch_json",
     "http_post_json", "http_post_json_async", "http_put_json", "http_put_json_async",
-    "http_serve_dir", "inc", "index", "insert", "int", "int_or", "is_err", "is_even",
+    "http_serve_dir", "http_serve", "inc", "index", "insert", "int", "int_or", "is_err", "is_even",
     "is_missing", "is_odd", "is_ok", "items", "join", "json_dumps", "json_loads",
     "keys", "len", "log", "lower", "lstrip", "map", "chain", "flatten", "chunk",
     "product", "permutations", "combinations", "accumulate", "cycle", "repeat_item",
@@ -8841,6 +8869,240 @@ fn http_serve_dir_builtin(dir: &str, port: u16) -> Result<Value, String> {
         }
     }
 
+    Ok(Value::Empty)
+}
+
+/// Build a `{status, body, content_type}` response dict.
+fn dict_response(status: i64, body: &str, ct: &str) -> Value {
+    let mut m = HashMap::new();
+    m.insert("status".to_string(), Value::Int(status));
+    m.insert("body".to_string(), Value::Str(body.to_string()));
+    m.insert("content_type".to_string(), Value::Str(ct.to_string()));
+    Value::Dict(m)
+}
+
+fn http_status_text(code: i64) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        500 => "Internal Server Error",
+        _ => "OK",
+    }
+}
+
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'%' && i + 2 < bytes.len() {
+            let h = |b: u8| -> Option<u8> {
+                match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                }
+            };
+            if let (Some(hi), Some(lo)) = (h(bytes[i + 1]), h(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        if c == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Parse a raw HTTP request into a request dict:
+/// `{method, path, query: {..}, headers: {..}, body}`.
+fn parse_http_request(raw: &str) -> Value {
+    let mut lines = raw.lines();
+    let first = lines.next().unwrap_or("");
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let target = parts.next().unwrap_or("/").to_string();
+    let (path, query_str) = match target.split_once('?') {
+        Some((p, q)) => (p.to_string(), q.to_string()),
+        None => (target.clone(), String::new()),
+    };
+
+    let mut headers: HashMap<String, Value> = HashMap::new();
+    let mut body = String::new();
+    let mut in_body = false;
+    for l in lines {
+        if !in_body {
+            if l.trim().is_empty() {
+                in_body = true;
+                continue;
+            }
+            if let Some((k, v)) = l.split_once(':') {
+                headers.insert(k.trim().to_lowercase(), Value::Str(v.trim().to_string()));
+            }
+        } else {
+            body.push_str(l);
+            body.push('\n');
+        }
+    }
+
+    let mut query: HashMap<String, Value> = HashMap::new();
+    for pair in query_str.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = match pair.split_once('=') {
+            Some((k, v)) => (url_decode(k), url_decode(v)),
+            None => (url_decode(pair), String::new()),
+        };
+        query.insert(k, Value::Str(v));
+    }
+
+    let mut m = HashMap::new();
+    m.insert("method".to_string(), Value::Str(method));
+    m.insert("path".to_string(), Value::Str(path));
+    m.insert("query".to_string(), Value::Dict(query));
+    m.insert("headers".to_string(), Value::Dict(headers));
+    m.insert("body".to_string(), Value::Str(body.trim_end().to_string()));
+    Value::Dict(m)
+}
+
+/// Write an HTTP response. `resp` is either a string (→ 200 text/html body) or
+/// a dict with optional `status` / `body` / `content_type` / `headers`.
+fn write_http_response(stream: &mut TcpStream, resp: &Value) -> Result<(), String> {
+    let mut status = 200i64;
+    let mut body = String::new();
+    let mut content_type = "text/html; charset=utf-8".to_string();
+    let mut extra: Vec<(String, String)> = Vec::new();
+    match resp {
+        Value::Str(s) => body = s.clone(),
+        Value::Dict(m) => {
+            if let Some(Value::Int(s)) = m.get("status") {
+                status = *s;
+            }
+            if let Some(v) = m.get("body") {
+                body = v.to_string();
+            }
+            if let Some(Value::Str(ct)) = m.get("content_type") {
+                content_type = ct.clone();
+            }
+            if let Some(Value::Dict(h)) = m.get("headers") {
+                for (k, v) in h {
+                    extra.push((k.clone(), v.to_string()));
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        status,
+        http_status_text(status),
+        content_type,
+        body.len()
+    );
+    for (k, v) in extra {
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    head.push_str("\r\n");
+    use std::io::Write;
+    stream
+        .write_all(head.as_bytes())
+        .map_err(|e| format!("failed to write response head: {e}"))?;
+    stream
+        .write_all(body.as_bytes())
+        .map_err(|e| format!("failed to write response body: {e}"))
+}
+
+/// Dynamic HTTP server: for every request, build a request dict and call the
+/// Indent `handler` function with it. The handler returns a response (string or
+/// dict). Handlers run in a fresh scope (stateless per request).
+fn http_serve_builtin(
+    handler: &str,
+    port: u16,
+    ctx: &mut ExecContext<'_>,
+) -> Result<Value, String> {
+    let bind_addr = format!("127.0.0.1:{port}");
+    let listener = TcpListener::bind(&bind_addr)
+        .map_err(|e| format!("http_serve: cannot bind to {bind_addr}: {e}"))?;
+    eprintln!("Indent HTTP server listening on http://{bind_addr}");
+
+    let callable = resolve_callable(handler, ctx)
+        .map_err(|e| format!("http_serve: handler '{handler}' not found: {e}"))?;
+    let module_dir = ctx.rt.module_dir.clone();
+    let funcs = ctx.rt.funcs.clone();
+    let callables = ctx.rt.callables.clone();
+    let classes = ctx.rt.classes.clone();
+    let async_funcs = ctx.rt.async_funcs.clone();
+
+    use std::io::Read;
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                let mut buf = [0u8; 65536];
+                let n = match stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+                if n == 0 {
+                    continue;
+                }
+                let raw = String::from_utf8_lossy(&buf[..n]).to_string();
+                let req = parse_http_request(&raw);
+                let result = {
+                    let mut rt = Runtime::new(module_dir.clone());
+                    rt.funcs = funcs.clone();
+                    rt.callables = callables.clone();
+                    rt.classes = classes.clone();
+                    rt.async_funcs = async_funcs.clone();
+                    let mut ctx2 = ExecContext::new(&mut rt);
+                    ctx2.push_frame();
+                    match &callable {
+                        Callable::Local(f) => {
+                            invoke_function(f, &[req.clone()], &HashMap::new(), &mut ctx2)
+                        }
+                        Callable::Builtin(name) => invoke_builtin(name, &[req.clone()])
+                            .unwrap_or_else(|| {
+                                Err(format!("http_serve: unknown builtin '{name}'"))
+                            }),
+                        Callable::External { module, name } => invoke_external_function(
+                            module.clone(),
+                            name,
+                            &[req.clone()],
+                            &HashMap::new(),
+                            &mut ctx2,
+                        ),
+                    }
+                };
+                match result {
+                    Ok(resp) => {
+                        let _ = write_http_response(&mut stream, &resp);
+                    }
+                    Err(e) => {
+                        let err = format!("Internal Server Error\n\n{e}");
+                        let resp = dict_response(500, &err, "text/plain");
+                        let _ = write_http_response(&mut stream, &resp);
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
     Ok(Value::Empty)
 }
 
