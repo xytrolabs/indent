@@ -182,7 +182,16 @@ if ($Local) {
             $api = "https://api.github.com/repos/$Repo/releases/tags/$Version"
         }
         $release = Invoke-RestMethod -Uri $api -TimeoutSec 60
+        # Windows releases are .zip archives containing indent.exe. Match by
+        # exact target first, then fall back to any windows/arch .zip so naming
+        # variants (pc-windows-msvc vs windows) both work.
         $asset = $release.assets | Where-Object { $_.name -like "*-$target.zip" } | Select-Object -First 1
+        if (-not $asset) {
+            $archTok = if ($target -like "x86_64*") { "x86_64" } elseif ($target -like "aarch64*") { "aarch64" } elseif ($target -like "i686*") { "i686" } else { $target }
+            $asset = $release.assets | Where-Object {
+                ($_.name -like "*.zip") -and ($_.name -like "*$archTok*") -and ($_.name -like "*windows*")
+            } | Select-Object -First 1
+        }
         if ($asset) {
             $tmp = Join-Path $env:TEMP "indent-install-$([guid]::NewGuid())"
             New-Item -ItemType Directory -Path $tmp | Out-Null
