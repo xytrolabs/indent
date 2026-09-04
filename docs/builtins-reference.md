@@ -474,6 +474,10 @@ http_serve handle 8080     # blocking: listens until stopped
 > `http_serve` blocks the script while serving. Each request runs the handler
 > in a fresh scope (stateless per request). `req.query["x"]` reads the `?x=…`
 > query parameter (URL-decoded). Full example: `examples/web_server.ind`.
+>
+> **For a richer toolkit** — response builders and a `RunCode` helper that
+> executes Indent source POSTed from a browser (a "Run" button) — see
+> [`web-package.md`](web-package.md) (the `web` package).
 
 ---
 

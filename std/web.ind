@@ -1,0 +1,44 @@
+#! web.ind — dynamic web package (Indent 2.1)
+#! Builds on the native `http_serve(handler, port)` builtin.
+#!
+#! Use with http_serve to build dynamic web apps, including a "run code in the
+#! browser" endpoint:
+#!
+#!   get RunCode from web
+#!   get Json from web
+#!
+#!   fun handle req
+#!       if req.path == "/run"
+#!           var result = RunCode req.body      #! execute the posted Indent code
+#!           give Json result
+#!       give {"status": 404, "body": "nope", "content_type": "text/plain"}
+#!
+#!   http_serve handle 8080
+
+#! ---- response builders (return dicts http_serve understands) ----
+
+fun Html body
+    give {"status": 200, "body": body, "content_type": "text/html; charset=utf-8"}
+
+fun Json obj
+    var s = json_dumps obj
+    give {"status": 200, "body": s, "content_type": "application/json"}
+
+fun Text body
+    give {"status": 200, "body": body, "content_type": "text/plain"}
+
+fun Send status body content_type
+    give {"status": status, "body": body, "content_type": content_type}
+
+#! ---- run an Indent code string in a fresh indent process ----
+#! Returns {ok, status, stdout, stderr}.
+
+fun RunCode code
+    var stamp = time_perf_counter
+    var stampS = string(stamp)
+    var tmp = "/tmp/indent_run_" + stampS + ".ind"
+    file_write_text tmp code
+    var cmd = "indent " + tmp
+    var r = os_run cmd
+    os_remove tmp
+    give r
