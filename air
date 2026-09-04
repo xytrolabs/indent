@@ -41,9 +41,9 @@ Examples:
 
 Deliveries (share a whole project as one bundle of packages):
   air delivery init                Scaffold an air-delivery.toml in this dir
-  air delivery build [dir] [out]   Bundle a project into <name>-<ver>.del
+  air delivery build [dir] [out]   Bundle a project into <name>-<ver>.dlv
   air delivery install <src>       Install a delivery (name | file | dir | url)
-  air delivery publish <file> [registry]  Stage a .del into a registry checkout
+  air delivery publish <file> [registry]  Stage a .dlv into a registry checkout
   air delivery search <q>          Search the registry for deliveries
   air delivery list                List registry deliveries
   air delivery info <name>         Show a registry delivery
@@ -492,7 +492,7 @@ auto_install_deps() {
 #  DELIVERIES — share a whole project as a bundle of packages
 #
 #  A "Delivery" packages an entire Indent project into ONE distributable
-#  <name>-<version>.del archive (a .tar.gz). Inside it holds:
+#  <name>-<version>.dlv archive (a .tar.gz). Inside it holds:
 #    air-delivery.toml       the manifest (name/version/description)
 #    modules/<import>.ind    module files -> each becomes an importable
 #                            package once installed (get X from <import>)
@@ -556,7 +556,7 @@ EOF
   echo "   air delivery build"
 }
 
-# Build a .del archive from a directory containing air-delivery.toml.
+# Build a .dlv archive from a directory containing air-delivery.toml.
 cmd_delivery_build() {
   local dir="${1:-.}"
   local out="${2:-$dir/dist}"
@@ -610,7 +610,7 @@ cmd_delivery_build() {
     cp "$dir/$entry_path" "$stage/entry/$(basename "$entry_path")"
   fi
 
-  local tarball="$out/$name-$ver.del"
+  local tarball="$out/$name-$ver.dlv"
   ( cd "$out" && tar -czf "$(basename "$tarball")" "$name-$ver" )
   local sha; sha="$(sha256sum "$tarball" | awk '{print $1}')"
 
@@ -631,10 +631,10 @@ cmd_delivery_build() {
   rm -rf "$stage"
 }
 
-# Resolve a delivery source to a local .del archive path, echoing it.
+# Resolve a delivery source to a local .dlv archive path, echoing it.
 delivery_resolve_archive() {
   local src="$1"
-  if [[ -f "$src" && "$src" == *.del ]]; then
+  if [[ -f "$src" && "$src" == *.dlv ]]; then
     echo "$src"; return 0
   fi
   if [[ -d "$src" && -f "$src/$DLV_MANIFEST" ]]; then
@@ -642,7 +642,7 @@ delivery_resolve_archive() {
     local tmpout
     tmpout="$(mktemp -d)"
     cmd_delivery_build "$src" "$tmpout" >/dev/null || return 1
-    echo "$tmpout"/*.del
+    echo "$tmpout"/*.dlv
     return 0
   fi
   # Treat as a registry name
@@ -686,7 +686,7 @@ delivery_resolve_archive() {
 cmd_delivery_install() {
   load_config
   if [[ $# -lt 1 ]]; then
-    echo "Usage: air delivery install <name|file.del|dir|url>" >&2; exit 1
+    echo "Usage: air delivery install <name|file.dlv|dir|url>" >&2; exit 1
   fi
   local src="$1"
   local arc
@@ -766,10 +766,10 @@ cmd_delivery_install() {
   echo "✅ Installed delivery ${name} ${ver}"
 }
 
-# Stage a built .del into a local registry checkout (then commit + push).
+# Stage a built .dlv into a local registry checkout (then commit + push).
 cmd_delivery_publish() {
   if [[ $# -lt 1 ]]; then
-    echo "Usage: air delivery publish <file.del> [registry-dir]" >&2; exit 1
+    echo "Usage: air delivery publish <file.dlv> [registry-dir]" >&2; exit 1
   fi
   local arc="$1"
   if [[ ! -f "$arc" ]]; then echo "✗ Delivery file not found: $arc" >&2; exit 1; fi
@@ -788,7 +788,7 @@ cmd_delivery_publish() {
 
   local dlv_dir="$reg/deliveries"
   mkdir -p "$dlv_dir"
-  local target="$dlv_dir/$name.del"
+  local target="$dlv_dir/$name.dlv"
   cp "$arc" "$target"
   local sha; sha="$(sha256sum "$target" | awk '{print $1}')"
 
@@ -796,7 +796,7 @@ cmd_delivery_publish() {
   touch "$idx"
   grep -v "^${name}|" "$idx" > "${idx}.tmp" 2>/dev/null || true
   mv "${idx}.tmp" "$idx" 2>/dev/null || true
-  echo "${name}|${name}.del|${sha}|${desc:-}" >> "$idx"
+  echo "${name}|${name}.dlv|${sha}|${desc:-}" >> "$idx"
 
   echo "✅ Staged delivery ${name} ${ver}"
   echo "   ${target}"

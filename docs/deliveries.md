@@ -8,7 +8,7 @@
 
 A Delivery bundles a project's module files (which become importable
 packages once installed), an optional runnable entry point, and its declared
-dependencies into **one** distributable `<name>-<version>.del` archive (a
+dependencies into **one** distributable `<name>-<version>.dlv` archive (a
 `.tar.gz`). Someone can then `air delivery install <name>` and get the whole
 project — modules importable, dependencies pulled in — in one command.
 
@@ -40,9 +40,9 @@ import.
 
 ```bash
 air delivery init                      # scaffold air-delivery.toml
-air delivery build [dir] [out]         # build <name>-<ver>.del
-air delivery install <src>             # install (name | file.del | dir | url)
-air delivery publish <file.del> [reg]  # stage into a registry checkout
+air delivery build [dir] [out]         # build <name>-<ver>.dlv
+air delivery install <src>             # install (name | file.dlv | dir | url)
+air delivery publish <file.dlv> [reg]  # stage into a registry checkout
 air delivery search <query>            # find on the registry
 air delivery list                      # list registry deliveries
 air delivery info <name>               # details on one delivery
@@ -52,12 +52,12 @@ air delivery info <name>               # details on one delivery
 From a folder containing `air-delivery.toml`:
 
 ```bash
-air delivery build            # → dist/<name>-<version>.del
+air delivery build            # → dist/<name>-<version>.dlv
 air delivery build ./myapp ./out
 ```
 
 Validates that every module/entry file exists, then produces a single
-`.del` archive whose layout is:
+`.dlv` archive whose layout is:
 
 ```
 <name>-<version>/
@@ -67,12 +67,12 @@ Validates that every module/entry file exists, then produces a single
 ```
 
 ### Install
-`install` accepts a registry name, a local `.del`, a directory containing a
+`install` accepts a registry name, a local `.dlv`, a directory containing a
 manifest, or an HTTP URL:
 
 ```bash
 air delivery install myapp                     # from the registry
-air delivery install ./dist/myapp-0.1.0.del    # local archive
+air delivery install ./dist/myapp-0.1.0.dlv    # local archive
 air delivery install ./path/to/project         # build + install a folder
 ```
 
@@ -85,11 +85,11 @@ Installing a Delivery:
 
 ### Publish (upload)
 The registry is a git repo (`xytrolabs/air`). Publishing stages a built
-archive into a checkout under `deliveries/<name>.del` and updates
+archive into a checkout under `deliveries/<name>.dlv` and updates
 `deliveries/index.txt`, then you commit and push to make it live:
 
 ```bash
-air delivery publish ./dist/myapp-0.1.0.del /path/to/air-clone
+air delivery publish ./dist/myapp-0.1.0.dlv /path/to/air-clone
 cd /path/to/air-clone
 git add deliveries && git commit -m "delivery: add myapp 0.1.0" && git push
 ```
