@@ -28,14 +28,32 @@ Write-Host ""
 Write-Host "⚡ Indent Installer for Windows — Xytro Labs" -ForegroundColor Cyan
 Write-Host ""
 
+# ---- detect OS (this installer targets Windows) ----
+function Test-Windows {
+    if ($IsWindows -eq $true) { return $true }
+    if ($env:OS -like "*Windows*") { return $true }
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+}
+if (-not (Test-Windows)) {
+    Write-Host ""
+    Write-Host "⚠  This is the Windows installer (scripts/install.ps1)." -ForegroundColor Yellow
+    Write-Host "    On Linux / macOS use the shell installer instead:" -ForegroundColor Yellow
+    Write-Host "      scripts/install.sh" -ForegroundColor Cyan
+    Write-Host ""
+    exit 1
+}
+
 # ---- detect arch ----
-$arch = $env:PROCESSOR_ARCHITECTURE
-if ($arch -eq "AMD64") {
-    $target = "x86_64-pc-windows-msvc"
-} elseif ($arch -eq "ARM64") {
-    $target = "aarch64-pc-windows-msvc"
-} else {
-    throw "Unsupported architecture: $arch"
+$arch = ""
+try { $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() } catch {}
+if ($arch -eq "") { $arch = $env:PROCESSOR_ARCHITECTURE }
+switch ($arch) {
+    "X64"   { $target = "x86_64-pc-windows-msvc" }
+    "AMD64" { $target = "x86_64-pc-windows-msvc" }
+    "Arm64" { $target = "aarch64-pc-windows-msvc" }
+    "ARM64" { $target = "aarch64-pc-windows-msvc" }
+    "X86"   { $target = "i686-pc-windows-msvc" }
+    default { throw "Unsupported architecture: '$arch'" }
 }
 Write-Host "  Platform: $target" -ForegroundColor Green
 
@@ -51,6 +69,36 @@ New-Item -ItemType Directory -Path $StdDir -Force | Out-Null
 New-Item -ItemType Directory -Path $PkgDir -Force | Out-Null
 New-Item -ItemType Directory -Path $LauncherDir -Force | Out-Null
 
+function Install-FromSource {
+    $cargo = Get-Command cargo -ErrorAction SilentlyContinue
+    if (-not $cargo) {
+        Write-Host "Rust (cargo) not found." -ForegroundColor Red
+        Write-Host "Install Rust from https://rustup.rs and re-run this installer," -ForegroundColor Yellow
+        Write-Host "or publish a GitHub release so a prebuilt binary can be downloaded." -ForegroundColor Yellow
+        throw "No prebuilt release found and the Rust toolchain is not installed"
+    }
+    $buildDir = Join-Path $env:TEMP ("indent-src-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $buildDir | Out-Null
+    Write-Host "→ Cloning $Repo ..."
+    git clone --depth 1 "https://github.com/$Repo.git" $buildDir | Out-Null
+    Push-Location (Join-Path $buildDir "indent-native")
+    try {
+        Write-Host "→ Building indent (release). This can take a few minutes..."
+        cargo build --release
+        $bin = Join-Path $buildDir "indent-native\target\release\indent.exe"
+        if (-not (Test-Path $bin)) { throw "Build finished but no indent.exe was produced" }
+        Copy-Item $bin (Join-Path $BinDir "indent.exe") -Force
+        Write-Host "✓ Built and installed indent from source" -ForegroundColor Green
+        foreach ($tool in @("air", "indentpkg")) {
+            $src = Join-Path $buildDir $tool
+            if (Test-Path $src) { Copy-Item $src (Join-Path $BinDir $tool) -Force }
+        }
+    } finally {
+        Pop-Location
+        Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
+    }
+}
+
 # ---- install binary ----
 if ($Local) {
     Write-Host "→ Installing from local build..."
@@ -62,47 +110,48 @@ if ($Local) {
     Copy-Item $LocalBin (Join-Path $BinDir "indent.exe") -Force
     Write-Host "✓ Installed from local build" -ForegroundColor Green
 } else {
-    Write-Host "→ Downloading Indent $Version..."
-    if ($Version -eq "latest") {
-        $api = "https://api.github.com/repos/$Repo/releases/latest"
-    } else {
-        $api = "https://api.github.com/repos/$Repo/releases/tags/$Version"
-    }
-    $release = Invoke-RestMethod -Uri $api -TimeoutSec 60
-    $asset = $release.assets | Where-Object { $_.name -like "*-$target.zip" } | Select-Object -First 1
-
-    if (-not $asset) {
-        Write-Host "No release asset found for: $target" -ForegroundColor Red
-        Write-Host "Available assets:"
-        $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
-        throw "Installation failed"
-    }
-
-    $tmp = Join-Path $env:TEMP "indent-install-$([guid]::NewGuid())"
-    New-Item -ItemType Directory -Path $tmp | Out-Null
-
-    $zipPath = Join-Path $tmp "indent.zip"
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -TimeoutSec 120
-    Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
-
-    $exe = Get-ChildItem -Path $tmp -Recurse -Filter "indent.exe" | Select-Object -First 1
-    if (-not $exe) { throw "Archive does not contain indent.exe" }
-
-    Copy-Item $exe.FullName (Join-Path $BinDir "indent.exe") -Force
-    Write-Host "✓ Downloaded indent" -ForegroundColor Green
-
-    # Companion tools
-    foreach ($tool in @("air", "indentpkg")) {
-        $toolFile = Get-ChildItem -Path $tmp -Recurse -Filter "$tool.*" | Select-Object -First 1
-        if ($toolFile) {
-            $ext = [System.IO.Path]::GetExtension($toolFile.Name)
-            $destName = if ($ext -eq ".ps1") { "$tool.ps1" } else { "$tool.exe" }
-            Copy-Item $toolFile.FullName (Join-Path $BinDir $destName) -Force
-            Write-Host "✓ Installed $tool" -ForegroundColor Green
+    Write-Host "→ Fetching Indent $Version..."
+    $installed = $false
+    try {
+        if ($Version -eq "latest") {
+            $api = "https://api.github.com/repos/$Repo/releases/latest"
+        } else {
+            $api = "https://api.github.com/repos/$Repo/releases/tags/$Version"
         }
+        $release = Invoke-RestMethod -Uri $api -TimeoutSec 60
+        $asset = $release.assets | Where-Object { $_.name -like "*-$target.zip" } | Select-Object -First 1
+        if ($asset) {
+            $tmp = Join-Path $env:TEMP "indent-install-$([guid]::NewGuid())"
+            New-Item -ItemType Directory -Path $tmp | Out-Null
+            $zipPath = Join-Path $tmp "indent.zip"
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -TimeoutSec 120
+            Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
+            $exe = Get-ChildItem -Path $tmp -Recurse -Filter "indent.exe" | Select-Object -First 1
+            if ($exe) {
+                Copy-Item $exe.FullName (Join-Path $BinDir "indent.exe") -Force
+                Write-Host "✓ Downloaded indent" -ForegroundColor Green
+                foreach ($tool in @("air", "indentpkg")) {
+                    $toolFile = Get-ChildItem -Path $tmp -Recurse -Filter "$tool.*" | Select-Object -First 1
+                    if ($toolFile) {
+                        $ext = [System.IO.Path]::GetExtension($toolFile.Name)
+                        $destName = if ($ext -eq ".ps1") { "$tool.ps1" } else { "$tool.exe" }
+                        Copy-Item $toolFile.FullName (Join-Path $BinDir $destName) -Force
+                        Write-Host "✓ Installed $tool" -ForegroundColor Green
+                    }
+                }
+                Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+                $installed = $true
+            }
+        }
+    } catch {
+        Write-Host "  (no prebuilt release: $($_.Exception.Message))" -ForegroundColor Yellow
     }
-
-    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    if (-not $installed) {
+        Write-Host ""
+        Write-Host "No prebuilt release found for $Repo - building from source instead..." -ForegroundColor Yellow
+        Write-Host ""
+        Install-FromSource
+    }
 }
 
 # ---- download standard library ----
