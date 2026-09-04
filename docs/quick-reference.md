@@ -1,4 +1,4 @@
-# Indent Quick Reference (v2.0)
+# Indent Quick Reference (v2.1)
 
 > Complete syntax reference for the Indent programming language.
 > **New in 2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`; std-lib breadth — `chain`/`flatten`/`chunk`/`product`/`permutations`/`combinations`/`accumulate`/`cycle`/`repeat_item`/`takewhile`/`dropwhile`/`unique`/`partition`/`group_by`/`max_key`/`min_key`/`reduce`, math extras, random extras; **class special methods** (natural names: `to_string`, `add`, `equals`, `len`, `get_item`, `contains`) + `dataclass`; **generators/`yield`** (finite, `for` over them, `is_generator`, `to_list`).
@@ -13,14 +13,17 @@
 ```indent
 #! Comments start with #! (hash-bang)
 say "Hello"                 # Print to stdout
-var x = 42                  # Type inferred (int)
-var name = "Ada"            # Type inferred (string)
-var x int = 42              # Explicit type
-var flag = true             # Boolean inferred
-var nums = [1,2,3]          # List inferred
-x is 43                     # Reassign (NOT =)
+var x is 42                 # Declare, type inferred (int)   [= also accepted]
+var name is "Ada"           # Declare string                  [var name = "Ada" too]
+var n int is 42             # Declare with explicit type
+var flag is true            # Declare boolean
+var nums is [1,2,3]         # Declare list
+x = 43                      # Reassign  [x is 43 also accepted]
 null                        # Null/none (alias for empty)
 ```
+
+> **Declare vs reassign:** `var x is value` declares (and `=` is also accepted
+> after `var`). `x = value` reassigns (and legacy `x is value` also works).
 
 ## Type Conversion (v1.5)
 ```indent

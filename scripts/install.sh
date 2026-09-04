@@ -12,7 +12,7 @@ set -euo pipefail
 #   bash scripts/install.sh --local
 #
 # Specific version:
-#   curl -fsSL ... | bash -s -- --version v2.0.0
+#   curl -fsSL ... | bash -s -- --version v2.1.0
 # =============================================================================
 
 DEFAULT_REPO="xytrolabs/indent"

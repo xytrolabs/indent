@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.0.0
+# Indent Language (.ind) v2.1.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,6 +7,10 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ### 🎉 What's New in 2.1.0
+> - ✍️ **`is` for declarations, `=` for reassignment** — `var x is 42` declares,
+>   `x = 43` reassigns. The old forms (`var x = 42`, `x is 43`) still work too.
+>
 > ### 🎉 What's New in 2.0.0
 > - 🎨 **Full color output** — `fg`, `bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`
 > - 🧰 **Std-lib breadth** — itertools/functools/collections helpers, math & random extras, `os_which`, `os_run_ok`
@@ -54,9 +58,9 @@ Indent reads like English. `fun` defines a function. `give` returns a value. `re
 |---|---|
 | Comments | `#! this is a comment` |
 | Output | `say "Hello"` |
-| Variables | `var x = 42` |
-| With type | `var name string = "Ada"` |
-| Reassign | `x is 43` |
+| Variables | `var x is 42` |
+| With type | `var name string is "Ada"` |
+| Reassign | `x = 43` |
 | Short ops | `x += 5`, `x -= 2`, `x *= 10` |
 | Type cast | `set x string`, `set y int` |
 | Functions | `fun add a b` then `give a + b` |

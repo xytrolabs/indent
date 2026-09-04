@@ -1,7 +1,7 @@
 class Indent < Formula
   desc "Simple, readable, beginner-friendly programming language — Xytro Labs"
   homepage "https://github.com/xytro-labs/indent"
-  version "2.0.0"
+  version "2.1.0"
   license "MIT"
 
   if OS.mac? && Hardware::CPU.arm?

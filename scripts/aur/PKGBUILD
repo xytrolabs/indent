@@ -6,7 +6,7 @@
 #           paru -S aether
 
 pkgname=aether
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc="Simple, readable, beginner-friendly programming language with a native Rust runtime"
 arch=('x86_64' 'aarch64')

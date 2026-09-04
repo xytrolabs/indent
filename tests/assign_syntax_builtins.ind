@@ -1,0 +1,50 @@
+#! assign_syntax_builtins.ind — `is`/`=` additive syntax (2.1)
+#! Canonical: `var x is v` declares, `x = v` reassigns.
+#! Legacy still works: `var x = v` declares, `x is v` reassigns.
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check_eq got expected
+    var ok = got == expected
+    if not ok
+        var msg = "expected '" + expected + "' got '" + got + "'"
+        fail msg
+
+#! ── declarations ──────────────────────────────────────────────────
+var a is 42              #! is declare (canonical)
+check_eq (string(a)) "42"
+
+var b = 10               #! = declare (legacy still works)
+check_eq (string(b)) "10"
+
+var name is "Ada"
+check_eq (string(name)) "Ada"
+
+var n int is 7           #! typed is-declare
+check_eq (string(n)) "7"
+
+#! ── reassignment ──────────────────────────────────────────────────
+a = 50                   #! = reassign (canonical)
+check_eq (string(a)) "50"
+
+a = a + 1                #! expression on rhs
+check_eq (string(a)) "51"
+
+a is 60                  #! is reassign (legacy still works)
+check_eq (string(a)) "60"
+
+name = "Grace"
+check_eq (string(name)) "Grace"
+
+#! ── subscript reassign with = ─────────────────────────────────────
+var l = [1, 2, 3]
+l[0] = 99
+check_eq (string(l)) "[99, 2, 3]"
+
+#! ── legacy `is` reassign + `=` declare coexist with a value using == ──
+var eq is (a == 60)
+check_eq (string(eq)) "TRUE"
+
+say "assign syntax: ALL PASS"

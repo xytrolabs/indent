@@ -1,5 +1,15 @@
 # Indent Changelog
 
+## 2.1 — 2026-09-03 (`is` declares, `=` reassigns)
+
+### ✍️ Assignment syntax — `is` canonical for declarations, `=` for reassignment
+- `var x is 42` now declares (previously `var x = 42`). `=` is also accepted
+  after `var` (`var x = 42` still works).
+- `x = 43` now reassigns (previously `x is 43`). `is` reassignment still works.
+- Also: `var n int is 5`, `a[0] = 99`, `name = "Grace"`.
+- Fully **additive / non-breaking** — every existing program keeps working.
+- Test: `tests/assign_syntax_builtins.ind`.
+
 ## 2.0 — 2026-09-01 (Color subsystem — gradients, backgrounds, styles)
 
 ### 🎨 Full color subsystem (truecolor)

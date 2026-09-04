@@ -10992,8 +10992,11 @@ impl Parser {
                     line.line_no
                 ));
             }
-            // Split: name type = value (type may be omitted for dynamic)
-            if let Some((name_and_type, value_expr)) = rest.split_once(" = ") {
+            // Split: name type = value (or `is` — canonical for declarations)
+            if let Some((name_and_type, value_expr)) = rest
+                .split_once(" = ")
+                .or_else(|| rest.split_once(" is "))
+            {
                 let parts: Vec<&str> = name_and_type.split_whitespace().collect();
                 if parts.is_empty() {
                     return Err(format!("Variable name missing at line {}", line.line_no));
@@ -12436,7 +12439,9 @@ fn contains_expr_operators(s: &str) -> bool {
 }
 
 fn parse_assignment(text: &str) -> Option<(String, String)> {
-    let (left, right) = text.split_once(" is ")?;
+    let (left, right) = text
+        .split_once(" is ")
+        .or_else(|| text.split_once(" = "))?;
     let name = left.trim();
     if !looks_like_callee(name) {
         return None;
@@ -12484,9 +12489,11 @@ fn infer_type_from_expr(expr: &str) -> &str {
 }
 
 fn parse_subscript_assignment(text: &str) -> Result<Option<(SubscriptAssignTarget, String)>, String> {
-    let Some((left_raw, right_raw)) = text.split_once(" is ") else {
-        return Ok(None);
-    };
+    let (left_raw, right_raw) =
+        match text.split_once(" is ").or_else(|| text.split_once(" = ")) {
+            Some(x) => x,
+            None => return Ok(None),
+        };
 
     let left = left_raw.trim();
     let right = right_raw.trim().to_string();
