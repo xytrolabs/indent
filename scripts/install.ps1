@@ -69,14 +69,77 @@ New-Item -ItemType Directory -Path $StdDir -Force | Out-Null
 New-Item -ItemType Directory -Path $PkgDir -Force | Out-Null
 New-Item -ItemType Directory -Path $LauncherDir -Force | Out-Null
 
-function Install-FromSource {
-    $cargo = Get-Command cargo -ErrorAction SilentlyContinue
-    if (-not $cargo) {
-        Write-Host "Rust (cargo) not found." -ForegroundColor Red
-        Write-Host "Install Rust from https://rustup.rs and re-run this installer," -ForegroundColor Yellow
-        Write-Host "or publish a GitHub release so a prebuilt binary can be downloaded." -ForegroundColor Yellow
-        throw "No prebuilt release found and the Rust toolchain is not installed"
+function Add-PathDir {
+    param([string]$dir)
+    if ($dir -and (Test-Path $dir) -and ($env:Path -notlike "*$dir*")) {
+        $env:Path = "$dir;" + $env:Path
     }
+}
+function Add-ToUserPath {
+    param([string]$dir)
+    if (-not $dir) { return }
+    $p = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($null -eq $p) { $p = "" }
+    if ($p -notlike "*$dir*") {
+        [Environment]::SetEnvironmentVariable("Path", $p.TrimEnd(';') + ";" + $dir, "User")
+    }
+}
+function Ensure-Git {
+    if (Get-Command git -ErrorAction SilentlyContinue) { return $true }
+    Write-Host "→ Git not found - installing Git for Windows via winget..." -ForegroundColor Yellow
+    try { winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements --silent | Out-Null } catch {}
+    if (Get-Command git -ErrorAction SilentlyContinue) { Write-Host "✓ Git ready"; return $true }
+    $gitCmd = Join-Path $env:USERPROFILE "AppData\Local\Programs\Git\cmd"
+    Add-PathDir $gitCmd
+    if (Get-Command git -ErrorAction SilentlyContinue) { Write-Host "✓ Git ready"; return $true }
+    Write-Host "✗ Git is required to build from source (install from https://git-scm.com)." -ForegroundColor Red
+    return $false
+}
+function Ensure-Rust {
+    if (Get-Command cargo -ErrorAction SilentlyContinue) { Write-Host "✓ Rust (cargo) found"; return $true }
+    Write-Host "→ Rust not found - installing via rustup (this downloads a few hundred MB)..." -ForegroundColor Yellow
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+    $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
+    try { Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupInit -TimeoutSec 180 }
+    catch {
+        Write-Host "✗ Could not download rustup (https://win.rustup.rs). Install Rust manually from https://rustup.rs" -ForegroundColor Red
+        return $false
+    }
+    try {
+        & $rustupInit -y --profile minimal --default-toolchain stable --default-host x86_64-pc-windows-msvc | Out-Null
+    } finally {
+        Remove-Item -Force $rustupInit -ErrorAction SilentlyContinue
+    }
+    Add-PathDir $cargoBin
+    Add-ToUserPath $cargoBin
+    if (Get-Command cargo -ErrorAction SilentlyContinue) { Write-Host "✓ Rust installed"; return $true }
+    if (Test-Path (Join-Path $cargoBin "cargo.exe")) { Write-Host "✓ Rust installed"; return $true }
+    Write-Host "✗ Rust install did not complete. Open a new terminal and re-run, or install from https://rustup.rs" -ForegroundColor Red
+    return $false
+}
+function Ensure-Msvc {
+    # Building with the msvc target needs the MSVC linker (VS C++ Build Tools).
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if ($vs) { Write-Host "✓ MSVC Build Tools found"; return }
+    }
+    Write-Host "→ MSVC C++ Build Tools not detected. Installing VS Build Tools (C++ workload) - this is large..." -ForegroundColor Yellow
+    try {
+        winget install --id Microsoft.VisualStudio.2022.BuildTools -e --accept-source-agreements --accept-package-agreements --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" | Out-Null
+        Write-Host "✓ Installed VS Build Tools (reopen the terminal to use it)" -ForegroundColor Green
+    } catch {
+        Write-Host "  (could not install Build Tools automatically)" -ForegroundColor Yellow
+    }
+    Write-Host "  If linking fails, install 'Desktop development with C++' from https://visualstudio.microsoft.com/downloads/ and retry." -ForegroundColor Yellow
+}
+
+function Install-FromSource {
+    Write-Host ""
+    Write-Host "→ Checking build dependencies..."
+    if (-not (Ensure-Git)) { throw "Git is required to build from source" }
+    if (-not (Ensure-Rust)) { throw "Rust is required to build from source" }
+    Ensure-Msvc
     $buildDir = Join-Path $env:TEMP ("indent-src-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $buildDir | Out-Null
     Write-Host "→ Cloning $Repo ..."
