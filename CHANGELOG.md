@@ -1,5 +1,25 @@
 # Indent Changelog
 
+## 2.2 — 2026-09-04 (web package, AIR Deliveries)
+
+### 📦 Web package — `web` (std/web.ind)
+- New first-party `web` package layered on `http_serve`: `Html`/`Json`/`Text`/`Send`
+  response builders, and `RunCode(code)` which runs an Indent string in a fresh
+  `indent` process and returns `{ok, status, stdout, stderr}`. Powers a real
+  browser "Run" button.
+- Docs: `docs/web-package.md`; demo: `examples/web_run.ind`.
+
+### 📦 AIR "Deliveries" — share a whole project
+- `air delivery` subcommands: `init`/`build`/`install`/`publish`/`search`/`list`/`info`.
+- A Delivery bundles a whole project into one `<name>-<ver>.dlv` archive
+  (`.dlv`, not `.del`). Installing makes its modules importable and pulls deps.
+- Docs: `docs/deliveries.md`.
+
+### 🖥️ Installer
+- `install.ps1`: robust cross-platform OS/arch detection; graceful message when
+  run off-Windows; source-build fallback (with Git/Rust/MSVC dependency bootstrap)
+  when no GitHub Release exists yet.
+
 ## 2.1 — 2026-09-03 (`is` declares, `=` reassigns)
 
 ### 🌐 Dynamic web server — `http_serve(handler, port)`
