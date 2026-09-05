@@ -231,7 +231,6 @@ fun handle req
 
 http_serve handle 8080
 ```
-Full example: [`examples/web_server.ind`](examples/web_server.ind).
 
 ### AI
 The `ai` package is like Python's `openai` SDK — an OpenAI-native client that works with **real OpenAI** or a **local Ollama** server (`air install ai`, then `get ai as AI`):
@@ -291,8 +290,6 @@ INDENT_BREAKOUT_BOT=1 indent examples/breakout_game.ind   # auto-play bot
 ```
 Breakout is written 100% in Indent: paddle physics, ball bounce, brick collision, scoring, and HUD all in Indent. The bot autoplay verifies the full loop headlessly.
 
-### Examples
-Working programs in [`examples/`](examples/): AI package demo (`ai_pkg.ind`), AI semantic search, AI-narrated game with GUI, game simulation, AI chat, embeddings, Python interop, InGame Snake, InGame Breakout.
 
 ---
 
