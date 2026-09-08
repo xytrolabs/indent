@@ -1,5 +1,18 @@
 # Indent Changelog
 
+## Unreleased (2.3-dev)
+
+### 🪺 Nests — project-local environments
+- `indent nest init` creates a `.nest/` (like a Python venv) with
+  `air-packages/`, `bin/`, `lib/`, and activation scripts.
+- `source .nest/activate` sets `INDENT_NEST`/`INDENT_HOME`/`INDENT_PATH` so
+  `air install <pkg>` installs project-locally and imports resolve from the nest.
+- Docs: `docs/env-nests.md`.
+
+### 🔁 Hot reload — `indent --watch <file>`
+- Re-parses and re-runs the script whenever it changes on disk (no compile
+  step, so near-instant restarts). Edit while a window/server is open.
+
 ## 2.2 — 2026-09-04 (web package, AIR Deliveries)
 
 ### 📦 Web package — `web` (std/web.ind)

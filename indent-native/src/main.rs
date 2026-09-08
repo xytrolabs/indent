@@ -13619,6 +13619,109 @@ fn load_project_environment(base_dir: &Path) {
     }
 }
 
+fn file_mtime_ns(path: &std::path::Path) -> Option<u128> {
+    std::fs::metadata(path).ok()?.modified().ok()?
+        .duration_since(std::time::UNIX_EPOCH).ok()
+        .map(|d| d.as_nanos())
+}
+
+/// Hot reload: run the file, then re-run whenever it changes on disk.
+/// Because Indent is a tree-walker there is no compile step, so this is a
+/// near-instant restart (edit a script while a window/server is open).
+fn watch_and_run(abs: &std::path::Path, debug: bool) {
+    let base = abs.parent().unwrap_or(std::path::Path::new("."));
+    let mut last: Option<u128> = None;
+    loop {
+        let m = file_mtime_ns(abs);
+        if m != last {
+            last = m;
+            println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("  indent --watch: {}", abs.display());
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            let mut runtime = Runtime::new(base.to_path_buf());
+            match runtime.run_file(abs) {
+                Ok(()) => {}
+                Err(err) => {
+                    if debug && err == DEBUGGER_STOP_MSG {
+                        continue;
+                    }
+                    let src = std::fs::read_to_string(abs).unwrap_or_default();
+                    eprintln!("{}", format_error_with_source(&src, &err));
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
+fn run_new_nest(base: &Path) -> Result<(), String> {
+    fs::create_dir_all(base)
+        .map_err(|e| format!("Failed to create {}: {e}", base.display()))?;
+    let nest = base.join(".nest");
+    if nest.exists() {
+        return Err(format!("A nest already exists here: {}", nest.display()));
+    }
+    for sub in ["air-packages", "bin", "lib"] {
+        fs::create_dir_all(nest.join(sub))
+            .map_err(|e| format!("Failed to create {sub}: {e}"))?;
+    }
+    let nest_str = nest.to_string_lossy().to_string();
+    let name = base
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .to_string();
+
+    // Bash activation (POSIX-ish).
+    let mut activate = String::from("#!/usr/bin/env bash\n");
+    activate.push_str(&format!("# Indent nest \"{}\" - activate: source .nest/activate\n", name));
+    activate.push_str("export INDENT_NEST=\"");
+    activate.push_str(&nest_str);
+    activate.push_str("\"\n");
+    activate.push_str("export INDENT_HOME=\"$INDENT_NEST\"\n");
+    activate.push_str("export INDENT_PATH=\"$INDENT_NEST/air-packages:$INDENT_NEST/lib${INDENT_PATH:+:$INDENT_PATH}\"\n");
+    activate.push_str("export PATH=\"$INDENT_NEST/bin${PATH:+:$PATH}\"\n");
+    activate.push_str("echo \"activated Indent nest: $INDENT_NEST\"\n");
+    activate.push_str("deactivate() {\n");
+    activate.push_str("  unset INDENT_NEST INDENT_HOME\n");
+    activate.push_str("  unset -f deactivate\n");
+    activate.push_str("  echo \"deactivated Indent nest\"\n");
+    activate.push_str("}\n");
+
+    // PowerShell activation.
+    let mut ps1 = String::new();
+    ps1.push_str(&format!("# Indent nest \"{}\" - activate: . .nest/Activate.ps1\n", name));
+    ps1.push_str("$env:INDENT_NEST=\"");
+    ps1.push_str(&nest_str);
+    ps1.push_str("\"\n");
+    ps1.push_str("$env:INDENT_HOME=$env:INDENT_NEST\n");
+    ps1.push_str("$env:INDENT_PATH=\"$env:INDENT_NEST/air-packages;$env:INDENT_NEST/lib;$env:INDENT_PATH\"\n");
+    ps1.push_str("$env:Path=\"$env:INDENT_NEST/bin;$env:Path\"\n");
+    ps1.push_str("Write-Host \"activated Indent nest: $env:INDENT_NEST\"\n");
+
+    fs::write(nest.join("activate"), activate)
+        .map_err(|e| format!("Failed to write activate: {e}"))?;
+    fs::write(nest.join("Activate.ps1"), ps1)
+        .map_err(|e| format!("Failed to write Activate.ps1: {e}"))?;
+    fs::write(
+        nest.join("deps.txt"),
+        "# Indent nest dependencies - one package per line, e.g.:\n# colors\n",
+    )
+    .map_err(|e| format!("Failed to write deps.txt: {e}"))?;
+    fs::write(
+        nest.join("README.txt"),
+        format!(
+            "Indent nest \"{name}\"\n\nA project-local environment for isolated Indent packages\n(like Python's venv). With this nest active, `air install <pkg>`\ninstalls into air-packages/ here instead of your global install, and\nimports resolve from this nest first.\n\nActivate:   source .nest/activate      (PowerShell: . .nest/Activate.ps1)\n"
+        ),
+    )
+    .map_err(|e| format!("Failed to write README: {e}"))?;
+
+    println!("✓ Created Indent nest at {}", nest.display());
+    println!("  Activate:   source {}/activate", nest.display());
+    println!("  Then:       air install <package>   (installs into this nest)");
+    Ok(())
+}
+
 fn main() {
     let args = env::args().collect::<Vec<_>>();
     if args.len() < 2 {
@@ -13649,6 +13752,30 @@ fn main() {
         };
         if let Err(err) = run_new_project(&abs) {
             eprintln!("Indent new error: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args[1] == "nest" {
+        let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
+        if sub != "init" {
+            eprintln!("Usage: indent nest init [dir]");
+            eprintln!("  Creates a project-local .nest (like a Python venv) for isolated packages.");
+            std::process::exit(2);
+        }
+        let target = if args.len() >= 4 {
+            PathBuf::from(&args[3])
+        } else {
+            PathBuf::from(".")
+        };
+        let abs = if target.is_absolute() {
+            target
+        } else {
+            env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(target)
+        };
+        if let Err(err) = run_new_nest(&abs) {
+            eprintln!("Indent nest error: {err}");
             std::process::exit(1);
         }
         return;
@@ -13756,6 +13883,7 @@ fn main() {
     }
 
     let mut debug = false;
+    let mut watch = false;
     let mut breakpoints = HashSet::new();
     let mut file_arg: Option<String> = None;
 
@@ -13768,6 +13896,12 @@ fn main() {
         let arg = &args[i];
         if arg == "--debug" {
             debug = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--watch" {
+            watch = true;
             i += 1;
             continue;
         }
@@ -13842,6 +13976,11 @@ fn main() {
         // `indent run /abs/path/bot.ind` work from any terminal directory.
         let _ = env::set_current_dir(base_dir);
         load_project_environment(base_dir);
+    }
+
+    if watch {
+        watch_and_run(&abs, debug);
+        return;
     }
 
     let mut runtime = Runtime::new(

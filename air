@@ -3,7 +3,7 @@
 # Usage: air <command> [args]
 set -euo pipefail
 
-AIR_HOME="${HOME}/.local/share/indent"
+AIR_HOME="${INDENT_HOME:-${HOME}/.local/share/indent}"
 AIR_PACKAGES="${AIR_HOME}/air-packages"
 AIR_CACHE="${AIR_HOME}/air-cache"
 AIR_REGISTRY="${AIR_REGISTRY:-https://raw.githubusercontent.com/xytrolabs/air/main}"
