@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.1.0
+# Indent Language (.ind) v2.2.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,6 +7,13 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ### 🎉 What's New in 2.2.0
+> - 🪺 **Nests** — project-local environments (`indent nest init`), with auto-detection
+> - 🔁 **`indent --watch`** — hot reload: re-run on save (no compile step)
+> - 📦 **Web package** — `get RunCode from web` + `Html`/`Json`/`Text` response builders
+> - 📦 **AIR Deliveries** — `air delivery` build/install/publish to share a whole project
+> - 🛠 Installer (Windows) — robust detection, source-build & dependency fallback
+>
 > ### 🎉 What's New in 2.1.0
 > - ✍️ **`is` for declarations, `=` for reassignment** — `var x is 42` declares,
 >   `x = 43` reassigns. The old forms (`var x = 42`, `x is 43`) still work too.

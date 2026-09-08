@@ -1,6 +1,6 @@
 # Indent Changelog
 
-## Unreleased (2.3-dev)
+## 2.2 — 2026-09-07 (nests & hot reload)
 
 ### 🪺 Nests — project-local environments
 - `indent nest init` creates a `.nest/` (like a Python venv) with
@@ -15,7 +15,7 @@
 - Re-parses and re-runs the script whenever it changes on disk (no compile
   step, so near-instant restarts). Edit while a window/server is open.
 
-## 2.2 — 2026-09-04 (web package, AIR Deliveries)
+## 2.2 (also) — 2026-09-04: web package, AIR Deliveries & installer
 
 ### 📦 Web package — `web` (std/web.ind)
 - New first-party `web` package layered on `http_serve`: `Html`/`Json`/`Text`/`Send`

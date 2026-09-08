@@ -13772,24 +13772,62 @@ fn main() {
 
     if args[1] == "nest" {
         let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
-        if sub != "init" {
-            eprintln!("Usage: indent nest init [dir]");
-            eprintln!("  Creates a project-local .nest (like a Python venv) for isolated packages.");
-            std::process::exit(2);
-        }
-        let target = if args.len() >= 4 {
-            PathBuf::from(&args[3])
-        } else {
-            PathBuf::from(".")
-        };
-        let abs = if target.is_absolute() {
-            target
-        } else {
-            env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(target)
-        };
-        if let Err(err) = run_new_nest(&abs) {
-            eprintln!("Indent nest error: {err}");
-            std::process::exit(1);
+        match sub {
+            "init" => {
+                let target = if args.len() >= 4 {
+                    PathBuf::from(&args[3])
+                } else {
+                    PathBuf::from(".")
+                };
+                let abs = if target.is_absolute() {
+                    target
+                } else {
+                    env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(target)
+                };
+                if let Err(err) = run_new_nest(&abs) {
+                    eprintln!("Indent nest error: {err}");
+                    std::process::exit(1);
+                }
+            }
+            "list" | "ls" => {
+                let base = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                if let Some(nest) = find_nest(&base) {
+                    let ap = nest.join("air-packages");
+                    match std::fs::read_dir(&ap) {
+                        Ok(entries) => {
+                            let mut names: Vec<String> = entries
+                                .filter_map(|e| e.ok())
+                                .map(|e| e.file_name().to_string_lossy().to_string())
+                                .filter(|n| n.ends_with(".ind"))
+                                .collect();
+                            names.sort();
+                            if names.is_empty() {
+                                println!("(this nest has no packages installed)");
+                            }
+                            for n in names {
+                                println!("{}", n);
+                            }
+                        }
+                        Err(_) => println!("(this nest has no packages installed)"),
+                    }
+                } else {
+                    eprintln!("No .nest found in this directory (or any parent).");
+                    std::process::exit(1);
+                }
+            }
+            "path" => {
+                let base = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                if let Some(nest) = find_nest(&base) {
+                    println!("{}", nest.display());
+                } else {
+                    eprintln!("No .nest found in this directory (or any parent).");
+                    std::process::exit(1);
+                }
+            }
+            _ => {
+                eprintln!("Usage: indent nest <init|list|path> [dir]");
+                std::process::exit(2);
+            }
         }
         return;
     }

@@ -1,15 +1,28 @@
-# Your Journey with Indent 2.1
+# Your Journey with Indent 2.2
 
 > Indent is a language designed for **learning and building**. Its syntax uses
 > indentation instead of braces — like Python, but with simpler keywords and
 > fewer symbols. You can write scripts, web servers, GUI apps, and Discord
 > bots, all in one language.
 
-> **2.1** uses `is` to declare (`var x is 42`) and `=` to reassign (`x = 43`),
-> while still accepting the classic forms. **2.0** added the color subsystem,
-> std-lib breadth, class special methods + `dataclass`, and generators/`yield`.
+> **2.2** adds **nests** (project-local package environments) and **`--watch`**
+> hot reload. **2.1** uses `is` to declare (`var x is 42`) and `=` to reassign
+> (`x = 43`), while still accepting the classic forms. **2.0** added the color
+> subsystem, std-lib breadth, class special methods + `dataclass`, and
+> generators/`yield`.
 
 ---
+
+## What's New in 2.2
+
+- 🪺 **Nests** — `indent nest init` creates a project-local `.nest/` (like a
+  Python venv) for isolated packages. Running a file inside a project
+  auto-detects the `.nest/`. Docs: `env-nests.md`.
+- 🔁 **`indent --watch <file>`** — re-parses and re-runs on every save.
+- 📦 **Web package** — `get RunCode from web`, `Html`/`Json`/`Text`/`Send`.
+  Docs: `web-package.md`.
+- 📦 **AIR Deliveries** — `air delivery` to bundle & share a whole project.
+  Docs: `deliveries.md`.
 
 ## What's New in 2.1
 
