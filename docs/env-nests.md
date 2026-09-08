@@ -42,6 +42,39 @@ Activating sets:
 
 Deactivate with `deactivate`, or close the shell.
 
+## Pin an Indent version (per-nest interpreter)
+
+Like choosing which Python a `venv` is built from, a nest can **pin its own
+Indent interpreter version** so the whole project uses a specific release
+(including an older one) regardless of what `indent` is on your global PATH.
+
+```bash
+indent nest install             # pin the newest published release
+indent nest install 2.1.0       # pin a specific (e.g. older) release
+indent nest use 2.1.0           # alias of install
+indent nest version             # show what this nest is pinned to
+```
+
+`install` downloads the **prebuilt** binary that the release CI publishes for
+that tag into `.nest/bin/` and records the version in `.nest/indent-version`.
+Because activating a nest prepends `.nest/bin` to `PATH`, running `indent` while
+the nest is active uses the pinned version:
+
+```bash
+source .nest/activate
+indent --version                # → the nest's pinned Indent
+```
+
+Notes:
+
+- Versions are release tags: `latest` (default) or `2.1.0` / `v2.1.0`.
+- The binary is downloaded from GitHub Releases
+  (`indent-<version>-<target>.tar.gz`), so the tag must have CI-built binaries
+  published. Only tagged releases with binaries can be installed into a nest; if
+  none is published yet for that tag you'll get a clear message.
+- Pinning is per-nest and isolated: switch to a different project's nest and you
+  get that project's interpreter version.
+
 ## How it relates to normal Indent
 
 Without a nest, packages install to `~/.local/share/indent/air-packages` and

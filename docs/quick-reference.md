@@ -416,6 +416,9 @@ indent --version             # Show version
 indent --watch file.ind      # Hot reload: re-run on every save
 indent --safe file.ind       # Run in a default-deny sandbox (no file/OS/net/Python)
 indent nest init             # Create a project-local .nest/ environment (venv-like)
+indent nest install [ver]    # Pin an Indent release (e.g. '2.1.0' or 'latest') into this nest
+indent nest use [ver]        # Alias of install
+indent nest version          # Show this nest's pinned Indent version
 indent nest list             # Show the active nest & its packages
 indent nest path             # Print the active nest's path
 air delivery                 # Bundle & share a whole project (in a project folder)

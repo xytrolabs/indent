@@ -9,6 +9,10 @@
   `air install <pkg>` installs project-locally and imports resolve from the nest.
 - Running `indent <file>` inside a project **auto-detects** a `.nest/` and adds
   its `air-packages/` + `lib/` to the module search path (no manual activate needed).
+- **Per-nest interpreter versions** — `indent nest install [<version>]` / `use`
+  download a specific (e.g. older) release's prebuilt binary into `.nest/bin/`
+  and record it in `.nest/indent-version`; `indent nest version` shows the pin.
+  When the nest is active, `indent` on PATH is that pinned version.
 - Docs: `docs/env-nests.md`.
 
 ### 🔁 Hot reload — `indent --watch <file>`

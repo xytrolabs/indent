@@ -13790,7 +13790,206 @@ fn run_new_nest(base: &Path) -> Result<(), String> {
     println!("✓ Created Indent nest at {}", nest.display());
     println!("  Activate:   source {}/activate", nest.display());
     println!("  Then:       air install <package>   (installs into this nest)");
+    println!("             indent nest install <version>   (pins the interpreter)");
     Ok(())
+}
+
+// =============================================================================
+// Nest interpreter version pinning — `indent nest install <version>`
+//
+// A nest can pin its own Indent interpreter version, like a Python venv built
+// from a chosen python. We download the *prebuilt* binary that the release CI
+// publishes for the given tag (`indent-<tag>-<target>.tar.gz` / `.zip`) and
+// drop it into `.nest/bin/`. Because activating a nest prepends `.nest/bin` to
+// PATH, `indent` then resolves to the pinned version inside the nest.
+// =============================================================================
+
+/// Map the current platform/arch onto the release-asset target triple.
+fn indent_target_triple() -> Option<String> {
+    let (os, arch) = (env::consts::OS, env::consts::ARCH);
+    let t = match (os, arch) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        _ => return None,
+    };
+    Some(t.to_string())
+}
+
+/// Turn a user-supplied version into a release tag ("2.2.0" -> "v2.2.0").
+fn normalize_version_tag(v: &str) -> String {
+    let t = v.trim();
+    if t.starts_with('v') || t.starts_with('V') {
+        format!("v{}", t.trim_start_matches(['v', 'V']))
+    } else {
+        format!("v{t}")
+    }
+}
+
+/// Resolve "latest" (or an explicit version) to a concrete release tag.
+fn resolve_release_tag(
+    client: &reqwest::blocking::Client,
+    version: &str,
+) -> Result<String, String> {
+    if version.eq_ignore_ascii_case("latest") {
+        // Use the git-tags endpoint (newest first) rather than releases/latest,
+        // which only works once a formal release has been published. A tag is
+        // enough to reach its CI-built assets under releases/download/<tag>/.
+        let url = "https://api.github.com/repos/xytrolabs/indent/tags?per_page=50";
+        let resp = client
+            .get(url)
+            .header(reqwest::header::USER_AGENT, "indent-nest")
+            .send()
+            .map_err(|e| format!("could not reach GitHub to find the latest version: {e}"))?;
+        let status = resp.status().as_u16();
+        let body = resp
+            .text()
+            .map_err(|e| format!("failed to read tags response: {e}"))?;
+        if status != 200 {
+            return Err(format!(
+                "GitHub returned {status} while finding the latest version: {body}"
+            ));
+        }
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| format!("failed to parse tags response: {e}"))?;
+        let tags = json
+            .as_array()
+            .ok_or_else(|| "GitHub tags response was not a list".to_string())?;
+        tags.iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .find(|name| {
+                let n = name.trim_start_matches('v');
+                !n.is_empty() && n.chars().next().map_or(false, |c| c.is_ascii_digit())
+            })
+            .map(|s| s.to_string())
+            .ok_or_else(|| "no version tags found on GitHub".to_string())
+    } else {
+        Ok(normalize_version_tag(version))
+    }
+}
+
+/// Download a release tag's prebuilt Indent binary into `nest/bin` and record
+/// the pinned version in `.nest/indent-version`.
+fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), String> {
+    let target = indent_target_triple().ok_or_else(|| {
+        "no prebuilt Indent binary is published for this platform/architecture".to_string()
+    })?;
+    let client = reqwest::blocking::Client::new();
+
+    println!("  Resolving Indent version ...");
+    let tag = resolve_release_tag(&client, version)?;
+    let plain = tag.trim_start_matches('v').to_string();
+
+    let is_windows = target.ends_with("windows-msvc");
+    let bin_name = if is_windows { "indent.exe" } else { "indent" };
+    let ext = if is_windows { "zip" } else { "tar.gz" };
+    let url = format!(
+        "https://github.com/xytrolabs/indent/releases/download/{tag}/indent-{tag}-{target}.{ext}"
+    );
+
+    println!("  Downloading Indent {tag} for {target} ...");
+    let resp = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, "indent-nest")
+        .send()
+        .map_err(|e| format!("download request failed: {e}"))?;
+    let status = resp.status().as_u16();
+    if status == 404 {
+        return Err(format!(
+            "No prebuilt Indent {tag} for {target} is published yet.\n  Only tagged releases with CI-built binaries can be installed into a nest."
+        ));
+    }
+    if status != 200 {
+        return Err(format!("download failed with HTTP {status}"));
+    }
+    let bytes = resp
+        .bytes()
+        .map_err(|e| format!("failed to read downloaded binary: {e}"))?;
+
+    let bin_dir = nest.join("bin");
+    std::fs::create_dir_all(&bin_dir)
+        .map_err(|e| format!("failed to create {}: {e}", bin_dir.display()))?;
+    let dest = bin_dir.join(bin_name);
+
+    let mut found = false;
+    if is_windows {
+        // .zip — pull out just indent.exe.
+        let reader = std::io::Cursor::new(bytes.as_ref().to_vec());
+        let mut archive = zip::ZipArchive::new(reader)
+            .map_err(|e| format!("failed to read zip archive: {e}"))?;
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| format!("failed to read zip entry: {e}"))?;
+            if entry.name().ends_with(bin_name) {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                entry
+                    .read_to_end(&mut buf)
+                    .map_err(|e| format!("failed to extract {bin_name}: {e}"))?;
+                std::fs::write(&dest, &buf)
+                    .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
+                found = true;
+                break;
+            }
+        }
+    } else {
+        // .tar.gz — pull out just the `indent` binary.
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let gz = GzDecoder::new(bytes.as_ref());
+        let mut archive = tar::Archive::new(gz);
+        let entries = archive
+            .entries()
+            .map_err(|e| format!("failed to read tar archive: {e}"))?;
+        for entry in entries {
+            let mut entry = entry.map_err(|e| format!("failed to read tar entry: {e}"))?;
+            let path = entry
+                .path()
+                .map_err(|e| format!("failed to read tar entry path: {e}"))?
+                .into_owned();
+            if path.file_name().and_then(|s| s.to_str()) == Some(bin_name) {
+                let mut buf = Vec::new();
+                entry
+                    .read_to_end(&mut buf)
+                    .map_err(|e| format!("failed to extract {bin_name}: {e}"))?;
+                std::fs::write(&dest, &buf)
+                    .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if !found {
+        return Err(format!(
+            "the {tag} release archive did not contain a {bin_name} binary"
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+    }
+
+    std::fs::write(nest.join("indent-version"), format!("{plain}\n"))
+        .map_err(|e| format!("failed to record pinned version: {e}"))?;
+
+    println!("✓ Installed Indent {plain} into this nest");
+    println!("  Binary: {}", dest.display());
+    println!("  Pin:    written to {}/indent-version", nest.display());
+    println!("  Use:    source {}/activate  (then `indent --version`)", nest.display());
+    Ok(())
+}
+
+/// Read the version pinned into a nest, or "" if none.
+fn nest_pinned_version(nest: &std::path::Path) -> String {
+    std::fs::read_to_string(nest.join("indent-version"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn main() {
@@ -13847,6 +14046,45 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            "install" | "use" => {
+                let base = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let nest = match find_nest(&base) {
+                    Some(n) => n,
+                    None => {
+                        eprintln!("No .nest found in this directory (or any parent).\n  Create one first with: indent nest init");
+                        std::process::exit(1);
+                    }
+                };
+                let version = args.get(3).map(|s| s.as_str()).unwrap_or("latest");
+                if let Err(err) = nest_install_version(&nest, version) {
+                    eprintln!("Indent nest error: {err}");
+                    std::process::exit(1);
+                }
+            }
+            "version" => {
+                let base = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                if let Some(nest) = find_nest(&base) {
+                    let pinned = nest_pinned_version(&nest);
+                    let has_bin = nest.join("bin/indent").is_file()
+                        || nest.join("bin/indent.exe").is_file();
+                    if pinned.is_empty() && !has_bin {
+                        println!("This nest does not pin an Indent version (using your global `indent`).\n  Pin one with: indent nest install <version>");
+                    } else {
+                        let label = if pinned.is_empty() {
+                            "(unknown)".to_string()
+                        } else {
+                            pinned.clone()
+                        };
+                        println!("Indent {label} (pinned in {})", nest.display());
+                        if !has_bin {
+                            println!("  (note: version recorded but no binary present in bin/)");
+                        }
+                    }
+                } else {
+                    eprintln!("No .nest found in this directory (or any parent).");
+                    std::process::exit(1);
+                }
+            }
             "list" | "ls" => {
                 let base = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 if let Some(nest) = find_nest(&base) {
@@ -13883,7 +14121,15 @@ fn main() {
                 }
             }
             _ => {
-                eprintln!("Usage: indent nest <init|list|path> [dir]");
+                eprintln!("Usage: indent nest <init|install|use|version|list|path> [args]");
+                eprintln!("  indent nest init [dir]                 create a .nest (venv-like)");
+                eprintln!("  indent nest install [version]          pin a specific Indent into this nest");
+                eprintln!("  indent nest use [version]              alias of install");
+                eprintln!("  indent nest version                    show this nest's pinned Indent");
+                eprintln!("  indent nest list|ls                    list packages in this nest");
+                eprintln!("  indent nest path                       print this nest's path");
+                eprintln!();
+                eprintln!("  version is a release tag: 'latest' (default) or e.g. '2.1.0' / 'v2.1.0'");
                 std::process::exit(2);
             }
         }

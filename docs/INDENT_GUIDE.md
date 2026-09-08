@@ -1391,6 +1391,20 @@ indent nest list                 # show the active nest and its packages
 indent nest path                 # print the path to the active nest
 ```
 
+**Pin an interpreter version** — a nest can use a specific Indent release
+(including an older one), independent of your global `indent`:
+
+```bash
+indent nest install              # pin the newest published release
+indent nest install 2.1.0        # pin a specific (e.g. older) release
+indent nest use 2.1.0            # alias of install
+indent nest version              # show the pinned version
+```
+
+`install` downloads the release-CI **prebuilt** binary for that tag into
+`.nest/bin/` and records it in `.nest/indent-version`; when the nest is active
+(`source .nest/activate`), `indent` on PATH is that pinned version.
+
 Running any file inside a project that has a `.nest/` **auto-detects** it and
 prepends its `air-packages:` and `lib:` paths to the module search path, so the
 project's packages resolve without extra flags. A `.nest/` contains
