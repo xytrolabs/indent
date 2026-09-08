@@ -7,6 +7,8 @@
   `air-packages/`, `bin/`, `lib/`, and activation scripts.
 - `source .nest/activate` sets `INDENT_NEST`/`INDENT_HOME`/`INDENT_PATH` so
   `air install <pkg>` installs project-locally and imports resolve from the nest.
+- Running `indent <file>` inside a project **auto-detects** a `.nest/` and adds
+  its `air-packages/` + `lib/` to the module search path (no manual activate needed).
 - Docs: `docs/env-nests.md`.
 
 ### 🔁 Hot reload — `indent --watch <file>`

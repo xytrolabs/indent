@@ -13625,6 +13625,19 @@ fn file_mtime_ns(path: &std::path::Path) -> Option<u128> {
         .map(|d| d.as_nanos())
 }
 
+/// Walk up from `start` looking for a project-local `.nest` directory.
+fn find_nest(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut cur = Some(start.to_path_buf());
+    while let Some(d) = cur {
+        let nest = d.join(".nest");
+        if nest.is_dir() {
+            return Some(nest);
+        }
+        cur = d.parent().map(|p| p.to_path_buf());
+    }
+    None
+}
+
 /// Hot reload: run the file, then re-run whenever it changes on disk.
 /// Because Indent is a tree-walker there is no compile step, so this is a
 /// near-instant restart (edit a script while a window/server is open).
@@ -13976,6 +13989,24 @@ fn main() {
         // `indent run /abs/path/bot.ind` work from any terminal directory.
         let _ = env::set_current_dir(base_dir);
         load_project_environment(base_dir);
+    }
+
+    if let Some(base_dir) = abs.parent() {
+        if let Some(nest) = find_nest(base_dir) {
+            let extra = format!(
+                "{}:{}",
+                nest.join("air-packages").display(),
+                nest.join("lib").display()
+            );
+            let existing = env::var("INDENT_PATH").unwrap_or_default();
+            let merged = if existing.is_empty() {
+                extra
+            } else {
+                format!("{extra}:{existing}")
+            };
+            // SAFETY: single-threaded startup before any interpreter work.
+            unsafe { env::set_var("INDENT_PATH", merged); }
+        }
     }
 
     if watch {
