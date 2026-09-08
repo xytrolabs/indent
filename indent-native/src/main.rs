@@ -13134,17 +13134,38 @@ fn self_update() {
 }
 
 fn usage() {
-    eprintln!("Usage:");
-    eprintln!("  indent [--debug] [--break N[,M...]] <file.ind>");
-    eprintln!("  indent run [--debug] [--break N[,M...]] <file.ind>");
-    eprintln!("  indent repl");
-    eprintln!("  indent check <file-or-dir>");
-    eprintln!("  indent test [path]");
-    eprintln!("  indent lint <file.ind>");
-    eprintln!("  indent fmt [--check] <file.ind>");
-    eprintln!("  indent new <project-name-or-path>");
-    eprintln!("  indent --update            Update to latest version");
-    eprintln!("  indent --version");
+    eprintln!("Indent {} — a language for learning and building", INDENT_VERSION);
+    eprintln!();
+    eprintln!("Usage:  indent [--debug] [--break N[,M...]] <file.ind>");
+    eprintln!("        indent <command> [options] [args]");
+    eprintln!();
+    eprintln!("Commands:");
+    eprintln!("  run <file.ind>            Run a program (also: indent <file.ind>)");
+    eprintln!("  repl                      Interactive REPL");
+    eprintln!("  check <file-or-dir>       Parse/check syntax (.ind files)");
+    eprintln!("  test [path]               Run tests");
+    eprintln!("  lint <file.ind>           Lint a file");
+    eprintln!("  fmt [--check] <file.ind>  Auto-format a file");
+    eprintln!("  new <name-or-path>        Scaffold a new project");
+    eprintln!("  nest ...                  Project-local environments (venv-like)");
+    eprintln!();
+    eprintln!("Nest subcommands:");
+    eprintln!("  indent nest init [dir]       Create a .nest/ in [dir] (default .)");
+    eprintln!("  indent nest install [ver]    Pin an Indent release into this nest (e.g. '2.1.0')");
+    eprintln!("  indent nest use [ver]        Alias of install");
+    eprintln!("  indent nest version          Show this nest's pinned Indent version");
+    eprintln!("  indent nest list             List packages in this nest");
+    eprintln!("  indent nest path             Print this nest's path");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --watch <file.ind>        Hot reload: re-run on every save");
+    eprintln!("  --safe <file.ind>         Run in a default-deny sandbox (no file/OS/net/Python)");
+    eprintln!("  --debug [--break N[,M]]   Debug with breakpoints");
+    eprintln!("  --update                  Update Indent to the latest version");
+    eprintln!("  --version, -V             Print version");
+    eprintln!("  --help, -h                Show this help");
+    eprintln!();
+    eprintln!("Packages: air install <pkg>   |   Docs: https://github.com/xytrolabs/indent");
 }
 
 fn check_single_file(file: &Path) -> Result<(), String> {
