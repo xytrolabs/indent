@@ -13044,15 +13044,13 @@ fn self_update() {
     
     println!("⚡ Indent updater — fetching latest from GitHub...");
     
-    // Clone or pull the repo
-    let git_result = if tmp.join(".git").exists() {
-        Command::new("git").args(&["-C", tmp.to_str().unwrap_or("/tmp/indent-update"), "pull", "--ff-only"])
-            .output()
-    } else {
-        let _ = std::fs::remove_dir_all(&tmp);
-        Command::new("git").args(&["clone", "--depth", "1", repo_url, tmp.to_str().unwrap_or("/tmp/indent-update")])
-            .output()
-    };
+    // Always start from a clean, fresh shallow clone. Re-using a leftover
+    // working copy (git pull) fails whenever it has local changes (e.g. a
+    // dirty Cargo.lock), so we simply discard it and re-clone each run.
+    let _ = std::fs::remove_dir_all(&tmp);
+    let git_result = Command::new("git")
+        .args(&["clone", "--depth", "1", repo_url, tmp.to_str().unwrap_or("/tmp/indent-update")])
+        .output();
     
     match git_result {
         Ok(out) if out.status.success() => {},
