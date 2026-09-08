@@ -15,6 +15,11 @@
 - Re-parses and re-runs the script whenever it changes on disk (no compile
   step, so near-instant restarts). Edit while a window/server is open.
 
+### 🔒 Safe mode — `indent --safe <file>`
+- Default-deny sandbox: only pure/computational builtins are allowed; anything
+  touching files/OS/network/process/Python/shell is blocked. Run untrusted
+  scripts safely (e.g. in web playgrounds or Discord bots).
+
 ## 2.2 (also) — 2026-09-04: web package, AIR Deliveries & installer
 
 ### 📦 Web package — `web` (std/web.ind)

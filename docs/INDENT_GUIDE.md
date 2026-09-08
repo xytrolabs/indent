@@ -15,6 +15,8 @@
 
 ## What's New in 2.2
 
+- 🔒 **`indent --safe <file>`** — a default-deny sandbox: only pure
+  computational builtins are allowed, so you can run untrusted scripts safely.
 - 🪺 **Nests** — `indent nest init` creates a project-local `.nest/` (like a
   Python venv) for isolated packages. Running a file inside a project
   auto-detects the `.nest/`. Docs: `env-nests.md`.

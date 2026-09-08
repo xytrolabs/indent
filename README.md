@@ -10,7 +10,8 @@ say "Hello " + name + "!"
 > ### 🎉 What's New in 2.2.0
 > - 🪺 **Nests** — project-local environments (`indent nest init`), with auto-detection
 > - 🔁 **`indent --watch`** — hot reload: re-run on save (no compile step)
-> - 📦 **Web package** — `get RunCode from web` + `Html`/`Json`/`Text` response builders
+> - � **`indent --safe`** — default-deny sandbox for running untrusted scripts
+> - �📦 **Web package** — `get RunCode from web` + `Html`/`Json`/`Text` response builders
 > - 📦 **AIR Deliveries** — `air delivery` build/install/publish to share a whole project
 > - 🛠 Installer (Windows) — robust detection, source-build & dependency fallback
 >

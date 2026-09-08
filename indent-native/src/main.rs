@@ -23,6 +23,7 @@ static WS_CLIENTS: LazyLock<Mutex<HashMap<i64, WsClient>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static WS_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 static RNG_STATE: AtomicI64 = AtomicI64::new(0x4d595df4d0f33173u64 as i64);
+static SAFE_MODE: AtomicBool = AtomicBool::new(false);
 static PERF_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 // ── Async task store ────────────────────────────────────────
@@ -2116,6 +2117,20 @@ fn exec_call(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Resul
 }
 
 fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    if safe_mode() {
+        let lc = callee.to_ascii_lowercase();
+        let dangerous = lc.starts_with("py.")
+            || lc.starts_with("os_") || lc.starts_with("http") || lc.starts_with("ws_")
+            || lc.starts_with("python_") || lc.starts_with("file_") || lc.starts_with("sqlite")
+            || lc.starts_with("csv_") || lc.starts_with("future_") || lc.starts_with("task_")
+            || lc.starts_with("process_") || lc.starts_with("zip_")
+            || matches!(lc.as_str(), "spawn" | "parallel" | "coop" | "run_file"
+                | "http_serve" | "http_serve_dir" | "ask" | "gui_show_html" | "sleep"
+                | "glob" | "walk" | "process_exit");
+        if dangerous {
+            return Err(format!("'{callee}' is not allowed in safe mode"));
+        }
+    }
     let mut positional: Vec<Value> = vec![];
     let mut named: HashMap<String, Value> = HashMap::new();
 
@@ -3117,8 +3132,51 @@ fn builtin_category(name: &str) -> &'static str {
     }
 }
 
+fn safe_mode() -> bool {
+    SAFE_MODE.load(Ordering::Relaxed)
+}
+
+/// Default-deny allowlist for `--safe`: only pure / computational builtins.
+/// Anything not listed here is blocked in safe mode.
+fn is_safe_builtin(name: &str) -> bool {
+    if name.starts_with("math_") || name.starts_with("regex_") || name.starts_with("random_")
+        || name.starts_with("str_") || name.starts_with("path_") || name.starts_with("is_")
+        || name.starts_with("set_")
+    {
+        return true;
+    }
+    matches!(
+        name,
+        "abs" | "add_int" | "all" | "any" | "append" | "assert" | "assert_eq"
+        | "between_int" | "bool" | "boolean" | "builtins" | "capitalize" | "clamp"
+        | "clear" | "coalesce" | "colored" | "contains" | "copy" | "count" | "counter"
+        | "bg" | "bg_gradient" | "bg_multicolor" | "bg_rainbow" | "fg" | "gradient"
+        | "multicolor" | "paint" | "rainbow" | "style" | "dec" | "default" | "dict_get"
+        | "dict_items" | "dict_remove" | "dict_set" | "dict_update" | "div_int"
+        | "ends_with" | "enumerate" | "extend" | "false" | "filter" | "find" | "float"
+        | "float_or" | "format" | "group" | "gzip_compress" | "gzip_decompress"
+        | "hash_sha256" | "has_key" | "inc" | "index" | "insert" | "int" | "int_or"
+        | "items" | "join" | "json_dumps" | "json_loads" | "keys" | "len" | "lower"
+        | "lstrip" | "map" | "chain" | "flatten" | "chunk" | "product" | "permutations"
+        | "combinations" | "accumulate" | "cycle" | "repeat_item" | "takewhile"
+        | "dropwhile" | "unique" | "partition" | "group_by" | "max_key" | "min_key"
+        | "reduce" | "zip_longest" | "pairwise" | "filterfalse" | "compress" | "starmap"
+        | "first" | "last" | "max" | "min" | "mod_int" | "mul_int" | "ok" | "pad_left"
+        | "pad_right" | "pop" | "print" | "range" | "remove" | "repeat_str" | "replace"
+        | "reverse" | "rstrip" | "say" | "set" | "sformat" | "slice" | "sort" | "split"
+        | "starts_with" | "str" | "string" | "sub_int" | "sum" | "swapcase" | "title"
+        | "to_list" | "toml_dumps" | "toml_loads" | "trim" | "true" | "type_of"
+        | "typeof" | "upper" | "values" | "uuid" | "yaml_dumps" | "yaml_loads"
+        | "time_format" | "time_parse" | "time_now" | "time_perf_counter" | "time_utc"
+        | "sys_arch" | "sys_platform" | "sys_version"
+    )
+}
+
 fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, String>> {
     let builtin = callee.to_ascii_lowercase();
+    if safe_mode() && !is_safe_builtin(&builtin) {
+        return Some(Err(format!("'{builtin}' is not allowed in safe mode")));
+    }
     match builtin.as_str() {
         "builtins" => {
             if !positional.is_empty() {
@@ -13947,6 +14005,12 @@ fn main() {
         let arg = &args[i];
         if arg == "--debug" {
             debug = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--safe" {
+            SAFE_MODE.store(true, Ordering::Relaxed);
             i += 1;
             continue;
         }
