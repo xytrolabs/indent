@@ -202,7 +202,12 @@ get Sha256 from hash       # hashing
 get Write from fs          # file system
 ```
 
-Modules: `strings`, `math`, `collections`, `fs`, `json`, `os`, `io`, `time`, `datetime`, `random`, `regex`, `path`, `hash`, `base64`, `sys`, `testing`, `net`. Std functions are PascalCase so they never clash with the (lowercase) builtins.
+Modules: `strings`, `math`, `collections`, `fs`, `json`, `os`, `io`, `time`,
+`datetime`, `random`, `regex`, `path`, `hash`, `base64`, `sys`, `testing`,
+`net` — plus the first-party packages `web` (in-browser code running),
+`debug` (colored logs), `ingame` (2D games), and `ai` (OpenAI client). Std
+functions are PascalCase so they never clash with the (lowercase) builtins.
+See [`docs/INDENT_GUIDE.md`](docs/INDENT_GUIDE.md) for the full in-depth guide.
 
 ### Package Manager (AIR)
 AIR is Indent's pip — install packages from the [registry](https://github.com/xytrolabs/air) (50 packages and growing):

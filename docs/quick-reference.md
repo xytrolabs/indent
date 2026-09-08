@@ -1,5 +1,12 @@
-# Indent Quick Reference (v2.1)
+# Indent Quick Reference (v2.2)
 
+> **New in 2.2**: 🔒 `indent --safe` (default-deny sandbox for untrusted
+> scripts), 🪺 nests (`indent nest init/list/path`), 🔁 `indent --watch` (hot
+> reload), 📦 `air delivery` + the `web` std module. See
+> [`INDENT_GUIDE.md`](INDENT_GUIDE.md) for the full manual.
+
+> **New in 2.1**: `var x is 42` *declares*, `x = 43` *reassigns* (both forms
+> work the other way for compatibility, but keep `is`-declare / `=`-reassign).
 > Complete syntax reference for the Indent programming language.
 > **New in 2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint`; std-lib breadth — `chain`/`flatten`/`chunk`/`product`/`permutations`/`combinations`/`accumulate`/`cycle`/`repeat_item`/`takewhile`/`dropwhile`/`unique`/`partition`/`group_by`/`max_key`/`min_key`/`reduce`, math extras, random extras; **class special methods** (natural names: `to_string`, `add`, `equals`, `len`, `get_item`, `contains`) + `dataclass`; **generators/`yield`** (finite, `for` over them, `is_generator`, `to_list`).
 > **New in 1.6.2**: `builtins()` grouped by category; type checks `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`; `launch` canonical.
@@ -97,6 +104,40 @@ class Employee from Person  # Single inheritance
     var role string
     fun greet
         say "I'm " + name + ", " + role
+
+#! Special methods — plain-English names the runtime calls automatically
+class Vector
+    var x int
+    var y int
+    fun to_string        #! say/print → "Vector(3, 4)"
+        give "Vector(" + string(x) + ", " + string(y) + ")"
+    fun add other        #! used by +
+        give Vector(x + other.x, y + other.y)
+    fun equals other     #! used by == / !=
+        give x == other.x
+    #! also: subtract, multiply, divide, len, get_item, contains
+
+#! dataclass = class that auto-generates to_string + equals from its fields
+dataclass Point
+    var px int
+    var py int
+say Point(1, 2)                 # → Point(px: 1, py: 2)
+say Point(1, 2) == Point(1, 2)  # → TRUE
+
+#! Generators: a function containing yield is a generator
+fun countdown n
+    yield n
+    yield n - 1
+    yield n - 2
+for x in countdown 3    # 3, 2, 1
+    say x
+is_generator(g)         # → TRUE
+var xs = to_list(countdown 3)   # → [3, 2, 1]  (materialize)
+```
+
+## Calling by name
+```indent
+call_func "double" 21    # invoke a function whose name is a runtime string
 ```
 
 ## Control Flow
@@ -366,10 +407,22 @@ indent fmt file.ind          # Format code
 indent check file.ind        # Check syntax
 indent lint file.ind         # Lint code
 indent repl                  # Interactive REPL
-indent test tests/           # Run tests
+indent test tests/           # Run tests (expects a directory)
 indent --debug file.ind      # Debug mode
 indent --update              # Update to latest version
+indent --version             # Show version
+
+# v2.2 tooling
+indent --watch file.ind      # Hot reload: re-run on every save
+indent --safe file.ind       # Run in a default-deny sandbox (no file/OS/net/Python)
+indent nest init             # Create a project-local .nest/ environment (venv-like)
+indent nest list             # Show the active nest & its packages
+indent nest path             # Print the active nest's path
+air delivery                 # Bundle & share a whole project (in a project folder)
 ```
+
+> 🪺 A project with a `.nest/` auto-activates when you run files inside it: its
+> `air-packages:` and `lib:` paths are prepended to the module search path.
 
 
 ## Standard Library (std/)
@@ -404,18 +457,22 @@ Available modules:
 | `net` | `HttpGet`, `PostJson`, `PutJson`, `PatchJson`, `Delete`, `ServeDir` |
 | `sys` | `Args`, `Exit`, `Platform`, `Arch`, `Version`, `Executable` |
 | `testing` | `Assert`, `AssertEq`, `AssertTrue`, `AssertFalse` |
+| `web` | `Html`, `Json`, `Text`, `Send`, `RunCode` (see [`web-package.md`](web-package.md)) |
+| `debug` | `Warn`, `Error`, `Success`, `Info` (colored console logging) |
+| `ingame` | PyGame-style 2D game framework (see [`ingame-package.md`](ingame-package.md)) |
+| `ai` | OpenAI-compatible AI assistant (see [`ai-package.md`](ai-package.md)) |
 
 > Note: std functions use PascalCase so they never collide with the (lowercase) builtins. User-defined functions take precedence over builtins.
 
 ## Golden Rules
 1. `func(args)` works **everywhere** — in `say`, `if`, `is` assignments, nested calls
 2. `#!` for comments, `#` is for hex colors only
-3. Lists/dicts are immutable — use `is` + `+` to accumulate
+3. Lists/dicts are immutable by value — capture the returned container (`l = append(l, x)`)
 4. Bare identifiers in `var` are treated as function calls — use `string(param)` instead
 5. Type inference: `var x = 42` infers `int`, `var name = "Ada"` infers `string`
-6. Compound assignment: `x += 5` instead of `x is x + 5`
-7. Reassign with `is`, not `=`: `x is 42`
-8. `set varname type` converts types: `set x string`
+6. Compound assignment: `x += 5` instead of `x = x + 5`
+7. `var x is <expr>` **declares**; `x = <expr>` **reassigns** (both older spellings also work)
+8. `set varname type` converts types: `set x string`; `set([1,2])`/`group([1,2])` builds a group
 9. `group([1,2,3])` or `set([1,2,3])` creates a Group (unique collection); the `set` **keyword** statement `set x type` is type conversion
-10. Imports resolve: same dir → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
+10. Imports resolve: same dir → parents → `.nest/` → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
 11. `indent --update` keeps you on the latest version

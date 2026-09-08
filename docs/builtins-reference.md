@@ -1,7 +1,8 @@
-# Indent Built-in Functions — API Reference (v2.0)
+# Indent Built-in Functions — API Reference (v2.2)
 
-> Complete reference for every built-in function available in Indent 2.0.
+> Complete reference for every built-in function available in Indent 2.2.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v2.2**: `--safe` default-deny sandbox (see [Safe mode](#safe-mode--v22)); nests & `--watch` are CLI, see the [Commands](../README.md#commands) table.
 > **🆕 v2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint` (see [Colors](#colors-indent-20))
 > **🆕 v1.6.2**: `builtins()` returns an organized dict (category → names); type-check helpers `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`
 > **🆕 v1.6.1**: `colored(text, color)` for colored terminal output, `builtins()`, `get <builtin>`
@@ -1026,3 +1027,139 @@ loop:
 | `python_eval(expr)` | string | Evaluate Python expression, return stdout |
 | `python_eval_json(expr)` | any | Evaluate Python expression, return as Indent value |
 | `python_run_file(path)` | string | Run Python file, return stdout |
+
+---
+
+## Classes & special methods (Indent 2.0)
+
+Not "builtins" in the function-call sense — but the runtime *invokes* the
+following plain-English **methods on your class automatically**. Define them on
+a class to customize how instances behave in ordinary expressions.
+
+| Method to define | Triggered by | Purpose |
+|---|---|---|
+| `to_string` | `say`, `print`, string conversion | human-readable form |
+| `add` | `+` | combine two instances |
+| `subtract` / `multiply` / `divide` | `-` `*` `/` | arithmetic |
+| `equals` | `==` and `!=` | equality |
+| `len` | `len(x)` | length / size |
+| `get_item` | `x[key]`, `x.key` | indexed / attribute access |
+| `contains` | `contains(x, y)` | membership test |
+
+```indent
+class Vector
+    var x int
+    var y int
+    fun to_string
+        give "Vector(" + string(x) + ", " + string(y) + ")"
+    fun add other
+        give Vector(x + other.x, y + other.y)
+    fun equals other
+        give x == other.x
+
+say Vector(3, 4) + Vector(1, 2)   # → Vector(4, 6)
+say Vector(3, 4) == Vector(3, 4)  # → TRUE
+```
+
+### `dataclass`
+
+`dataclass Name` behaves like `class` but **auto-generates** `to_string` and
+`equals` from its fields:
+
+```indent
+dataclass Point
+    var px int
+    var py int
+say Point(1, 2)                 # → Point(px: 1, py: 2)
+say Point(1, 2) == Point(1, 2)  # → TRUE
+```
+
+See the [Classes chapter of INDENT_GUIDE](INDENT_GUIDE.md#8-classes--objects)
+for full detail and inheritance.
+
+---
+
+## Generators / `yield`
+
+Any function that contains `yield` is a **generator** — it produces a lazy
+sequence. The related helpers are:
+
+| Function | Returns | Description |
+|---|---|---|
+| `to_list(gen)` | list | Materialize a generator into a list |
+| `is_generator(value)` | boolean | True if the value is a generator |
+
+```indent
+fun countdown n
+    yield n
+    yield n - 1
+    yield n - 2
+
+for x in countdown 3    # 3, 2, 1
+    say x
+
+var xs = to_list(countdown 3)   # → [3, 2, 1]
+is_generator(countdown 3)       # → TRUE
+```
+
+---
+
+## Calling functions dynamically — `call_func`
+
+Invoke a function whose name (or `Func` value) is only known at runtime:
+
+| Function | Returns | Description |
+|---|---|---|
+| `call_func(name, ...args)` | any | Call the function named `name` (string or Func value) with `args` |
+
+```indent
+var op = "double"        # name is dynamic
+call_func op 21          # → 42
+```
+
+---
+
+## Result value helpers
+
+A lightweight, exception-free way to signal success/failure: a value is either
+`{"ok": true, "value": ...}` or `{"ok": false, "error": "..."}`.
+
+| Function | Returns | Description |
+|---|---|---|
+| `ok(value)` | result | Wrap a value as `{ok:true, value}` |
+| `err(msg)` | result | Wrap an error as `{ok:false, error}` |
+| `is_ok(result)` | boolean | True if `ok` |
+| `is_err(result)` | boolean | True if `err` |
+| `unwrap(result)` | any | The value (errors if not ok) |
+| `try(value)` | result | Always-ok wrapper of a value |
+
+---
+
+## Typed error helpers
+
+| Function | Returns | Description |
+|---|---|---|
+| `error_type(err)` | string | Extract the error code (e.g. `E000`) from an error string |
+| `error_message(err)` | string | Extract the human message from an error string |
+
+```indent
+do:
+    var d = {"a": 1}
+    say d["missing"]
+catch as err:
+    say error_type(err)      # → E000
+```
+
+---
+
+## Safe mode (v2.2)
+
+`indent --safe file.ind` runs a script in a **default-deny** sandbox. Every
+builtin is first checked against a whitelist; anything not allowed is refused
+with an error. Allowed are pure/computational families (`math_*`, `regex_*`,
+`random_*`, `str_*`, `path_*`, `is_*`, `set_*`), core data/logic builtins,
+string/output, JSON/TOML/YAML parsing, type conversion, time, and system-info
+reads. **Blocked**: all `os_*`/`file_*`, `http_*`/`ws_*`/`gui_*`,
+`sqlite_*`/`csv_*`/`zip_*`/`base64_*`, `python_*`, `process_exit`, `ask`,
+`sleep`/`gather`/`future_*`/`task_*`, and `log`. See
+[`INDENT_GUIDE.md` §24](INDENT_GUIDE.md#24-running-untrusted-code-with---safe).
