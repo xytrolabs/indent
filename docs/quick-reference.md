@@ -13,7 +13,7 @@
 > **New in 1.6.1**: `colored(text, color)` terminal colors, `builtins()`, `get <builtin>`.
 > **New in 1.6**: async I/O (`http_*_async`), set ops (`set_union`/`set_intersection`/`set_difference`), YAML, path helpers, `str_*` methods.
 > **New in 1.5**: async tasks (`spawn`/`parallel`), `async fun`/`wait`/`gather`/`coop`, SQLite, CSV, TOML, gzip/zip, typed errors, varargs, `with`-context.
-> 💡 Unique ordered collections are called **groups** — build one with `group([1,2,3])` **or** `set([1,2,3])`. The `set` **keyword** statement `set x string` is type conversion.
+> 💡 Unique ordered collections are called **groups** — build one with `group([1,2,3])`. `set` is the type-conversion keyword (`set x string`), not a group builder.
 > 🎨 Print in color: `say fg "hi" "#ff0000"`, `say bg "warn" "yellow"`, `say gradient "x" "red" "blue"`, `say rainbow "hi"`, `say paint "x" "#fff" "#000" "bold"`.
 > 🔍 Discover builtins: `builtins()`; bind one as a value with `get <builtin>`.
 > ⚙️ Generators: a function that `yield`s returns a generator — iterate it with `for` (`for x in gen`), check with `is_generator(gen)`, materialize with `to_list(gen)` (finite/eager).<｜end▁of▁thinking｜>## Basics
@@ -171,11 +171,11 @@ next                        # Continue
 reset                       # Restart loop
 ```
 
-## Groups (v1.5) — Unique Ordered Collections
+## Groups — Unique Ordered Collections
 
-> 💡 Unique collections are **groups** — build one with `group([...])` **or**
-> `set([...])` (both work; `set` is the canonical builder, `group` an alias).
-> The `set` **keyword** statement `set x type` is type conversion.
+> 💡 Unique collections are **groups** — build one with `group([...])`.
+> `set` is NOT a group builder: `set x type` is the *type-conversion* keyword
+> (`set x string`), and the `set_*` helpers operate on groups.
 
 ```indent
 var s = group([1, 2, 2, 3])  # → {1, 2, 3} — deduplicated
@@ -475,7 +475,7 @@ Available modules:
 5. Type inference: `var x = 42` infers `int`, `var name = "Ada"` infers `string`
 6. Compound assignment: `x += 5` instead of `x = x + 5`
 7. `var x is <expr>` **declares**; `x = <expr>` **reassigns** (both older spellings also work)
-8. `set varname type` converts types: `set x string`; `set([1,2])`/`group([1,2])` builds a group
-9. `group([1,2,3])` or `set([1,2,3])` creates a Group (unique collection); the `set` **keyword** statement `set x type` is type conversion
+8. `set varname type` converts types: `set x string`
+9. `group([1,2,3])` creates a Group (unique collection) — `set` is the type-conversion keyword, not a group builder
 10. Imports resolve: same dir → parents → `.nest/` → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
 11. `indent --update` keeps you on the latest version

@@ -316,32 +316,32 @@ var p4 = dict_update(person, {"age": 30})       # merge updates
 dict_get(person, "missing", "fallback")         # safe lookup w/ default
 ```
 
-### Groups / sets — unique, ordered collections
+### Groups — unique, ordered collections
 
-A **group** (build it with `group([...])` or `set([...])` — both are aliases)
-holds unique values in insertion order. Think "a list with no duplicates".
+A **group** holds unique values in insertion order. Build one with `group([...])`
+— a "list with no duplicates".
 
 ```indent
 var colors = group(["red", "blue", "red"])   # → {"red", "blue"}
-var more   = set(["green", "blue"])          # set(...) is the same thing
+var more   = group(["green", "blue"])
 len(colors)                                  # → 2
 contains(colors, "red")                      # → TRUE
 
 var all = colors + more        # union → {"red", "blue", "green"}
 
-# Set algebra:
+# Set algebra (the set_* helpers take and return groups):
 set_union(colors, more)
 set_intersection(colors, more) # → {"blue"}
 set_difference(colors, more)   # → {"red"}
-set_add(colors, "yellow")      # returns new group
+set_add(colors, "yellow")      # returns a new group
 set_remove(colors, "red")
 set_contains(colors, "red")
 ```
 
-> ⚠️ **Do not confuse the function call `set([1, 2])` with the keyword
-> `set x string`.** The first *builds a group*; the second performs *type
-> conversion*. Same word, two completely different meanings — disambiguated by
-> parentheses vs. the `set <var> <type>` statement form.
+> ⚠️ **`set` is NOT how you build a group.** `set` is the *type-conversion*
+> keyword (`set x string`, `set x int`), and `set_*` are the group helper
+> functions above. To create a unique collection, use `group([...])`. (The old
+> `set([...])` form still works as a deprecated alias but is not recommended.)
 
 ---
 
@@ -1496,8 +1496,8 @@ error: 'file_write_text' is not allowed in safe mode
 7. **Return with `give`**, not `return`. Declare with `var`, reassign with `=`.
 8. **Use `set x type` for type conversion** in statements, or `int(x)`/
    `string(x)`/… inside expressions.
-9. **Choose a single canonical module** when duplicates exist (`time` vs
-   `datetime`, `group([...])` vs `set([...])`).
+9. **Build unique collections with `group([...])`**, not `set` — `set` is the
+   type-conversion keyword (`set x string`).
 10. **Use the standard library** — PascalCase helpers are already optimized and
     never collide with builtins.
 11. **`indent --update`** keeps you current.

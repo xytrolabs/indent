@@ -11,11 +11,11 @@
 > **🆕 v1.4**: Group type (`group([...])`), type conversion (`set varname type`), group methods
 > **🆕 v1.3**: Type inference (`var x = 42`), compound assignment (`x += 5`)
 >
-> **Note on groups:** unique ordered collections are called **groups** — created
-> with `group([...])` **or** `set([...])` (both build a group; `set` is the
-> canonical builder, `group` an alias). The `set` **keyword** is reserved for
-> type conversion (`set varname type`) and must not be confused with the
-> `set([...])` function call.
+> **Note on groups:** unique ordered collections are called **groups** — build
+> one with `group([...])` (e.g. `group([1,2,2,3])` → `{1,2,3}`). `set` is **not**
+> a group builder: `set x type` is the *type-conversion* keyword, and the
+> `set_*` helpers (`set_add`, `set_union`, …) operate on groups. The old
+> `set([...])` call form still works but is a deprecated alias of `group`.
 
 ---
 

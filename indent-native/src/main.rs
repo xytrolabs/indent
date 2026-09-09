@@ -3320,8 +3320,9 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             };
             Some(Ok(out))
         }
-        // `group` is a deprecated alias for `set` (unique ordered collection).
-        // Kept so older Indent scripts that used `group [...]` keep working.
+        // `group` is THE canonical way to build a unique, ordered collection
+        // (type_of reports "group"). `set([...])` below is only a deprecated
+        // alias kept so older scripts keep working — prefer `group [...]`.
         "group" => {
             if positional.is_empty() || positional.len() > 1 {
                 return Some(Err("group expects exactly 1 argument: a list of values".to_string()));
@@ -3341,9 +3342,11 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(Ok(Value::Set(unique)))
         }
+        // Deprecated alias of `group`. `set` is normally the *type-conversion*
+        // keyword (`set x string`); use `group([...])` to build a collection.
         "set" => {
             if positional.is_empty() || positional.len() > 1 {
-                return Some(Err("set expects exactly 1 argument: a list of values".to_string()));
+                return Some(Err("set (deprecated alias of group) expects exactly 1 argument: a list of values".to_string()));
             }
             let items = match &positional[0] {
                 Value::List(v) => v.clone(),
