@@ -11806,10 +11806,23 @@ impl Parser {
             return self.parse_repeat(synth_line);
         }
 
-        if let Some(rest) = text.strip_prefix("flag:").or_else(|| text.strip_prefix("Flag:")) {
+        // `flag` raises an error. Accept both the space form (`flag "msg"`),
+        // like `say`, and the colon form (`flag: "msg"`), for consistency.
+        if let Some(rest) = text
+            .strip_prefix("flag:")
+            .or_else(|| text.strip_prefix("Flag:"))
+            .or_else(|| text.strip_prefix("flag "))
+            .or_else(|| text.strip_prefix("Flag "))
+        {
             return Ok(Stmt::Flag {
                 line: line.line_no,
                 expr: rest.trim().to_string(),
+            });
+        }
+        if text == "flag" || text == "Flag" {
+            return Ok(Stmt::Flag {
+                line: line.line_no,
+                expr: "empty".to_string(),
             });
         }
 

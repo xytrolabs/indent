@@ -1,5 +1,31 @@
 # Indent Changelog
 
+## 2.2.1 — 2026-09-11
+
+### 🚩 `flag` consistency
+- `flag "message"` now works, matching `say`-style keyword statements (no colon
+  needed). The `flag: "message"` colon form still works for back-compat, and a
+  bare `flag` raises an empty error.
+
+### 🪺 Nests — pin an interpreter version
+- `indent nest install [<version>]` (alias: `indent nest use <version>`) downloads
+  a specific — including an older — release's prebuilt binary into `.nest/bin/`
+  and records it in `.nest/indent-version`. `indent nest version` shows the pin.
+  Activating the nest makes `indent` resolve to that pinned version.
+
+### 🛠 Tooling
+- `indent --help` now lists the `nest` subcommands, `--watch`, and `--safe`.
+- `indent --update` always re-clones a fresh copy, so a dirty leftover worktree
+  can no longer abort the update with "local changes would be overwritten".
+
+### 🧩 Groups
+- `group([...])` is the group builder; `set([...])` is a deprecated alias, and
+  `set` remains the type-conversion keyword (`set x string`).
+
+### 📖 Docs
+- Large Arch-style expansion of `docs/INDENT_GUIDE.md`, plus updates to the quick
+  reference and builtins reference.
+
 ## 2.2 — 2026-09-07 (nests & hot reload)
 
 ### 🪺 Nests — project-local environments

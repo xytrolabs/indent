@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.2.0
+# Indent Language (.ind) v2.2.1
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,11 +7,19 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ### 🎉 What's New in 2.2.1
+> - 🚩 **`flag` is consistent** — `flag "message"` now works (just like `say`); the
+>   `flag: "message"` colon form still works too
+> - 🪺 **Pin an interpreter version per nest** — `indent nest install 2.1.0`
+> - ℹ️ `indent --help` now lists `nest` subcommands, `--watch`, and `--safe`
+> - 🔁 `indent --update` always re-clones fresh (no more dirty-tree aborts)
+> - 🧩 **Groups use `group([...])`** — `set` is the *type-conversion* keyword
+>
 > ### 🎉 What's New in 2.2.0
 > - 🪺 **Nests** — project-local environments (`indent nest init`), with auto-detection
 > - 🔁 **`indent --watch`** — hot reload: re-run on save (no compile step)
-> - � **`indent --safe`** — default-deny sandbox for running untrusted scripts
-> - �📦 **Web package** — `get RunCode from web` + `Html`/`Json`/`Text` response builders
+> - 🔒 **`indent --safe`** — default-deny sandbox for running untrusted scripts
+> - 📦 **Web package** — `get RunCode from web` + `Html`/`Json`/`Text` response builders
 > - 📦 **AIR Deliveries** — `air delivery` build/install/publish to share a whole project
 > - 🛠 Installer (Windows) — robust detection, source-build & dependency fallback
 >
