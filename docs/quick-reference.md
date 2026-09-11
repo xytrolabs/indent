@@ -59,8 +59,13 @@ Works with numeric variables. `+=` also merges lists and dicts.
 ## String Interpolation
 ```indent
 var name string = "Ada"
-say "Hello %name%!"         #! → "Hello Ada!"
+var n = 42
+say "Hello %name%!"          #! → "Hello Ada!"
+say "n=%n%"                  #! → "n=42"  (ints/floats/lists/dicts render too)
+say 'single quotes %name%'   #! works in single quotes as well
 ```
+Only **simple variable names** — `%d.k%` and expressions are left literal, and an
+undefined name or stray `%` is left as-is (no error).
 
 ## Functions
 ```indent

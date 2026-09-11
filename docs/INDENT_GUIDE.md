@@ -347,13 +347,53 @@ set_contains(colors, "red")
 
 ## 5. Strings & text
 
-Strings are Unicode text in double quotes. Concatenate with `+`, interpolate
-variables with `%name%`:
+Strings are Unicode text. Write them in double quotes (single quotes work too).
+Concatenate with `+`:
 
 ```indent
 var name = "Ada"
 say "Hello " + name             #! concatenation
-say "Hello %name%!"             #! interpolation — same output
+say "Hello " + name + "!"
+```
+
+### String interpolation
+
+Put a variable name between percent signs inside any string and its value is
+substituted (rendered as text). Works in double- **and** single-quoted strings,
+anywhere a string is used (not just `say`):
+
+```indent
+var name = "Ada"
+var n = 42
+say "Hi %name%, n=%n%"     #! → "Hi Ada, n=42"
+var msg = "Hello %name%"   #! interpolation happens in any string
+say msg                    #! → "Hello Ada"
+say 'single quotes %name% too'
+```
+
+Rules to know:
+
+- **Simple variable names only** — not expressions or member access. `"%d.k%"`
+  is left literally as `%d.k%`; use `"%d%"` (the whole value) or concatenate
+  (`"x " + d.k`).
+- **Any value type** works — strings, ints, floats, lists, dicts — each renders
+  as text (a dict prints its `{...}` form).
+- **Undefined names and stray `%` are left as-is** (no error): `"%nope%"` prints
+  literally, and `"100% done"` / `"%%"` are unchanged.
+- There is **no escape** for a literal `%name%` when `name` exists — build such
+  text with concatenation, or rename the placeholder.
+- For **positional/named templates**, use `format(...)` / `sformat(...)` below.
+
+### Quotes & escapes
+
+Double quotes are the default; single quotes also work. Recognised escapes:
+`\n` (newline), `\t` (tab), `\"`, `\'`, and `\\`. Any other `\x` becomes just `x`.
+
+```indent
+say "line1\nline2"        #! newline
+say "col1\tcol2"          #! tab
+say "quote: \"hi\""       #! escaped quote
+say 'it\'s fine'
 ```
 
 ### Case, trimming & padding
