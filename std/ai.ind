@@ -1,5 +1,5 @@
 #! =============================================================================
-#! ai.ind 1.3 — OpenAI-native AI assistant package for Indent
+#! ai.ind 1.2 — OpenAI-native AI assistant package for Indent
 #! =============================================================================
 #!
 #! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
@@ -7,11 +7,8 @@
 #!   - Local Ollama:  SetBase("http://localhost:11434/v1")  (no key needed)
 #!   - Real OpenAI:   SetBase("https://api.openai.com/v1") + SetApiKey("sk-...")
 #!
-#! v1.3: SYSTEM PROMPTS — a default system prompt can be set once and is
-#!   automatically prepended to every Chat/Ask call, or supplied per call:
-#!     SetSystemPrompt("You are a terse assistant.")   #! applies to Chat/Ask
-#!     AI.ChatSystem(model, "You are terse.", messages)  #! one-off
-#!   GetSystemPrompt / ClearSystemPrompt; System(text) builds a system message.
+#! System prompts work exactly like the OpenAI Python SDK: put a
+#! {"role":"system","content":"..."} message first in the `messages` list.
 #!
 #! v1.2: ROBUST — never crashes on transient server errors. Every call:
 #!   - checks the HTTP response (ok / status)
@@ -46,7 +43,6 @@ var _defaultEmbedModel = "nomic-embed-text"
 var _retries = 2
 var _lastError = ""
 var _lastStatus = 0
-var _systemPrompt = ""
 
 #! --- client config (like openai.OpenAI(base_url=..., api_key=...)) ---
 fun SetBase url
@@ -60,23 +56,6 @@ fun SetDefaultModel name
 
 fun SetDefaultEmbedModel name
     _defaultEmbedModel is name
-
-#! --- system prompt (applied to Chat/Ask automatically) ---
-#! A default system prompt prepended to every Chat/Ask call. Empty = none.
-fun SetSystemPrompt text
-    _systemPrompt is text
-
-fun GetSystemPrompt
-    give _systemPrompt
-
-#! Remove the default system prompt.
-fun ClearSystemPrompt
-    _systemPrompt is ""
-
-#! Build a system message dict: {"role": "system", "content": text}.
-#! Use it to pass a system prompt per call instead of the default.
-fun System text
-    give {"role": "system", "content": text}
 
 fun GetBase
     give _base
@@ -223,19 +202,7 @@ fun Models
 #! messages = list of {"role":"user|assistant|system","content":"..."}
 #! Returns the assistant reply text, or empty on error (see GetLastError).
 fun Chat model messages
-    #! Prepend the configured system prompt unless the caller supplied one.
-    var msgs = messages
-    if len(_systemPrompt) > 0
-        var has_system = false
-        if len(messages) > 0
-            var firstmsg = messages[0]
-            if has_key firstmsg "role"
-                if firstmsg["role"] == "system"
-                    has_system is true
-        if not has_system
-            var sysmsg = System(_systemPrompt)
-            msgs is [sysmsg] + messages
-    var payload = {"model": model, "messages": msgs}
+    var payload = {"model": model, "messages": messages}
     var r = _PostJson("/chat/completions", payload)
     if r["ok"] == true
         var data = r["data"]
@@ -253,18 +220,6 @@ fun Chat model messages
 fun Ask model prompt
     var msgs = [{"role": "user", "content": prompt}]
     give Chat(model, msgs)
-
-#! --- chat completion with an explicit, one-off system prompt ---
-fun ChatSystem model sysprompt messages
-    var sysmsg = {"role": "system", "content": sysprompt}
-    var msgs = [sysmsg] + messages
-    give Chat(model, msgs)
-
-#! --- single-prompt completion with an explicit system prompt ---
-fun AskSystem model sysprompt prompt
-    var msg = {"role": "user", "content": prompt}
-    var msgs = [msg]
-    give ChatSystem(model, sysprompt, msgs)
 
 #! --- openai client.embeddings.create(model, input) ---
 #! Single text → embedding vector (list of floats), or [] on error.

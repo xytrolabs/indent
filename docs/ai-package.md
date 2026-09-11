@@ -10,11 +10,6 @@ similarity, and semantic search — all in pure Indent, no Python needed.
 > with backoff, and returns `empty`/`[]` gracefully on failure instead of
 > throwing. Inspect failures with `GetLastError()` / `GetLastStatus()` /
 > `WasError()`, or configure retries with `SetRetries(n)`.
->
-> **🧠 System prompts (v1.3)**: set a default system prompt once with
-> `SetSystemPrompt("...")` and it is automatically prepended to every `Chat`/
-> `Ask`. Or pass one per call with `ChatSystem` / `AskSystem`. Build a system
-> message with `System("...")`.
 
 > Install: `air install ai` — import with `get ai as AI` (namespace, `AI.Chat`)
 > or per-function: `get Chat from ai`.
@@ -43,9 +38,6 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 | `SetApiKey` | `key` | API key → sends `Authorization: Bearer <key>`. Empty = no auth (local Ollama). |
 | `SetDefaultModel` | `name` | Default chat model (default `qwen2.5:0.5b`). |
 | `SetDefaultEmbedModel` | `name` | Default embedding model (default `nomic-embed-text`). |
-| `SetSystemPrompt` | `text` | Default system prompt, auto-prepended to every `Chat`/`Ask` (empty = none). |
-| `GetSystemPrompt` | — | Return the current default system prompt. |
-| `ClearSystemPrompt` | — | Remove the default system prompt. |
 | `GetBase` | — | Return the current base URL. |
 | `SetRetries(n)` | `int` | Retry a failed request up to `n` times with backoff (default 2; 0 disables). |
 | `GetLastError()` | — | Last error message (`""` = success). |
@@ -60,9 +52,6 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 |---|---|---|
 | `Chat(model, messages)` | `client.chat.completions.create()` | Chat completion; `messages` = list of `{"role","content"}`; returns assistant reply text. |
 | `Ask(model, prompt)` | `client.chat.completions.create()` | Single-prompt completion; returns generated text. |
-| `ChatSystem(model, system, messages)` | `client.chat.completions.create()` | Chat with an explicit one-off system prompt (overrides the default). |
-| `AskSystem(model, system, prompt)` | `client.chat.completions.create()` | Single-prompt completion with an explicit system prompt. |
-| `System(text)` | — | Build a `{"role":"system","content":text}` message dict. |
 | `Embed(model, text)` | `client.embeddings.create()` | Single text → embedding vector (list of floats). |
 | `EmbedMany(model, texts)` | `client.embeddings.create()` | Batch: list of texts → list of vectors. |
 | `Models()` | `client.models.list()` | List model IDs from the server. |
@@ -73,7 +62,9 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 
 ## Examples
 
-### Chat (multi-turn)
+### Chat with a system prompt (multi-turn)
+
+A system prompt is just a `system`-role message, exactly like the Python SDK:
 
 ```indent
 get ai as AI
@@ -82,32 +73,6 @@ history is history + [{"role":"user","content":"What is the capital of France?"}
 var answer = AI.Chat("qwen2.5:0.5b", history)
 say answer
 ```
-
-### System prompts
-
-```indent
-get ai as AI
-
-#! Set a default — applies to every Chat/Ask from now on:
-AI.SetSystemPrompt("You are a terse assistant. Answer in one sentence.")
-say AI.Ask("qwen2.5:0.5b", "What is the capital of France?")
-
-#! Or use one just for a single call (overrides the default):
-var msgs = [{"role":"user","content":"Explain recursion."}]
-say AI.ChatSystem("qwen2.5:0.5b", "Explain like I'm five.", msgs)
-
-#! Build a system message yourself (e.g. to keep a persistent history):
-var history = [AI.System("You are a pirate.")]
-history is history + [{"role":"user","content":"Ahoy?"}]
-say AI.Chat("qwen2.5:0.5b", history)
-
-#! Turn the default off again:
-AI.ClearSystemPrompt()
-```
-
-The default system prompt is prepended only when the `messages` list does not
-already begin with a `system` message — so a system message you pass yourself
-always wins (no duplicates).
 
 ### Embeddings + similarity
 
