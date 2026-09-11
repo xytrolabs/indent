@@ -198,11 +198,11 @@ Lists and dictionaries are **immutable** — operations return **new** copies:
 
 ```indent
 var xs list = [1, 2, 3]
-var ys list = append xs 4    # xs is STILL [1,2,3], ys is [1,2,3,4]
-var zs list = sort xs        # xs unchanged, zs is sorted
+var ys list = append xs 4    #! xs is STILL [1,2,3], ys is [1,2,3,4]
+var zs list = sort xs        #! xs unchanged, zs is sorted
 
-# Use `is` to reassign:
-xs is append xs 4            # now xs is [1,2,3,4]
+#! Use `is` to reassign:
+xs is append xs 4            #! now xs is [1,2,3,4]
 ```
 
 > ⚠️ `dynamic` variables holding lists/dicts CAN be mutated in place with index assignment: `mixed[0] is 99`. This only works with `dynamic`, not typed `list` or `dict`.
@@ -212,22 +212,22 @@ xs is append xs 4            # now xs is [1,2,3,4]
 ```indent
 var scores list = [85, 92, 78, 95]
 
-say any scores >= 90     # true (92 and 95 are >= 90)
-say all scores >= 70     # true (all pass)
+say any scores >= 90     #! true (92 and 95 are >= 90)
+say all scores >= 70     #! true (all pass)
 
 var names list = ["Alice", "", "Bob"]
-say any names            # true (non-empty strings are truthy)
-say all names            # false ("" is falsy)
+say any names            #! true (non-empty strings are truthy)
+say all names            #! false ("" is falsy)
 ```
 
 ## Clearing & Copying
 
 ```indent
 var data list = [1, 2, 3]
-var blank list = clear data    # → []
+var blank list = clear data    #! → []
 
 var original dict = {"a": 1}
-var clone dict = copy original  # deep copy
+var clone dict = copy original  #! deep copy
 ```
 
 ## Merging Dictionaries
@@ -236,7 +236,7 @@ var clone dict = copy original  # deep copy
 var base dict = {"name": "Ada", "age": 28}
 var updates dict = {"age": 29, "city": "London"}
 var merged dict = dict_update base updates
-# → {"name": "Ada", "age": 29, "city": "London"}
+#! → {"name": "Ada", "age": 29, "city": "London"}
 ```
 
 ---
@@ -247,9 +247,9 @@ A **group** holds unique values while keeping insertion order. It deduplicates
 automatically — handy for removing duplicates or tracking "seen" items.
 
 ```indent
-var s = group([1, 2, 2, 3])  # → {1, 2, 3}  (the duplicate 2 is dropped)
-say len(s)                   # → 3
-say type_of(s)               # → "group"
+var s = group([1, 2, 2, 3])  #! → {1, 2, 3}  (the duplicate 2 is dropped)
+say len(s)                   #! → 3
+say type_of(s)               #! → "group"
 ```
 
 > 💡 Use the **`group`** builtin to build a group. The `set` keyword is reserved
@@ -262,15 +262,15 @@ and dicts):
 
 ```indent
 var s = group([1, 2, 3])
-var t = s.add(4)             # → {1, 2, 3, 4}  (no-op if already present)
-var u = t.remove(2)          # → {1, 3, 4}
-u.contains(1)                # → TRUE
-u.contains(9)                # → FALSE
+var t = s.add(4)             #! → {1, 2, 3, 4}  (no-op if already present)
+var u = t.remove(2)          #! → {1, 3, 4}
+u.contains(1)                #! → TRUE
+u.contains(9)                #! → FALSE
 
-# Union combines two groups
+#! Union combines two groups
 var a = group(["red", "blue"])
 var b = group(["blue", "green"])
-var all = a + b              # → {"red", "blue", "green"}
+var all = a + b              #! → {"red", "blue", "green"}
 ```
 
 ### Iterating and testing groups
@@ -278,10 +278,10 @@ var all = a + b              # → {"red", "blue", "green"}
 ```indent
 var tags = group(["rust", "indent", "go"])
 repeat tag in tags
-    say tag                  # prints each unique tag once
+    say tag                  #! prints each unique tag once
 
-is_missing(group([]))        # → TRUE (empty group)
-is_missing(tags)             # → FALSE
+is_missing(group([]))        #! → TRUE (empty group)
+is_missing(tags)             #! → FALSE
 ```
 
 ### When to use a group
@@ -303,30 +303,30 @@ A **comprehension** builds a new list from an existing one in a single line:
 ```indent
 var nums = [1, 2, 3, 4, 5]
 
-# Square every number
-var squares = [x * x for x in nums]       # → [1, 4, 9, 16, 25]
+#! Square every number
+var squares = [x * x for x in nums]       #! → [1, 4, 9, 16, 25]
 
-# Filter with `if`
-var evens = [x for x in nums if x % 2 == 0]  # → [2, 4]
+#! Filter with `if`
+var evens = [x for x in nums if x % 2 == 0]  #! → [2, 4]
 
-# Transform + filter
-var big = [x * 10 for x in nums if x > 2]    # → [30, 40, 50]
+#! Transform + filter
+var big = [x * 10 for x in nums if x > 2]    #! → [30, 40, 50]
 ```
 
 Comprehensions also work over **groups**:
 
 ```indent
 var s = group([1, 2, 3])
-var doubled = [x * 2 for x in s]          # → [2, 4, 6]
+var doubled = [x * 2 for x in s]          #! → [2, 4, 6]
 ```
 
 And over **dictionary entries** (grab the key/value via the item's indexes):
 
 ```indent
 var scores = {"a": 1, "b": 2}
-var pairs = items scores                  # → [["a", 1], ["b", 2]]
+var pairs = items scores                  #! → [["a", 1], ["b", 2]]
 var labels = [p[0] + "=" + string(p[1]) for p in pairs]
-# → ["a=1", "b=2"]
+#! → ["a=1", "b=2"]
 ```
 
 > 💡 A comprehension is just a compact `repeat` + `append`. Use it when the

@@ -211,11 +211,11 @@ count is dec count 2     #! 4
 ## More String Functions
 
 ```indent
-# Left/right trim
+#! Left/right trim
 say lstrip "  hello  "   #! "hello  "
 say rstrip "  hello  "   #! "  hello"
 
-# Case transformations
+#! Case transformations
 say capitalize "hello"    #! "Hello"
 say title "hello world"   #! "Hello World"
 say swapcase "Hello"      #! "hELLO"
@@ -232,7 +232,7 @@ say mul_int 6 7           #! 42
 say div_int 10 3          #! 3  (truncates, no decimal)
 say mod_int 10 3          #! 1  (remainder)
 
-# Quick checks
+#! Quick checks
 say is_even 42            #! true
 say is_odd 7              #! true
 say between_int 50 0 100  #! true

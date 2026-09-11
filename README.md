@@ -158,7 +158,7 @@ class Vector
     fun equals other     #! used by == and !=
         give x == other.x
 
-say Vector(3, 4) + Vector(1, 2)   # → Vector(4, 6)
+say Vector(3, 4) + Vector(1, 2)   #! → Vector(4, 6)
 ```
 Also supported: `subtract`, `multiply`, `divide`, `len`, `get_item`, `contains`.
 
@@ -169,8 +169,8 @@ dataclass Point
     var px int
     var py int
 
-say Point(1, 2)                    # → Point(px: 1, py: 2)
-say Point(1,2) == Point(1,2)       # → TRUE
+say Point(1, 2)                    #! → Point(px: 1, py: 2)
+say Point(1,2) == Point(1,2)       #! → TRUE
 ```
 
 ### Generators / `yield`
@@ -181,11 +181,11 @@ fun countdown n
     yield n - 1
     yield n - 2
 
-for x in countdown 3    # 3, 2, 1
+for x in countdown 3    #! 3, 2, 1
     say x
 
-to_list (countdown 3)   # → [3, 2, 1]
-is_generator g          # → TRUE
+to_list (countdown 3)   #! → [3, 2, 1]
+is_generator g          #! → TRUE
 ```
 
 ### Tooling
@@ -204,10 +204,10 @@ indent --update            # Update to latest
 Indent ships with 17 std modules — no install needed. Import by name:
 
 ```indent
-get Pow from math          # math helpers
-get Upper from strings     # string utilities
-get Sha256 from hash       # hashing
-get Write from fs          # file system
+get Pow from math          #! math helpers
+get Upper from strings     #! string utilities
+get Sha256 from hash       #! hashing
+get Write from fs          #! file system
 ```
 
 Modules: `strings`, `math`, `collections`, `fs`, `json`, `os`, `io`, `time`,
@@ -259,12 +259,12 @@ The `ai` package is like Python's `openai` SDK — an OpenAI-native client that 
 get ai as AI
 #! Local Ollama (default, no key):
 var reply = AI.Chat("qwen2.5:0.5b", [{"role":"user","content":"What is 2+2?"}])
-say reply                    # → "4"
+say reply                    #! → "4"
 
 #! Real OpenAI — same API, just point base + key:
-# AI.SetBase("https://api.openai.com/v1")
-# AI.SetApiKey("sk-...")
-# var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
+#! AI.SetBase("https://api.openai.com/v1")
+#! AI.SetApiKey("sk-...")
+#! var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
 ```
 Functions: `AI.Chat` (chat completions), `AI.Ask` (single prompt), `AI.Embed` / `AI.EmbedMany` (embeddings), `AI.Models` (list models), `AI.Similarity` (cosine), `AI.Search` (semantic search), plus `AI.SetBase` / `AI.SetApiKey` / `AI.SetDefaultModel` config. Under the hood it uses Indent's native `http_post_json` / `http_get` builtins — no Python needed. See `examples/ai_openai_api.ind` for the package API *and* the raw low-level way to call any REST API.
 

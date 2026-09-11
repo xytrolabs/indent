@@ -24,7 +24,7 @@ def greet(name):
 print(greet("Ada"))
 ```
 ```indent
-# Indent
+#! Indent
 fun greet name
     give "Hello " + name
 say greet("Ada")
@@ -83,7 +83,7 @@ for i in range(5):
     print(i)
 ```
 ```indent
-# Indent
+#! Indent
 repeat 5
     if i == 3
         stop
@@ -226,7 +226,7 @@ finally:
     cleanup()
 ```
 ```indent
-# Indent
+#! Indent
 do:
     set x int
 catch as e:
@@ -311,11 +311,11 @@ a = []
 add_one(a)      # a is now [1]
 ```
 ```indent
-# Indent — returns a new list, caller reassigns
+#! Indent — returns a new list, caller reassigns
 fun add_one xs
     give append xs 1
 var a = []
-a is add_one(a)   # a is now [1]
+a is add_one(a)   #! a is now [1]
 ```
 
 ---

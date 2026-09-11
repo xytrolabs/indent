@@ -13054,7 +13054,70 @@ fn parse_return_type(raw: &str) -> Option<String> {
     }
 }
 
+/// `indent --update`: prefer the prebuilt release binary (fast, no Rust needed);
+/// fall back to a source build only if no prebuilt release is available.
 fn self_update() {
+    println!("⚡ Indent updater");
+    match self_update_from_binary() {
+        Ok(()) => return,
+        Err(e) => {
+            eprintln!("  ⚠ {e}");
+            eprintln!("  Falling back to a source build (this can take a while)...");
+        }
+    }
+    self_update_from_source();
+}
+
+/// Download the latest release's prebuilt binary and swap it in.
+fn self_update_from_binary() -> Result<(), String> {
+    let target = indent_target_triple().ok_or_else(|| {
+        "no prebuilt Indent is published for this platform/architecture".to_string()
+    })?;
+    let client = reqwest::blocking::Client::new();
+    println!("  Checking for the latest release ...");
+    let tag = resolve_release_tag(&client, "latest")?;
+    let plain = tag.trim_start_matches('v').to_string();
+    if plain == INDENT_VERSION {
+        println!("  ✓ Already up to date (Indent {plain}).");
+        return Ok(());
+    }
+    println!("  Downloading Indent {tag} ({target}) ...");
+    let tmp = std::env::temp_dir().join(format!("indent-update-{}", std::process::id()));
+    download_release_binary(&client, &tag, &target, &tmp)?;
+
+    let current = std::env::current_exe()
+        .map_err(|e| format!("cannot locate the running indent binary: {e}"))?;
+    let backup = format!("{}.bak", current.display());
+    std::fs::copy(&current, &backup).ok();
+
+    // Overwriting a running executable in place fails on Linux ("Text file
+    // busy"), so stage in the same directory and rename over it.
+    let current_dir = current.parent().unwrap_or(Path::new("."));
+    let staged = current_dir.join(format!(".indent.new.{}", std::process::id()));
+    std::fs::copy(&tmp, &staged)
+        .map_err(|e| format!("cannot stage new binary — try running with sudo: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+    }
+    let _ = std::fs::remove_file(&tmp);
+
+    match std::fs::rename(&staged, &current) {
+        Ok(_) => {
+            println!("  ✓ Updated to Indent {plain}!");
+            println!("  (Backup saved to {})", backup);
+            Ok(())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&staged);
+            Err(format!("cannot replace binary — try running with sudo: {e}"))
+        }
+    }
+}
+
+/// Slow fallback: clone the repo and build with cargo.
+fn self_update_from_source() {
     let repo_url = "https://github.com/xytrolabs/indent.git";
     let tmp = std::env::temp_dir().join("indent-update");
     
@@ -13905,18 +13968,14 @@ fn resolve_release_tag(
     }
 }
 
-/// Download a release tag's prebuilt Indent binary into `nest/bin` and record
-/// the pinned version in `.nest/indent-version`.
-fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), String> {
-    let target = indent_target_triple().ok_or_else(|| {
-        "no prebuilt Indent binary is published for this platform/architecture".to_string()
-    })?;
-    let client = reqwest::blocking::Client::new();
-
-    println!("  Resolving Indent version ...");
-    let tag = resolve_release_tag(&client, version)?;
-    let plain = tag.trim_start_matches('v').to_string();
-
+/// Download the prebuilt `indent` binary for a release `tag`/`target` and write
+/// it to `dest` (a file path). Used by both `--update` and `nest install`.
+fn download_release_binary(
+    client: &reqwest::blocking::Client,
+    tag: &str,
+    target: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
     let is_windows = target.ends_with("windows-msvc");
     let bin_name = if is_windows { "indent.exe" } else { "indent" };
     let ext = if is_windows { "zip" } else { "tar.gz" };
@@ -13924,16 +13983,15 @@ fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), Str
         "https://github.com/xytrolabs/indent/releases/download/{tag}/indent-{tag}-{target}.{ext}"
     );
 
-    println!("  Downloading Indent {tag} for {target} ...");
     let resp = client
         .get(&url)
-        .header(reqwest::header::USER_AGENT, "indent-nest")
+        .header(reqwest::header::USER_AGENT, "indent")
         .send()
         .map_err(|e| format!("download request failed: {e}"))?;
     let status = resp.status().as_u16();
     if status == 404 {
         return Err(format!(
-            "No prebuilt Indent {tag} for {target} is published yet.\n  Only tagged releases with CI-built binaries can be installed into a nest."
+            "no prebuilt Indent {tag} for {target} is published yet"
         ));
     }
     if status != 200 {
@@ -13943,10 +14001,10 @@ fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), Str
         .bytes()
         .map_err(|e| format!("failed to read downloaded binary: {e}"))?;
 
-    let bin_dir = nest.join("bin");
-    std::fs::create_dir_all(&bin_dir)
-        .map_err(|e| format!("failed to create {}: {e}", bin_dir.display()))?;
-    let dest = bin_dir.join(bin_name);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+    }
 
     let mut found = false;
     if is_windows {
@@ -13964,7 +14022,7 @@ fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), Str
                 entry
                     .read_to_end(&mut buf)
                     .map_err(|e| format!("failed to extract {bin_name}: {e}"))?;
-                std::fs::write(&dest, &buf)
+                std::fs::write(dest, &buf)
                     .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
                 found = true;
                 break;
@@ -13990,7 +14048,7 @@ fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), Str
                 entry
                     .read_to_end(&mut buf)
                     .map_err(|e| format!("failed to extract {bin_name}: {e}"))?;
-                std::fs::write(&dest, &buf)
+                std::fs::write(dest, &buf)
                     .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
                 found = true;
                 break;
@@ -14007,8 +14065,29 @@ fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), Str
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755));
     }
+    Ok(())
+}
+
+/// Download a release tag's prebuilt Indent binary into `nest/bin` and record
+/// the pinned version in `.nest/indent-version`.
+fn nest_install_version(nest: &std::path::Path, version: &str) -> Result<(), String> {
+    let target = indent_target_triple().ok_or_else(|| {
+        "no prebuilt Indent binary is published for this platform/architecture".to_string()
+    })?;
+    let client = reqwest::blocking::Client::new();
+
+    println!("  Resolving Indent version ...");
+    let tag = resolve_release_tag(&client, version)?;
+    let plain = tag.trim_start_matches('v').to_string();
+
+    let is_windows = target.ends_with("windows-msvc");
+    let bin_name = if is_windows { "indent.exe" } else { "indent" };
+    let dest = nest.join("bin").join(bin_name);
+
+    println!("  Downloading Indent {tag} for {target} ...");
+    download_release_binary(&client, &tag, &target, &dest)?;
 
     std::fs::write(nest.join("indent-version"), format!("{plain}\n"))
         .map_err(|e| format!("failed to record pinned version: {e}"))?;

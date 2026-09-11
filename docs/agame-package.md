@@ -27,7 +27,7 @@ game-dev additions: `MakeTilemap`/`DrawTilemap`, `MoveInMap`, `SetCamera`,
 #! OLD code — still works:
 get Clamp from agame
 get NewEntity from agame
-var health = Clamp(150, 0, 100)   # → 100
+var health = Clamp(150, 0, 100)   #! → 100
 
 #! NEW code — use ingame:
 get Clamp from ingame

@@ -18,7 +18,7 @@ class Person
         age is age + 1
         say "Happy birthday " + name + "! Now " + string(age)
 
-# Instantiation
+#! Instantiation
 var ada dynamic = Person("Ada", 28)
 ada.greet()
 
@@ -259,7 +259,7 @@ Value::Object { ref methods, .. } => {
 ## Usage After Implementation
 
 ```indent
-# Define a class
+#! Define a class
 class Rectangle
     var width float
     var height float
@@ -270,10 +270,10 @@ class Rectangle
     fun describe
         say "Rectangle " + string(width) + "x" + string(height)
 
-# Use it
+#! Use it
 var r dynamic = Rectangle(10.0, 5.0)
-say r.area()            # 50.0
-r.describe()            # "Rectangle 10x5"
+say r.area()            #! 50.0
+r.describe()            #! "Rectangle 10x5"
 ```
 
 ---

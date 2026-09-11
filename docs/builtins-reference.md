@@ -25,10 +25,10 @@
 grouped by category (like Python's `dir(__builtins__)`, but tidier):
 
 ```indent
-var b = builtins()          # → {string: [...], math: [...], os/file: [...], ...}
-var cats = keys b           # → [async, crypto, data, dict, ...]
-var math = b["math"]        # → ["abs", "math_abs", "math_pow", ...]
-var osf  = b["os/file"]     # → ["os_exists", "file_read_text", "walk", ...]
+var b = builtins()          #! → {string: [...], math: [...], os/file: [...], ...}
+var cats = keys b           #! → [async, crypto, data, dict, ...]
+var math = b["math"]        #! → ["abs", "math_abs", "math_pow", ...]
+var osf  = b["os/file"]     #! → ["os_exists", "file_read_text", "walk", ...]
 ```
 
 > Categories: `string`, `list`, `dict`, `group`, `math`, `data`, `text`, `path`,
@@ -40,14 +40,14 @@ call it through a variable (like `import`-ing a module function, but for the
 builtin table). This works with an optional `as` alias:
 
 ```indent
-get len                    # bind len
-var n = len [1, 2, 3]      # → 3
+get len                    #! bind len
+var n = len [1, 2, 3]      #! → 3
 
-get string as to_s         # bind with an alias
-var s = to_s 42            # → "42"
+get string as to_s         #! bind with an alias
+var s = to_s 42            #! → "42"
 
 get upper
-var shout = upper "hi"     # → "HI"
+var shout = upper "hi"     #! → "HI"
 ```
 
 > `get <builtin>` is equivalent to `get <name> from module` for module functions,
@@ -72,10 +72,10 @@ Quick boolean tests for a value's type:
 | `is_group(v)` | boolean | True if `v` is a group/set |
 
 ```indent
-is_list([1, 2])   # → TRUE
-is_dict({"a": 1}) # → TRUE
-is_number(42)     # → TRUE
-is_string("hi")   # → TRUE
+is_list([1, 2])   #! → TRUE
+is_dict({"a": 1}) #! → TRUE
+is_number(42)     #! → TRUE
+is_string("hi")   #! → TRUE
 ```
 
 ---
@@ -167,10 +167,10 @@ get error from debug
 get success from debug
 get info from debug
 
-warn "this is a warning"     # yellow
-error "this is an error"     # red
-success "this is a success"  # green
-info "this is info"          # cyan
+warn "this is a warning"     #! yellow
+error "this is an error"     #! red
+success "this is a success"  #! green
+info "this is info"          #! cyan
 ```
 
 ---
@@ -310,11 +310,11 @@ predicate / key / function arguments are **native builtin names** (matching how
 | `reduce(fn, list, initial?)` | value | Fold left over the list |
 
 ```indent
-var flat = flatten [[1,2],[3,[4,5]]]        # → [1, 2, 3, 4, 5]
-var pr    = product [1,2] [3,4]             # → [[1, 3], [1, 4], [2, 3], [2, 4]]
-var parts = partition "is_even" [1,2,3,4]   # → [[2, 4], [1, 3]]
-var mx    = max_key ["a","bb","ccc"] "len"  # → "ccc"
-var total = reduce "add_int" [1,2,3,4]      # → 10
+var flat = flatten [[1,2],[3,[4,5]]]        #! → [1, 2, 3, 4, 5]
+var pr    = product [1,2] [3,4]             #! → [[1, 3], [1, 4], [2, 3], [2, 4]]
+var parts = partition "is_even" [1,2,3,4]   #! → [[2, 4], [1, 3]]
+var mx    = max_key ["a","bb","ccc"] "len"  #! → "ccc"
+var total = reduce "add_int" [1,2,3,4]      #! → 10
 ```
 
 ### Math extras
@@ -379,18 +379,18 @@ var total = reduce "add_int" [1,2,3,4]      # → 10
 | `is_missing(g)` | boolean | TRUE if the group is empty |
 
 ```indent
-var s = group([1, 2, 2, 3])   # → {1, 2, 3}
-var t = s.add(4)            # → {1, 2, 3, 4}
-var u = t.remove(2)         # → {1, 3, 4}
-u.contains(3)               # → TRUE
-contains(u, 9)              # → FALSE
-type_of(s)                  # → "group"
+var s = group([1, 2, 2, 3])   #! → {1, 2, 3}
+var t = s.add(4)            #! → {1, 2, 3, 4}
+var u = t.remove(2)         #! → {1, 3, 4}
+u.contains(3)               #! → TRUE
+contains(u, 9)              #! → FALSE
+type_of(s)                  #! → "group"
 
 var a = group([1, 2, 3, 4])
 var b = group([3, 4, 5, 6])
-set_union(a, b)             # → {1, 2, 3, 4, 5, 6}
-set_intersection(a, b)      # → {3, 4}
-set_difference(a, b)        # → {1, 2}
+set_union(a, b)             #! → {1, 2, 3, 4, 5, 6}
+set_intersection(a, b)      #! → {3, 4}
+set_difference(a, b)        #! → {1, 2}
 ```
 
 ---
@@ -469,7 +469,7 @@ fun handle req
         give {"status": 200, "body": "{\"ok\": true}", "content_type": "application/json"}
     give {"status": 404, "body": "not found", "content_type": "text/plain"}
 
-http_serve handle 8080     # blocking: listens until stopped
+http_serve handle 8080     #! blocking: listens until stopped
 ```
 
 > `http_serve` blocks the script while serving. Each request runs the handler
@@ -530,10 +530,10 @@ runtime** — the launched file's functions and module-level vars become availab
 here (include-like):
 
 ```indent
-# helper.ind defines: fun double x  and  var helperMsg = "..."
+#! helper.ind defines: fun double x  and  var helperMsg = "..."
 launch "helper.ind"
-var d = double 21          # → 42  (function from the other file)
-say helperMsg              # var from the other file is now in scope
+var d = double 21          #! → 42  (function from the other file)
+say helperMsg              #! var from the other file is now in scope
 ```
 
 | Form | Returns | Notes |
@@ -559,7 +559,7 @@ var rows = []
 rows is append rows ["name", "age", "city"]
 rows is append rows ["Ada", "36", "New York"]
 csv_write "people.csv" rows
-var back = csv_read "people.csv"     # → [["name","age","city"],["Ada","36","New York"]]
+var back = csv_read "people.csv"     #! → [["name","age","city"],["Ada","36","New York"]]
 ```
 
 ---
@@ -577,7 +577,7 @@ Each call opens and closes the database file, so it's safe for scripts. `NULL` b
 ```indent
 sqlite_exec "app.db" "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
 sqlite_exec "app.db" "INSERT INTO users (name, age) VALUES ('Ada', 36)"
-var rows = sqlite_query "app.db" "SELECT name, age FROM users"   # → [["Ada", 36], ...]
+var rows = sqlite_query "app.db" "SELECT name, age FROM users"   #! → [["Ada", 36], ...]
 var one = sqlite_query_one "app.db" "SELECT name FROM users WHERE age = 36"
 ```
 
@@ -608,7 +608,7 @@ catch as err:
   args into a list `nums`. Any params before `...` are fixed:
   ```indent
   fun greet name ...tags
-      # name is fixed, tags is a list of the rest
+      #! name is fixed, tags is a list of the rest
   ```
 - **`with` context manager** — `with` is an alias for `open`, so both
   `open "f.txt" for read as f:` and `with "f.txt" for read as f:` work.
@@ -698,7 +698,7 @@ catch as err:
 
 ```indent
 var cfg = toml_loads "title = \"demo\"\ncount = 3\n"
-say cfg["title"]       # → demo
+say cfg["title"]       #! → demo
 var t = toml_dumps({"name": "Ada", "age": 36})
 ```
 
@@ -713,8 +713,8 @@ var t = toml_dumps({"name": "Ada", "age": 36})
 
 ```indent
 var cfg = yaml_loads "name: Indent\nfeatures:\n  - async\n  - yaml"
-say cfg["name"]            # → Indent
-say len(cfg["features"])   # → 2
+say cfg["name"]            #! → Indent
+say len(cfg["features"])   #! → 2
 var y = yaml_dumps({"name": "Ada", "age": 36})
 ```
 
@@ -757,17 +757,17 @@ fun slow_add a b
     give a + b
 
 var id = spawn "slow_add" 2 3
-# ... do other work ...
-var result = task_wait id        # → 5
+#! ... do other work ...
+var result = task_wait id        #! → 5
 
-# Concurrent batch — each sublist is the args for one call
-var results = parallel "slow_add" [[1, 1], [10, 20]]   # → [2, 30]
+#! Concurrent batch — each sublist is the args for one call
+var results = parallel "slow_add" [[1, 1], [10, 20]]   #! → [2, 30]
 
-# Spawn with a function value instead of a name string
+#! Spawn with a function value instead of a name string
 var f = slow_add
 var id2 = spawn f 4 5
 
-# Wait with a timeout — returns empty if it takes too long
+#! Wait with a timeout — returns empty if it takes too long
 var r = task_wait_timeout id2 2.0
 ```
 
@@ -787,12 +787,12 @@ fun slow a
     give a * 2
 
 loop:
-    var f1 = future "slow" 10     # schedule on a background thread
-    var f2 = future "slow" 20     # ... concurrently
-    wait f1                        # await; result in __await_result__
+    var f1 = future "slow" 10     #! schedule on a background thread
+    var f2 = future "slow" 20     #! ... concurrently
+    wait f1                        #! await; result in __await_result__
     var r1 = __await_result__
-    wait 0.05                      # cooperative delay
-    var r2 = __await_result__      # r2 holds the awaited value from f1
+    wait 0.05                      #! cooperative delay
+    var r2 = __await_result__      #! r2 holds the awaited value from f1
 ```
 
 ### Cooperative execution (`coop`)
@@ -806,7 +806,7 @@ fun task_a
     wait 0.02
     give "A"
 
-var res = coop [["task_a", []], ["task_b", []]]   # → [A, B], interleaved
+var res = coop [["task_a", []], ["task_b", []]]   #! → [A, B], interleaved
 ```
 
 | Keyword / Function | Description |
@@ -844,27 +844,27 @@ concurrently without blocking the program:
 
 ```indent
 var f = http_get_async "https://api.example.com/users"
-# ... other work ...
+#! ... other work ...
 wait f
-var resp = __await_result__      # → {status, body, ok}
+var resp = __await_result__      #! → {status, body, ok}
 
-# concurrent requests
+#! concurrent requests
 var f1 = http_get_async "https://api.example.com/a"
 var f2 = http_get_async "https://api.example.com/b"
-var results = gather f1 f2        # both run concurrently
+var results = gather f1 f2        #! both run concurrently
 ```
 
 ```indent
-# async def — calling it returns a future automatically
+#! async def — calling it returns a future automatically
 async fun fetch id
     give http_get_json "https://api.example.com/" + id
 
 loop:
-    var f1 = fetch 1          # auto-future
+    var f1 = fetch 1          #! auto-future
     var f2 = fetch 2
-    var results = gather f1 f2   # → [data1, data2]
+    var results = gather f1 f2   #! → [data1, data2]
 
-# async with — await + bind + run body
+#! async with — await + bind + run body
 loop:
     async with fetch 3 as data:
         say data
@@ -1057,8 +1057,8 @@ class Vector
     fun equals other
         give x == other.x
 
-say Vector(3, 4) + Vector(1, 2)   # → Vector(4, 6)
-say Vector(3, 4) == Vector(3, 4)  # → TRUE
+say Vector(3, 4) + Vector(1, 2)   #! → Vector(4, 6)
+say Vector(3, 4) == Vector(3, 4)  #! → TRUE
 ```
 
 ### `dataclass`
@@ -1070,8 +1070,8 @@ say Vector(3, 4) == Vector(3, 4)  # → TRUE
 dataclass Point
     var px int
     var py int
-say Point(1, 2)                 # → Point(px: 1, py: 2)
-say Point(1, 2) == Point(1, 2)  # → TRUE
+say Point(1, 2)                 #! → Point(px: 1, py: 2)
+say Point(1, 2) == Point(1, 2)  #! → TRUE
 ```
 
 See the [Classes chapter of INDENT_GUIDE](INDENT_GUIDE.md#8-classes--objects)
@@ -1095,11 +1095,11 @@ fun countdown n
     yield n - 1
     yield n - 2
 
-for x in countdown 3    # 3, 2, 1
+for x in countdown 3    #! 3, 2, 1
     say x
 
-var xs = to_list(countdown 3)   # → [3, 2, 1]
-is_generator(countdown 3)       # → TRUE
+var xs = to_list(countdown 3)   #! → [3, 2, 1]
+is_generator(countdown 3)       #! → TRUE
 ```
 
 ---
@@ -1113,8 +1113,8 @@ Invoke a function whose name (or `Func` value) is only known at runtime:
 | `call_func(name, ...args)` | any | Call the function named `name` (string or Func value) with `args` |
 
 ```indent
-var op = "double"        # name is dynamic
-call_func op 21          # → 42
+var op = "double"        #! name is dynamic
+call_func op 21          #! → 42
 ```
 
 ---
@@ -1147,7 +1147,7 @@ do:
     var d = {"a": 1}
     say d["missing"]
 catch as err:
-    say error_type(err)      # → E000
+    say error_type(err)      #! → E000
 ```
 
 ---

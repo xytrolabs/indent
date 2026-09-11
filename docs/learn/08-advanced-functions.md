@@ -234,7 +234,7 @@ fun double n
 fun triple n
     give n * 3
 
-# Pass function by name
+#! Pass function by name
 fun apply_twice fn val
     give fn(fn(val))
 
@@ -250,7 +250,7 @@ Pass arguments by name for clarity, especially with many parameters:
 fun create_user name age city
     say name + ", " + age + ", " + city
 
-# Call with named arguments (order doesn't matter)
+#! Call with named arguments (order doesn't matter)
 create_user name is "Ada" age is 28 city is "London"
 create_user city is "Paris" name is "Jean" age is 35
 ```

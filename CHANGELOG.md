@@ -14,17 +14,27 @@
   Activating the nest makes `indent` resolve to that pinned version.
 
 ### 🛠 Tooling
+- **`indent --update` now downloads the prebuilt binary** — fast, and no Rust
+  toolchain required (it swaps in the latest release's binary). It only falls
+  back to a slow source build if no prebuilt release exists for your platform.
+  If you are already on the latest version it says so and does nothing.
 - `indent --help` now lists the `nest` subcommands, `--watch`, and `--safe`.
-- `indent --update` always re-clones a fresh copy, so a dirty leftover worktree
-  can no longer abort the update with "local changes would be overwritten".
+- `indent nest install` and `--update` share one download path (tar.gz on
+  Linux/macOS, `.zip` on Windows).
+
+### 📖 Docs
+- Corrected the language syntax throughout the docs: comments are `#!` (a bare
+  `#` is a hex-color token, not a comment); `or` is the `if`-chain keyword, not a
+  boolean operator (`and`/`not` are; `&&`/`||`/`!` are unsupported); `is` is
+  assignment only (use `in`, `==`, `is_missing()` for tests); groups are built
+  with `group([...])` and have no literal/comprehension syntax; and errors carry
+  category words (`error_type`) rather than `E###` codes.
+- Large Arch-style expansion of `docs/INDENT_GUIDE.md`, plus updates to the quick
+  reference and builtins reference.
 
 ### 🧩 Groups
 - `group([...])` is the group builder; `set([...])` is a deprecated alias, and
   `set` remains the type-conversion keyword (`set x string`).
-
-### 📖 Docs
-- Large Arch-style expansion of `docs/INDENT_GUIDE.md`, plus updates to the quick
-  reference and builtins reference.
 
 ## 2.2 — 2026-09-07 (nests & hot reload)
 

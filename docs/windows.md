@@ -69,7 +69,7 @@ indent run hello.ind
 A quick end-to-end check that the standard library resolves:
 
 ```indent
-# std_check.ind
+#! std_check.ind
 get math
 say "2^10 = " + string(math.Pow(2, 10))
 get Upper from strings

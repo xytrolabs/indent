@@ -104,18 +104,18 @@ say len colors        #! 3
 When the value makes the type obvious, you can skip the type annotation:
 
 ```indent
-var name = "Ada"       # → string
-var age = 28           # → int
-var pi = 3.14          # → float
-var flag = true        # → boolean
-var nums = [1, 2, 3]   # → list
+var name = "Ada"       #! → string
+var age = 28           #! → int
+var pi = 3.14          #! → float
+var flag = true        #! → boolean
+var nums = [1, 2, 3]   #! → list
 ```
 
 Explicit types still work — use them when you want to be clear or when inference can't determine the type:
 
 ```indent
-var x int = 42              # explicit — always fine
-var data dynamic = getData  # inference can't help here
+var x int = 42              #! explicit — always fine
+var data dynamic = getData  #! inference can't help here
 ```
 
 ### The `dynamic` Type
@@ -124,10 +124,10 @@ Use `dynamic` when you don't know the type ahead of time, or need mixed content:
 
 ```indent
 var mixed dynamic = "hello"
-mixed is 42              # now it's an int
-mixed is [1, "two", 3]   # now it's a mixed list
+mixed is 42              #! now it's an int
+mixed is [1, "two", 3]   #! now it's a mixed list
 
-var anything dynamic = ["red", 42, true]  # mixed list
+var anything dynamic = ["red", 42, true]  #! mixed list
 ```
 
 ### Type Conversion
@@ -135,19 +135,19 @@ var anything dynamic = ["red", 42, true]  # mixed list
 Convert between types with these built-in functions:
 
 ```indent
-var n int = int("42")           # string → int: 42
-var f float = float("3.14")     # string → float: 3.14
-var s string = string(42)       # int → string: "42"
-var b boolean = bool("true")    # string → boolean: true
+var n int = int("42")           #! string → int: 42
+var f float = float("3.14")     #! string → float: 3.14
+var s string = string(42)       #! int → string: "42"
+var b boolean = bool("true")    #! string → boolean: true
 
-# Safe conversion with fallback (returns default on failure)
-var safe int = int_or("hello", 0)     # → 0
-var ok float = float_or("nope", 1.0)  # → 1.0
+#! Safe conversion with fallback (returns default on failure)
+var safe int = int_or("hello", 0)     #! → 0
+var ok float = float_or("nope", 1.0)  #! → 1.0
 
-# Check any value's type
-say type_of(42)          # "int"
-say type_of([1,2])       # "list"
-say type_of("hi")        # "string"
+#! Check any value's type
+say type_of(42)          #! "int"
+say type_of([1,2])       #! "list"
+say type_of("hi")        #! "string"
 ```
 
 ### Typed Function Parameters & Returns
@@ -155,15 +155,15 @@ say type_of("hi")        # "string"
 Functions can declare parameter types and return types:
 
 ```indent
-# Typed parameters
+#! Typed parameters
 fun add a int b int
     give a + b
 
-# Typed return value
+#! Typed return value
 fun double n int give int
     give n * 2
 
-var result int = double 21   # → 42
+var result int = double 21   #! → 42
 ```
 
 ## Practice

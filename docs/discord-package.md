@@ -219,8 +219,8 @@ automatically validates required args before the handler runs.
 get addCmd from discord
 
 fun kickCmd args
-    var user    string = args["1"]       # guaranteed non-empty
-    var reason  string = args["2"]       # optional — may be empty
+    var user    string = args["1"]       #! guaranteed non-empty
+    var reason  string = args["2"]       #! optional — may be empty
     if reason == empty
         reason is "No reason given"
     kick bot user reason
@@ -269,8 +269,8 @@ lists all registered commands.
 
 ```indent
 fun myHandler args
-    # args is a dict: {"1": "first arg", "2": "second", ...}
-    # Keys "1"–"9" always exist (empty if not provided)
+    #! args is a dict: {"1": "first arg", "2": "second", ...}
+    #! Keys "1"–"9" always exist (empty if not provided)
     var first  string = args["1"]
     var second string = args["2"]
 ```
@@ -299,7 +299,7 @@ fun onReady bot data
     sendMsg bot "✅ Bot is online!"
 
 fun onMessage bot msg
-    # fires on every message (commands still work)
+    #! fires on every message (commands still work)
 
 bot is on bot "ready"   onReady
 bot is on bot "message" onMessage
@@ -349,7 +349,7 @@ get QuickBot from discord
 get SetupAudit from discord
 
 var bot dynamic = QuickBot "TOKEN" "!"
-bot is SetupAudit bot "123456789012345678"   # ← channel to log into
+bot is SetupAudit bot "123456789012345678"   #! ← channel to log into
 Run bot
 ```
 
@@ -378,7 +378,7 @@ See the table above for what `data` contains per event.
 - Override per bot before `Run`:
   ```indent
   var bot dynamic = QuickBot "TOKEN" "!"
-  bot.intents is 33281     # minimal: GUILDS + GUILD_MESSAGES + MESSAGE_CONTENT
+  bot.intents is 33281     #! minimal: GUILDS + GUILD_MESSAGES + MESSAGE_CONTENT
   Run bot
   ```
 
@@ -475,15 +475,15 @@ bot is BotHandler bot "ban" "Ban a user by ID" "handleBan"
 
 ```indent
 fun myHandler ctx args
-    # ctx.author       — the user who ran the command
-    # ctx.channel_id   — channel ID
-    # ctx.guild_id     — guild ID (empty in DMs)
-    # ctx.token        — bot token
-    # ctx.source       — raw message or interaction
-    # ctx.cmd          — command name
-    # ctx.args         — list of arguments
-    # ctx.bot          — the bot object
-    # args[0], args[1], ... — positional arguments
+    #! ctx.author       — the user who ran the command
+    #! ctx.channel_id   — channel ID
+    #! ctx.guild_id     — guild ID (empty in DMs)
+    #! ctx.token        — bot token
+    #! ctx.source       — raw message or interaction
+    #! ctx.cmd          — command name
+    #! ctx.args         — list of arguments
+    #! ctx.bot          — the bot object
+    #! args[0], args[1], ... — positional arguments
 ```
 
 ### Ctx helpers
@@ -577,11 +577,11 @@ get sendMsg from discord
 get add from discord
 
 fun rollCmd args
-    # handler code...
+    #! handler code...
 bot is add bot "roll" rollCmd
 
 fun flipCmd args
-    # handler code...
+    #! handler code...
 bot is add bot "flip" flipCmd
 ```
 
@@ -656,8 +656,8 @@ fun banCmd args
 
 #! ---- 5. Register commands ----------------------------------
 #! Use addCmd with arg names for auto-validation
-bot is addCmd bot "ping"  pingCmd  empty          # no required args
-bot is addCmd bot "greet" greetCmd ["name"]       # name is optional? keep add
+bot is addCmd bot "ping"  pingCmd  empty          #! no required args
+bot is addCmd bot "greet" greetCmd ["name"]       #! name is optional? keep add
 bot is addCmd bot "kick"  kickCmd  ["user"]
 bot is addCmd bot "ban"   banCmd   ["user"]
 
@@ -746,7 +746,7 @@ fun slashKick ctx args
     var target string = args["user"]
     CtxSend ctx "Kicking " + target
 bot is SlashWithUser bot "kick" "Kick a user" "slashKick"
-SyncSlash bot        # call before Run
+SyncSlash bot        #! call before Run
 Run bot
 ```
 

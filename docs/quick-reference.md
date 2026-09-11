@@ -19,14 +19,14 @@
 > ⚙️ Generators: a function that `yield`s returns a generator — iterate it with `for` (`for x in gen`), check with `is_generator(gen)`, materialize with `to_list(gen)` (finite/eager).<｜end▁of▁thinking｜>## Basics
 ```indent
 #! Comments start with #! (hash-bang)
-say "Hello"                 # Print to stdout
-var x is 42                 # Declare, type inferred (int)   [= also accepted]
-var name is "Ada"           # Declare string                  [var name = "Ada" too]
-var n int is 42             # Declare with explicit type
-var flag is true            # Declare boolean
-var nums is [1,2,3]         # Declare list
-x = 43                      # Reassign  [x is 43 also accepted]
-null                        # Null/none (alias for empty)
+say "Hello"                 #! Print to stdout
+var x is 42                 #! Declare, type inferred (int)   [= also accepted]
+var name is "Ada"           #! Declare string                  [var name = "Ada" too]
+var n int is 42             #! Declare with explicit type
+var flag is true            #! Declare boolean
+var nums is [1,2,3]         #! Declare list
+x = 43                      #! Reassign  [x is 43 also accepted]
+null                        #! Null/none (alias for empty)
 ```
 
 > **Declare vs reassign:** `var x is value` declares (and `=` is also accepted
@@ -34,58 +34,58 @@ null                        # Null/none (alias for empty)
 
 ## Type Conversion (v1.5)
 ```indent
-var name1 = 21              # int
-set name1 string            # → "21" (int→string)
-set name1 float             # → 21.0 (int→float)
+var name1 = 21              #! int
+set name1 string            #! → "21" (int→string)
+set name1 float             #! → 21.0 (int→float)
 var x = "42"
-set x int                   # → 42 (string→int)
+set x int                   #! → 42 (string→int)
 var z = 0
-set z boolean               # → FALSE (int→bool, 0=false, non-zero=true)
+set z boolean               #! → FALSE (int→bool, 0=false, non-zero=true)
 var data = [1,2,2,3]
-set data set                # → {1, 2, 3} (list→set, deduplicated)
+set data group              #! → {1, 2, 3} (list→group, deduplicated)
 ```
-Supported conversions: `string`, `int`, `float`, `boolean`, `list`, `set`, `dict`, `dynamic`, `empty`.
+Supported conversions: `string`, `int`, `float`, `boolean`, `list`, `group`, `dict`, `dynamic`, `empty`.
 
 ## Compound Assignment (v1.3)
 ```indent
-x += 8     # x = x + 8
-x -= 10    # x = x - 10
-x *= 2     # x = x * 2
-x /= 3     # x = x / 3
-x %= 5     # x = x % 5
+x += 8     #! x = x + 8
+x -= 10    #! x = x - 10
+x *= 2     #! x = x * 2
+x /= 3     #! x = x / 3
+x %= 5     #! x = x % 5
 ```
 Works with numeric variables. `+=` also merges lists and dicts.
 
 ## String Interpolation
 ```indent
 var name string = "Ada"
-say "Hello %name%!"         # → "Hello Ada!"
+say "Hello %name%!"         #! → "Hello Ada!"
 ```
 
 ## Functions
 ```indent
-fun greet person            # Parameters on same line
+fun greet person            #! Parameters on same line
     say "Hello " + person
-greet("Ada")                # Parenthesized call
-greet "Ada"                 # Space-separated call
+greet("Ada")                #! Parenthesized call
+greet "Ada"                 #! Space-separated call
 
-fun add a b                 # Multiple params
-    give a + b              # Return value (NOT "return")
+fun add a b                 #! Multiple params
+    give a + b              #! Return value (NOT "return")
 
-fun greet name = "World"    # Default parameter
-greet                       # → "Hello World!"
+fun greet name = "World"    #! Default parameter
+greet                       #! → "Hello World!"
 
-fun add a b as int          # Return type annotation
+fun add a b as int          #! Return type annotation
     give a + b
 
-# Function references
+#! Function references
 fun handler x
     say x
-register handler            # Pass function without calling
+register handler            #! Pass function without calling
 
-# Lambda (v1.2)
+#! Lambda (v1.2)
 var double = fn(x): x * 2
-say double(5)               # → 10
+say double(5)               #! → 10
 ```
 
 ## Classes
@@ -97,10 +97,10 @@ class Person
         say "I'm " + name
 
 var p dynamic = Person "Ada" 28
-p.greet()                   # → I'm Ada
-say p.name                  # → Ada
+p.greet()                   #! → I'm Ada
+say p.name                  #! → Ada
 
-class Employee from Person  # Single inheritance
+class Employee from Person  #! Single inheritance
     var role string
     fun greet
         say "I'm " + name + ", " + role
@@ -121,35 +121,35 @@ class Vector
 dataclass Point
     var px int
     var py int
-say Point(1, 2)                 # → Point(px: 1, py: 2)
-say Point(1, 2) == Point(1, 2)  # → TRUE
+say Point(1, 2)                 #! → Point(px: 1, py: 2)
+say Point(1, 2) == Point(1, 2)  #! → TRUE
 
 #! Generators: a function containing yield is a generator
 fun countdown n
     yield n
     yield n - 1
     yield n - 2
-for x in countdown 3    # 3, 2, 1
+for x in countdown 3    #! 3, 2, 1
     say x
-is_generator(g)         # → TRUE
-var xs = to_list(countdown 3)   # → [3, 2, 1]  (materialize)
+is_generator(g)         #! → TRUE
+var xs = to_list(countdown 3)   #! → [3, 2, 1]  (materialize)
 ```
 
 ## Calling by name
 ```indent
-call_func "double" 21    # invoke a function whose name is a runtime string
+call_func "double" 21    #! invoke a function whose name is a runtime string
 ```
 
 ## Control Flow
 ```indent
 if x > 10
     say "big"
-or x > 5                    # else-if (NOT elif)
+or x > 5                    #! else-if (NOT elif)
     say "medium"
-otherwise                   # else (NOT else:)
+otherwise                   #! else (NOT else:)
     say "small"
 
-match x:                    # Pattern matching
+match x:                    #! Pattern matching
     case "a":
         say "Alpha"
     case "b":
@@ -160,15 +160,15 @@ match x:                    # Pattern matching
 
 ## Loops
 ```indent
-repeat 5                    # Counted loop (Reps is 0-indexed)
-repeat item in list         # Iterate over list
-repeat item in my_group     # Iterate over a group
-repeat until x == 10        # Conditional loop
-for x in list               # Alias for repeat
+repeat 5                    #! Counted loop (Reps is 0-indexed)
+repeat item in list         #! Iterate over list
+repeat item in my_group     #! Iterate over a group
+repeat until x == 10        #! Conditional loop
+for x in list               #! Alias for repeat
 
-stop                        # Break
-next                        # Continue
-reset                       # Restart loop
+stop                        #! Break
+next                        #! Continue
+reset                       #! Restart loop
 ```
 
 ## Groups — Unique Ordered Collections
@@ -178,90 +178,92 @@ reset                       # Restart loop
 > (`set x string`), and the `set_*` helpers operate on groups.
 
 ```indent
-var s = group([1, 2, 2, 3])  # → {1, 2, 3} — deduplicated
+var s = group([1, 2, 2, 3])  #! → {1, 2, 3} — deduplicated
 var s2 = group([3, 4, 5, 6])
-var u = s + s2              # Union: {1, 2, 3, 4, 5, 6}
-contains(s, 2)              # → TRUE
-len(s)                      # → 3
-type_of(s)                  # → "group"
-repeat item in s            # Iteration
-[x * 2 for x in s]          # Comprehension: [2, 4, 6]
-is_missing(group([]))       # → TRUE (empty group)
+var u = s + s2              #! Union: {1, 2, 3, 4, 5, 6}
+contains(s, 2)              #! → TRUE
+len(s)                      #! → 3
+type_of(s)                  #! → "group"
+repeat item in s            #! Iteration
+[x * 2 for x in s]          #! Comprehension: [2, 4, 6]
+is_missing(group([]))       #! → TRUE (empty group)
 
-# Adding / removing / checking membership (methods use bare values)
+#! Adding / removing / checking membership (methods use bare values)
 var t = group([1, 2])
-var t2 = t.add(3)           # → {1, 2, 3}
-var t3 = t2.remove(2)       # → {1, 3}
-t3.contains(1)              # → TRUE
+var t2 = t.add(3)           #! → {1, 2, 3}
+var t3 = t2.remove(2)       #! → {1, 3}
+t3.contains(1)              #! → TRUE
 ```
 
 ## Expressions
 ```indent
-# Comprehensions (v1.2)
-[x * x for x in range 5]          # → [0, 1, 4, 9, 16]
-{x: x * 2 for x in range 3}       # → {"0": 0, "1": 2, "2": 4}
-[x for x in list if x > 5]        # Filtered
+#! Comprehensions (v1.2)
+[x * x for x in range 5]          #! → [0, 1, 4, 9, 16]
+{x: x * 2 for x in range 3}       #! → {"0": 0, "1": 2, "2": 4}
+[x for x in list if x > 5]        #! Filtered
 
-# Ternary (v1.2)
+#! Ternary (v1.2)
 var s string = "adult" if age >= 18 else "child"
 
-# Chained comparisons (v1.2)
-if 0 < x < 10                     # x > 0 and x < 10
+#! Chained comparisons (v1.2)
+if 0 < x < 10                     #! x > 0 and x < 10
 
-# Bitwise operators (v1.2)
-5 & 3    # → 1 (AND)        1 << 2   # → 4 (shift left)
-5 | 3    # → 7 (OR)         8 >> 2   # → 2 (shift right)
-5 ^ 3    # → 6 (XOR)        ~5       # → -6 (NOT)
+#! Bitwise operators (v1.2)
+5 & 3    #! → 1 (AND)        1 << 2   #! → 4 (shift left)
+5 | 3    #! → 7 (OR)         8 >> 2   #! → 2 (shift right)
+5 ^ 3    #! → 6 (XOR)        ~5       #! → -6 (NOT)
 
-# Identity (v1.2)
-x is empty          # TRUE if x is null/empty
-x is not y          # Strict identity check
+#! Membership & empty tests (use in / == ; `is` is assignment only)
+x in list           #! TRUE if x is in the list/group (or a dict key / substring)
+x not in list       #! negated membership
+is_missing(x)       #! TRUE if x is null/empty
+x == empty          #! TRUE if x is the empty value
 ```
 
 ## Data Types
 ```indent
-# Lists
+#! Lists
 var list list = [1, 2, 3]
-list[0]                     # → 1
-list is list + [4]          # → [1, 2, 3, 4]
+list[0]                     #! → 1
+list is list + [4]          #! → [1, 2, 3, 4]
 
-# Dictionaries
+#! Dictionaries
 var dict dict = {"key": "val"}
-dict["key"]                 # → "val"
-dict.key                    # → "val" (dot notation)
-dict["new"] is "value"      # Set key
+dict["key"]                 #! → "val"
+dict.key                    #! → "val" (dot notation)
+dict["new"] is "value"      #! Set key
 
-# Dynamic (any type)
+#! Dynamic (any type)
 var mixed dynamic = [1, "hi", true]
-mixed is 42                 # Can change type
+mixed is 42                 #! Can change type
 
-# Empty (null)
+#! Empty (null)
 var nothing empty
 ```
 
 ## Imports
 ```indent
-get math                    # Import whole module
-import math                 # Alias (v1.2)
-get Pow from math           # Single function
-get RandInt from random as R # With alias
+get math                    #! Import whole module
+import math                 #! Alias (v1.2)
+get Pow from math           #! Single function
+get RandInt from random as R #! With alias
 ```
 
 ## Running other files (v1.6.2)
 ```indent
-launch "helper.ind"          # Canonical: run another .ind file in this runtime.
-                             # Its functions + module-level vars become available.
-run_file "helper.ind"        # Deprecated alias of launch.
+launch "helper.ind"          #! Canonical: run another .ind file in this runtime.
+                             #! Its functions + module-level vars become available.
+run_file "helper.ind"        #! Deprecated alias of launch.
 ```
 > Use `os_run "indent file.ind"` to run a file as a **separate process**.
 
 ## File Handling
 ```indent
 open "data.txt" for read as f:
-    say f                   # Reads file into f
+    say f                   #! Reads file into f
 
 open "out.txt" for write as f:
-    f is "Hello World!"     # Writes to file
+    f is "Hello World!"     #! Writes to file
 
 open "log.txt" for append as f:
     f is "appended line"
@@ -269,28 +271,28 @@ open "log.txt" for append as f:
 
 ## Common Builtins
 ```indent
-# I/O
-ask("Prompt: ")             # User input (returns string)
-say value                   # Print to stdout
+#! I/O
+ask("Prompt: ")             #! User input (returns string)
+say value                   #! Print to stdout
 
-# Type checking & conversion
-type_of(value)              # → "int", "string", "list", etc.
-string(x) / int(x) / float(x) / bool(x)   # Conversion functions
-int_or(s, fallback) / float_or(s, fallback)  # Safe conversion
+#! Type checking & conversion
+type_of(value)              #! → "int", "string", "list", etc.
+string(x) / int(x) / float(x) / bool(x)   #! Conversion functions
+int_or(s, fallback) / float_or(s, fallback)  #! Safe conversion
 
-# String operations
-len("hello")                # → 5 (also works on lists, groups, dicts)
+#! String operations
+len("hello")                #! → 5 (also works on lists, groups, dicts)
 upper(s) / lower(s) / trim(s)
 replace(s, from, to)
 split("a,b", ",") / join([1,2], ",")
 starts_with(s, pre) / ends_with(s, suf)
-contains(s, sub)            # Substring check
+contains(s, sub)            #! Substring check
 slice(s, start, end)
 find(s, sub) / index(s, sub)
 pad_left(s, 10, " ") / pad_right(s, 10, " ")
-repeat_str(s, 3)            # Repeat string
+repeat_str(s, 3)            #! Repeat string
 
-# List/dict operations
+#! List/dict operations
 keys(dict) / values(dict) / items(dict)
 has_key(dict, key)
 sort(list) / reverse(list)
@@ -303,58 +305,58 @@ sum(list) / min(list) / max(list)
 any(list) / all(list)
 count(container, item)
 
-# Numeric
+#! Numeric
 range(end) / range(start, end, step)
 abs(n) / is_even(n) / is_odd(n)
 between_int(v, min, max)
 inc(v) / dec(v)
 
-# Math (via get math)
+#! Math (via get math)
 math.PI / math.pow(base, exp) / math.sqrt(n)
 math.sin(n) / math.cos(n) / math.tan(n)
 math.abs(n) / math.floor(n) / math.ceil(n)
 math.log(n) / math.log10(n) / math.exp(n)
 
-# Random (via get random)
+#! Random (via get random)
 random_int(min, max) / random_choice(list)
 random_shuffle(list) / random_float()
 
-# Time
-time_now()                  # Unix timestamp (float)
-time_utc()                  # Same as time_now
-time_format(ts, "%Y-%m-%d") # Format timestamp
-time_parse("2024-01-15")    # Parse ISO date
-time_sleep(0.5)             # Sleep seconds
+#! Time
+time_now()                  #! Unix timestamp (float)
+time_utc()                  #! Same as time_now
+time_format(ts, "%Y-%m-%d") #! Format timestamp
+time_parse("2024-01-15")    #! Parse ISO date
+time_sleep(0.5)             #! Sleep seconds
 
-# Regex (v1.2)
-regex_match("hel+o", "hello")        # → true
-regex_search("\\d+", "abc123")       # → {start: 3, end: 6, text: "123"}
-regex_findall("\\d+", "a1b2c3")     # → ["1", "2", "3"]
-regex_replace("\\d", "X", "a1b2")   # → "aXbX"
-regex_split(",\\s*", "a, b, c")     # → ["a", "b", "c"]
+#! Regex (v1.2)
+regex_match("hel+o", "hello")        #! → true
+regex_search("\\d+", "abc123")       #! → {start: 3, end: 6, text: "123"}
+regex_findall("\\d+", "a1b2c3")     #! → ["1", "2", "3"]
+regex_replace("\\d", "X", "a1b2")   #! → "aXbX"
+regex_split(",\\s*", "a, b, c")     #! → ["a", "b", "c"]
 
-# Crypto & Encoding (v1.2)
-uuid()                      # Random UUID v4
-base64_encode("hello")      # → "aGVsbG8="
-base64_decode("aGVsbG8=")   # → "hello"
-hash_sha256("hello")        # SHA256 hex string
+#! Crypto & Encoding (v1.2)
+uuid()                      #! Random UUID v4
+base64_encode("hello")      #! → "aGVsbG8="
+base64_decode("aGVsbG8=")   #! → "hello"
+hash_sha256("hello")        #! SHA256 hex string
 
-# File & Path (v1.2)
-glob("*.ind")               # List files matching pattern
-path_join("/home", "user") # → "/home/user"
-path_basename("/a/b.txt")  # → "b.txt"
-path_dirname("/a/b.txt")   # → "/a"
+#! File & Path (v1.2)
+glob("*.ind")               #! List files matching pattern
+path_join("/home", "user") #! → "/home/user"
+path_basename("/a/b.txt")  #! → "b.txt"
+path_dirname("/a/b.txt")   #! → "/a"
 
-# Assertions & testing
-assert(cond)                # Panic if false
-assert_eq(a, b)             # Panic if not equal
-do/catch/flag               # Error handling
+#! Assertions & testing
+assert(cond)                #! Panic if false
+assert_eq(a, b)             #! Panic if not equal
+do/catch/flag               #! Error handling
 
-# Utilities
-copy(val)                   # Shallow copy
-clear(val)                  # Empty container
-is_missing(val)             # TRUE if empty/null/blank
-default(val, fallback)      # Return fallback if val is missing
+#! Utilities
+copy(val)                   #! Shallow copy
+clear(val)                  #! Empty container
+is_missing(val)             #! TRUE if empty/null/blank
+default(val, fallback)      #! Return fallback if val is missing
 ```
 
 ## JSON, HTTP, WebSocket
@@ -385,20 +387,10 @@ lastly:
 ```
 
 ## Error Codes
-| Code | Meaning |
-|---|---|
-| E001 | Type mismatch |
-| E002 | Undefined function |
-| E003 | Import error |
-| E004 | Syntax error |
-| E005 | Unwrap on error |
-| E006 | Undefined variable |
-| E007 | Division by zero |
-| E008 | Index out of range |
-| E009 | Key not found in dict |
-| E010 | File not found |
-| E011 | Invalid JSON |
-| E012 | Network error |
+Errors are reported with a **category word** (`error_type(err)`) plus a message
+(`error_message(err)`) — not the numeric `E###` codes of earlier drafts.
+Example: a missing dict key gives `error_type(err)` → `key_error` and
+`error_message(err)` → `Dictionary key not found: <key>`.
 
 ## Commands
 ```bash
@@ -469,7 +461,7 @@ Available modules:
 
 ## Golden Rules
 1. `func(args)` works **everywhere** — in `say`, `if`, `is` assignments, nested calls
-2. `#!` for comments, `#` is for hex colors only
+2. Comments use `#!` — a bare `#` is **not** a comment (it starts a hex-color token)
 3. Lists/dicts are immutable by value — capture the returned container (`l = append(l, x)`)
 4. Bare identifiers in `var` are treated as function calls — use `string(param)` instead
 5. Type inference: `var x = 42` infers `int`, `var name = "Ada"` infers `string`

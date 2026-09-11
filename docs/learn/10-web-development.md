@@ -21,13 +21,13 @@ get Tag from html
 get Page from html
 get Escape from html
 
-# Build a simple heading
+#! Build a simple heading
 say Tag("h1", {}, "Welcome to Indent")
-# Output: <h1>Welcome to Indent</h1>
+#! Output: <h1>Welcome to Indent</h1>
 
-# Build a div with a CSS class
+#! Build a div with a CSS class
 say Tag("div", {"class": "hero"}, "Hello World")
-# Output: <div class="hero">Hello World</div>
+#! Output: <div class="hero">Hello World</div>
 ```
 
 ### Full Page
@@ -56,7 +56,7 @@ get Escape from html
 
 var user_input string = "<script>alert('xss')</script>"
 var safe string = Escape(user_input)
-say safe   # &lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;
+say safe   #! &lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;
 ```
 
 ---
@@ -89,7 +89,7 @@ fun MarkdownToHtml md
                 html is html + Tag("p", {}, Escape(t)) + "\n"
     give html
 
-# Use it!
+#! Use it!
 var md string = "# Hello\n\nThis is a paragraph.\n\n- Item 1\n- Item 2"
 var body string = MarkdownToHtml(md)
 var page string = Page("My Site", "", body)
@@ -104,7 +104,7 @@ say "Built public/index.html"
 Indent can serve a directory of static files:
 
 ```indent
-# Serve the current directory on port 8080
+#! Serve the current directory on port 8080
 http_serve_dir(".", 8080)
 say "Serving on http://localhost:8080"
 ```
@@ -123,12 +123,12 @@ For the SSG workflow:
 Indent has a built-in HTTP client:
 
 ```indent
-# GET request
+#! GET request
 var response dynamic = http_get("https://api.github.com")
 say response["status"]
 say response["body"]
 
-# Parse JSON response
+#! Parse JSON response
 var data dynamic = json_loads(response["body"])
 say data["current_user_url"]
 ```
@@ -139,11 +139,11 @@ say data["current_user_url"]
 get Tag from html
 get Page from html
 
-# Fetch data
+#! Fetch data
 var resp dynamic = http_get("https://api.github.com/repos/xytrolabs/indent")
 var repo dynamic = json_loads(resp["body"])
 
-# Build HTML
+#! Build HTML
 var content string = ""
 content is content + Tag("h1", {}, repo["full_name"])
 content is content + Tag("p", {}, repo["description"])
@@ -170,7 +170,7 @@ get Tag from html
 get Page from html
 get Escape from html
 
-# Markdown-to-HTML converter (from earlier)
+#! Markdown-to-HTML converter (from earlier)
 fun MarkdownToHtml md
     var html string = ""
     var lines dynamic = split(md, "\n")
@@ -188,13 +188,13 @@ fun MarkdownToHtml md
                 html is html + Tag("p", {}, Escape(t)) + "\n"
     give html
 
-# Build a single post
+#! Build a single post
 fun BuildPost path
     var md string = file_read_text(path)
     var body string = MarkdownToHtml(md)
     give Page("My Blog", "", body)
 
-# Build all posts
+#! Build all posts
 var posts dynamic = os_list_dir("content")
 repeat post in posts
     if ends_with(post, ".md")

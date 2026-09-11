@@ -132,9 +132,9 @@ Hello, World!
 
 ```indent
 var greeting = "Hello"
-greeting = "Hi"            # reassign an existing var (canonical)
-var other is "Yo"          # 'is' declare (also canonical, older style)
-say greeting + " " + other # → "Hi Yo"
+greeting = "Hi"            #! reassign an existing var (canonical)
+var other is "Yo"          #! 'is' declare (also canonical, older style)
+say greeting + " " + other #! → "Hi Yo"
 ```
 
 ---
@@ -147,26 +147,26 @@ Indent has nine types: `string`, `int`, `float`, `boolean`, `list`, `group`,
 ### Declaring variables
 
 ```indent
-# Type inference — the preferred style. The type is taken from the value.
-var name = "Ada"           # string
-var age = 28               # int
-var pi = 3.14              # float
-var flag = true            # boolean
-var nums = [1, 2, 3]       # list
-var tags = {"a": 1}        # dict
+#! Type inference — the preferred style. The type is taken from the value.
+var name = "Ada"           #! string
+var age = 28               #! int
+var pi = 3.14              #! float
+var flag = true            #! boolean
+var nums = [1, 2, 3]       #! list
+var tags = {"a": 1}        #! dict
 
-# Explicit type — useful when the value type is not obvious.
-var data dynamic = readConfig()   # dynamic holds anything
-var scores list = [95, 87]        # typed list
-var nothing empty                 # a variable with no value yet
+#! Explicit type — useful when the value type is not obvious.
+var data dynamic = readConfig()   #! dynamic holds anything
+var scores list = [95, 87]        #! typed list
+var nothing empty                 #! a variable with no value yet
 ```
 
 ### Reassignment
 
 ```indent
 var age = 28
-age = 29                  # canonical reassign
-age is 30                 # 'is' reassign (older/also accepted)
+age = 29                  #! canonical reassign
+age is 30                 #! 'is' reassign (older/also accepted)
 ```
 
 ### Compound assignment
@@ -175,17 +175,17 @@ Shorthand that reads, computes, and reassigns in one step:
 
 ```indent
 var n = 10
-n += 5     # n = n + 5   → 15
-n -= 3     # → 12
-n *= 2     # → 24
-n /= 4     # → 6
-n %= 4     # → 2
+n += 5     #! n = n + 5   → 15
+n -= 3     #! → 12
+n *= 2     #! → 24
+n /= 4     #! → 6
+n %= 4     #! → 2
 
-# Lists and dicts support += to merge.
+#! Lists and dicts support += to merge.
 var a = [1, 2]
-a += [3]            # → [1, 2, 3]
+a += [3]            #! → [1, 2, 3]
 var d = {"x": 1}
-d += {"y": 2}       # → {"x": 1, "y": 2}
+d += {"y": 2}       #! → {"x": 1, "y": 2}
 ```
 
 ### Type conversion
@@ -194,19 +194,19 @@ Convert a value from one type to another with the `set` keyword:
 
 ```indent
 var x = "42"
-set x int              # string→int      → 42
+set x int              #! string→int      → 42
 
 var y = 3
-set y float            # int→float       → 3.0
+set y float            #! int→float       → 3.0
 
 var z = 0
-set z boolean          # 0→false; any non-zero→true
+set z boolean          #! 0→false; any non-zero→true
 
 var s = 42
-set s string           # number→string   → "42"
+set s string           #! number→string   → "42"
 
 var data = [1, 2, 2, 3]
-set data group         # list→group (dedupe) → {1, 2, 3}
+set data group         #! list→group (dedupe) → {1, 2, 3}
 ```
 
 > 💡 The builtins `int(x)`, `float(x)`, `string(x)`/`str(x)`, `bool(x)` do the
@@ -222,9 +222,9 @@ set data group         # list→group (dedupe) → {1, 2, 3}
 
 ```indent
 var maybe empty
-is_missing(maybe)          # → TRUE
-default(maybe, "fallback") # → "fallback"
-coalesce(empty, empty, 7)  # → 7
+is_missing(maybe)          #! → TRUE
+default(maybe, "fallback") #! → "fallback"
+coalesce(empty, empty, 7)  #! → 7
 ```
 
 > ⚠️ Accessing a key that does not exist in a dict, or an index out of range,
@@ -245,14 +245,14 @@ string forms) is truthy. Use `bool(x)` to force a decision.
 
 ```indent
 var fruits = ["apple", "banana", "cherry"]
-fruits[0]                    # → "apple"
-fruits[-1]                   # → "cherry" (negative indexes from the end)
-len(fruits)                  # → 3
+fruits[0]                    #! → "apple"
+fruits[-1]                   #! → "cherry" (negative indexes from the end)
+len(fruits)                  #! → 3
 
-# Build a new list with an item appended — containers are value-based.
-fruits is append(fruits, "date")     # reassign!  → 4 items
-fruits = extend(fruits, ["fig", "grape"])   # merge
-var third = insert(fruits, 2, "kiwi")       # insert at index 2
+#! Build a new list with an item appended — containers are value-based.
+fruits is append(fruits, "date")     #! reassign!  → 4 items
+fruits = extend(fruits, ["fig", "grape"])   #! merge
+var third = insert(fruits, 2, "kiwi")       #! insert at index 2
 ```
 
 > 🔑 **Containers are immutable-by-value.** `append`, `extend`, `insert`,
@@ -264,29 +264,29 @@ var third = insert(fruits, 2, "kiwi")       # insert at index 2
 Membership and searching:
 
 ```indent
-contains(fruits, "kiwi")     # → TRUE  (also works on strings/dicts)
-index(fruits, "date")        # → 3  (or -1 if absent)
-count(fruits, "kiwi")        # → occurrences
-slice(fruits, 1, 3)          # → ["banana", "cherry"]  (start:end)
-reverse(fruits)              # reversed copy
-sort([3, 1, 2])              # → [1, 2, 3]
+contains(fruits, "kiwi")     #! → TRUE  (also works on strings/dicts)
+index(fruits, "date")        #! → 3  (or -1 if absent)
+count(fruits, "kiwi")        #! → occurrences
+slice(fruits, 1, 3)          #! → ["banana", "cherry"]  (start:end)
+reverse(fruits)              #! reversed copy
+sort([3, 1, 2])              #! → [1, 2, 3]
 ```
 
 Looping and transforming:
 
 ```indent
-sum([1, 2, 3])               # → 6
-min([3, 1, 2])               # → 1
-max([3, 1, 2])               # → 3
-any([false, true])           # → TRUE
-all([true, true])            # → TRUE
+sum([1, 2, 3])               #! → 6
+min([3, 1, 2])               #! → 1
+max([3, 1, 2])               #! → 3
+any([false, true])           #! → TRUE
+all([true, true])            #! → TRUE
 
-map([1, 2, 3], "double")     # apply builtin 'double' to each
+map([1, 2, 3], "double")     #! apply builtin 'double' to each
 filter([1, 2, 3, 4], "is_even")
-enumerate(["a", "b"])        # → [[0, "a"], [1, "b"]]
-zip([1, 2], ["a", "b"])      # → [[1, "a"], [2, "b"]]
-range(5)                     # → [0, 1, 2, 3, 4]
-range(1, 5)                  # → [1, 2, 3, 4]
+enumerate(["a", "b"])        #! → [[0, "a"], [1, "b"]]
+zip([1, 2], ["a", "b"])      #! → [[1, "a"], [2, "b"]]
+range(5)                     #! → [0, 1, 2, 3, 4]
+range(1, 5)                  #! → [1, 2, 3, 4]
 ```
 
 > 🔍 `map`/`filter`/`reduce`/`group_by`/`takewhile` accept a **builtin name**
@@ -296,24 +296,24 @@ range(1, 5)                  # → [1, 2, 3, 4]
 
 ```indent
 var person = {"name": "Ada", "age": 28}
-person["name"]               # → "Ada"
-person.name                  # dot notation (same thing)
-person["age"] = 29           # update via index (returns new dict)
+person["name"]               #! → "Ada"
+person.name                  #! dot notation (same thing)
+person["age"] = 29           #! update via index (returns new dict)
 
-keys(person)                 # → ["name", "age"]
-values(person)               # → ["Ada", 29]
-items(person)                # → [["name", "Ada"], ["age", 29]]
+keys(person)                 #! → ["name", "age"]
+values(person)               #! → ["Ada", 29]
+items(person)                #! → [["name", "Ada"], ["age", 29]]
 
-has_key(person, "name")      # → TRUE   — ALWAYS guard optional access
+has_key(person, "name")      #! → TRUE   — ALWAYS guard optional access
 ```
 
 Functional dict updates return a new dict:
 
 ```indent
-var p2 = dict_set(person, "city", "London")     # add/replace a key
-var p3 = dict_remove(person, "age")             # remove a key
-var p4 = dict_update(person, {"age": 30})       # merge updates
-dict_get(person, "missing", "fallback")         # safe lookup w/ default
+var p2 = dict_set(person, "city", "London")     #! add/replace a key
+var p3 = dict_remove(person, "age")             #! remove a key
+var p4 = dict_update(person, {"age": 30})       #! merge updates
+dict_get(person, "missing", "fallback")         #! safe lookup w/ default
 ```
 
 ### Groups — unique, ordered collections
@@ -322,18 +322,18 @@ A **group** holds unique values in insertion order. Build one with `group([...])
 — a "list with no duplicates".
 
 ```indent
-var colors = group(["red", "blue", "red"])   # → {"red", "blue"}
+var colors = group(["red", "blue", "red"])   #! → {"red", "blue"}
 var more   = group(["green", "blue"])
-len(colors)                                  # → 2
-contains(colors, "red")                      # → TRUE
+len(colors)                                  #! → 2
+contains(colors, "red")                      #! → TRUE
 
-var all = colors + more        # union → {"red", "blue", "green"}
+var all = colors + more        #! union → {"red", "blue", "green"}
 
-# Set algebra (the set_* helpers take and return groups):
+#! Set algebra (the set_* helpers take and return groups):
 set_union(colors, more)
-set_intersection(colors, more) # → {"blue"}
-set_difference(colors, more)   # → {"red"}
-set_add(colors, "yellow")      # returns a new group
+set_intersection(colors, more) #! → {"blue"}
+set_difference(colors, more)   #! → {"red"}
+set_add(colors, "yellow")      #! returns a new group
 set_remove(colors, "red")
 set_contains(colors, "red")
 ```
@@ -352,55 +352,55 @@ variables with `%name%`:
 
 ```indent
 var name = "Ada"
-say "Hello " + name             # concatenation
-say "Hello %name%!"             # interpolation — same output
+say "Hello " + name             #! concatenation
+say "Hello %name%!"             #! interpolation — same output
 ```
 
 ### Case, trimming & padding
 
 ```indent
-upper("hello")            # → "HELLO"
-lower("HELLO")            # → "hello"
-capitalize("hello world") # → "Hello world"
-title("hello world")      # → "Hello World"
-swapcase("aBc")           # → "AbC"
+upper("hello")            #! → "HELLO"
+lower("HELLO")            #! → "hello"
+capitalize("hello world") #! → "Hello world"
+title("hello world")      #! → "Hello World"
+swapcase("aBc")           #! → "AbC"
 
-trim("  hi  ")            # → "hi"
-lstrip("  hi")            # → "hi"
-rstrip("hi  ")            # → "hi"
+trim("  hi  ")            #! → "hi"
+lstrip("  hi")            #! → "hi"
+rstrip("hi  ")            #! → "hi"
 
-pad_left("5", 3, "0")     # → "005"
-pad_right("5", 3, "0")    # → "500"
-repeat_str("ab", 3)       # → "ababab"
+pad_left("5", 3, "0")     #! → "005"
+pad_right("5", 3, "0")    #! → "500"
+repeat_str("ab", 3)       #! → "ababab"
 ```
 
 ### Search, replace & slicing
 
 ```indent
-len("hello")              # → 5
-starts_with("hello", "he")  # → TRUE
-ends_with("hello", "lo")    # → TRUE
-contains("hello", "ell")    # → TRUE
-find("hello", "ll")         # → 2  (or -1 if absent)
+len("hello")              #! → 5
+starts_with("hello", "he")  #! → TRUE
+ends_with("hello", "lo")    #! → TRUE
+contains("hello", "ell")    #! → TRUE
+find("hello", "ll")         #! → 2  (or -1 if absent)
 
-replace("aaa", "a", "b")    # → "bbb"
-split("a,b,c", ",")         # → ["a", "b", "c"]
-split("a b c")              # split on whitespace if no separator
-join(["a", "b"], "-")       # → "a-b"
-slice("hello", 1, 3)        # → "el"
+replace("aaa", "a", "b")    #! → "bbb"
+split("a,b,c", ",")         #! → ["a", "b", "c"]
+split("a b c")              #! split on whitespace if no separator
+join(["a", "b"], "-")       #! → "a-b"
+slice("hello", 1, 3)        #! → "el"
 
-str_zfill("7", 3)              # → "007"
-str_removeprefix("file.txt", "file")   # → ".txt"
-str_removesuffix("file.txt", ".txt")   # → "file"
-str_splitlines("a\nb")                # → ["a", "b"]
-str_partition("a=b", "=")             # → ["a", "=", "b"]
+str_zfill("7", 3)              #! → "007"
+str_removeprefix("file.txt", "file")   #! → ".txt"
+str_removesuffix("file.txt", ".txt")   #! → "file"
+str_splitlines("a\nb")                #! → ["a", "b"]
+str_partition("a=b", "=")             #! → ["a", "=", "b"]
 ```
 
 ### Formatting templates
 
 ```indent
-format("{0} and {1}", "x", "y")        # positional → "x and y"
-sformat("{a}-{b}", "a", 1, "b", 2)     # named      → "1-2"
+format("{0} and {1}", "x", "y")        #! positional → "x and y"
+sformat("{a}-{b}", "a", 1, "b", 2)     #! named      → "1-2"
 ```
 
 > 🔍 Strings also expose the same operations as `.method` calls:
@@ -414,55 +414,55 @@ sformat("{a}-{b}", "a", 1, "b", 2)     # named      → "1-2"
 Indent has two numeric types: `int` (whole) and `float` (fractional).
 
 ```indent
-abs(-5)                # → 5
-inc(5)                 # → 6  (inc(x, step) with a step)
-dec(5)                 # → 4
-clamp(11, 0, 10)       # → 10
-between_int(5, 0, 10)  # → TRUE
-is_even(4)             # → TRUE
-is_odd(4)              # → FALSE
+abs(-5)                #! → 5
+inc(5)                 #! → 6  (inc(x, step) with a step)
+dec(5)                 #! → 4
+clamp(11, 0, 10)       #! → 10
+between_int(5, 0, 10)  #! → TRUE
+is_even(4)             #! → TRUE
+is_odd(4)              #! → FALSE
 ```
 
 The `math` **standard module** mirrors the `math_*` builtins and is the
 idiomatic way to do advanced math:
 
 ```indent
-get Sqrt from math     # or: import math; math.Sqrt(...)
+get Sqrt from math     #! or: import math; math.Sqrt(...)
 get Pow from math
 get Floor from math
 get Round from math
 
-Sqrt(16)               # → 4.0
-Pow(2, 10)             # → 1024.0
-Floor(3.7)             # → 3.0
-Round(3.14159, 2)      # → 3.14
+Sqrt(16)               #! → 4.0
+Pow(2, 10)             #! → 1024.0
+Floor(3.7)             #! → 3.0
+Round(3.14159, 2)      #! → 3.14
 ```
 
 Raw builtins (used in larger expressions):
 
 ```indent
-math_sqrt(16)          # → 4.0
-math_pow(2, 10)        # → 1024.0
-math_floor(3.7)        # → 3.0
-math_ceil(3.2)         # → 4.0
-math_round(3.14159, 2) # → 3.14
+math_sqrt(16)          #! → 4.0
+math_pow(2, 10)        #! → 1024.0
+math_floor(3.7)        #! → 3.0
+math_ceil(3.2)         #! → 4.0
+math_round(3.14159, 2) #! → 3.14
 math_abs(-5)
 math_sin(0) / math_cos(0) / math_tan(0)
-math_log(8, 2)         # log base 2 of 8 → 3.0
-math_exp(1)            # e^1
-math_factorial(5)      # → 120 (int)
-math_gcd(12, 18)       # → 6
-math_lcm(4, 6)         # → 12
-math_pi / math_e / math_tau    # constants
+math_log(8, 2)         #! log base 2 of 8 → 3.0
+math_exp(1)            #! e^1
+math_factorial(5)      #! → 120 (int)
+math_gcd(12, 18)       #! → 6
+math_lcm(4, 6)         #! → 12
+math_pi / math_e / math_tau    #! constants
 ```
 
 Bitwise operators work on ints: `&` (and), `|` (or), `^` (xor), `~` (not),
 `<<` / `>>` (shifts).
 
 ```indent
-6 & 3     # → 2   (110 & 011 = 010)
-6 | 3     # → 7
-1 << 4    # → 16
+6 & 3     #! → 2   (110 & 011 = 010)
+6 | 3     #! → 7
+1 << 4    #! → 16
 ```
 
 ---
@@ -475,8 +475,8 @@ Bitwise operators work on ints: `&` (and), `|` (or), `^` (xor), `~` (not),
 fun greet person
     say "Hello, " + person
 
-greet "Ada"            # space-separated call — canonical
-greet("Ada")           # parenthesized call — also works
+greet "Ada"            #! space-separated call — canonical
+greet("Ada")           #! parenthesized call — also works
 ```
 
 ### Return values
@@ -487,7 +487,7 @@ greet("Ada")           # parenthesized call — also works
 fun add a b
     give a + b
 
-var total = add 2 3      # → 5
+var total = add 2 3      #! → 5
 ```
 
 > 🔑 A bare function call as a *non-final* statement can swallow the following
@@ -500,8 +500,8 @@ var total = add 2 3      # → 5
 
 ```indent
 fun greet name = "World"
-greet            # → "Hello, World"
-greet "Ada"      # → "Hello, Ada"
+greet            #! → "Hello, World"
+greet "Ada"      #! → "Hello, Ada"
 ```
 
 ### Return type annotation
@@ -519,25 +519,25 @@ A function name is also a value you can store and pass around:
 fun double x
     give x * 2
 
-var d = double      # bind the function value
-say d(21)           # → 42
+var d = double      #! bind the function value
+say d(21)           #! → 42
 ```
 
 You can capture a builtin by name with `get <builtin>`:
 
 ```indent
 get len
-len([1, 2, 3])       # → 3
+len([1, 2, 3])       #! → 3
 ```
 
 ### Lambda (anonymous) functions
 
 ```indent
 var double = fn(x): x * 2
-say double(5)                # → 10
+say double(5)                #! → 10
 
-# Lambdas compose cleanly with collection builtins where a builtin isn't enough
-# — but note map/filter accept builtin *names*, not lambdas, as the callable.
+#! Lambdas compose cleanly with collection builtins where a builtin isn't enough
+#! — but note map/filter accept builtin *names*, not lambdas, as the callable.
 ```
 
 ### Varargs
@@ -548,7 +548,7 @@ say double(5)                # → 10
 fun total ...nums
     give sum(nums)
 
-total 1 2 3 4      # → 10
+total 1 2 3 4      #! → 10
 ```
 
 ### Calling by name (dynamic dispatch)
@@ -558,7 +558,7 @@ a string name or a bound `Func` value):
 
 ```indent
 var op = "double"
-call_func op 21      # → 42   (calls the function named "double")
+call_func op 21      #! → 42   (calls the function named "double")
 ```
 
 ---
@@ -576,14 +576,14 @@ class Person
         say "I'm " + name
 
 var p dynamic = Person "Ada" 28
-p.greet()          # → I'm Ada
+p.greet()          #! → I'm Ada
 ```
 
 Access fields with dot notation and call methods with `()`:
 
 ```indent
-p.name              # → "Ada"
-p.age               # → 28
+p.name              #! → "Ada"
+p.age               #! → 28
 ```
 
 ### Inheritance
@@ -601,7 +601,7 @@ class Dog from Animal
         say name + " barks"
 
 var d = Dog "Rex"
-d.speak()          # → Rex barks
+d.speak()          #! → Rex barks
 ```
 
 ### Special methods (natural names)
@@ -633,8 +633,8 @@ class Vector
     fun equals other     #! used by == and !=
         give x == other.x
 
-say Vector(3, 4) + Vector(1, 2)   # → Vector(4, 6)
-say Vector(3, 4) == Vector(3, 4)  # → TRUE
+say Vector(3, 4) + Vector(1, 2)   #! → Vector(4, 6)
+say Vector(3, 4) == Vector(3, 4)  #! → TRUE
 ```
 
 ### `dataclass`
@@ -647,8 +647,8 @@ dataclass Point
     var px int
     var py int
 
-say Point(1, 2)                  # → Point(px: 1, py: 2)
-say Point(1, 2) == Point(1, 2)   # → TRUE
+say Point(1, 2)                  #! → Point(px: 1, py: 2)
+say Point(1, 2) == Point(1, 2)   #! → TRUE
 ```
 
 ---
@@ -664,7 +664,7 @@ fun countdown n
     yield n - 1
     yield n - 2
 
-for x in countdown 3    # 3, 2, 1
+for x in countdown 3    #! 3, 2, 1
     say x
 ```
 
@@ -672,9 +672,9 @@ Materialize a generator into a list with `to_list`, and test with
 `is_generator`:
 
 ```indent
-to_list(countdown 3)     # → [3, 2, 1]
+to_list(countdown 3)     #! → [3, 2, 1]
 var g = countdown 3
-is_generator(g)          # → TRUE
+is_generator(g)          #! → TRUE
 ```
 
 > 💡 Generators are the memory-efficient way to represent large or infinite
@@ -690,9 +690,9 @@ is_generator(g)          # → TRUE
 ```indent
 if score >= 90
     say "A"
-or score >= 80            # else-if (the keyword is 'or', NOT 'elif')
+or score >= 80            #! else-if (the keyword is 'or', NOT 'elif')
     say "B"
-otherwise                 # else
+otherwise                 #! else
     say "F"
 ```
 
@@ -721,11 +721,18 @@ if 0 < x < 10
     say "single digit (0 excluded)"
 ```
 
-### Identity / membership tests
+### Membership & empty tests
+
+`is` only declares/reassigns — it is **not** a comparison operator. For tests
+use `in` (membership), `==`, or `is_missing()`:
 
 ```indent
-x is null          # test for empty
-x is not y         # inequality (also: x != y)
+"a" in list            #! TRUE if 'a' is in the list/group (or a dict key / substring)
+"a" not in list        #! negated membership
+contains(list, "a")    #! same thing (list, dict-keys, group, or string)
+has_key(d, "k")        #! dictionary key check
+is_missing(x)          #! TRUE when x is empty/absent
+x == empty             #! also tests for the empty value
 ```
 
 ---
@@ -746,8 +753,8 @@ repeat 5
 ```indent
 repeat item in list
 repeat item in my_group
-repeat item in my_dict        # yields keys
-for item in list              # 'for' is an alias of 'repeat ... in'
+repeat item in my_dict        #! yields keys
+for item in list              #! 'for' is an alias of 'repeat ... in'
 ```
 
 ### Conditional loop
@@ -755,7 +762,7 @@ for item in list              # 'for' is an alias of 'repeat ... in'
 ```indent
 var done = false
 repeat until done
-    # ... do work, set done = true to leave ...
+    #! ... do work, set done = true to leave ...
 ```
 
 ### Loop control keywords
@@ -769,9 +776,9 @@ repeat until done
 ```indent
 repeat item in range(10)
     if item == 2
-        next        # skip 2
+        next        #! skip 2
     if item == 7
-        stop        # leave at 7
+        stop        #! leave at 7
     say item
 ```
 
@@ -784,16 +791,16 @@ Build lists, dicts and groups compactly from an existing collection.
 ```indent
 var nums = [1, 2, 3, 4]
 
-[x * 2 for x in nums]            # → [2, 4, 6, 8]
-[x for x in nums if is_even x]   # list comprehension w/ filter
-[x * 2 for x in nums if x > 1]   # map + filter together
+[x * 2 for x in nums]            #! → [2, 4, 6, 8]
+[x for x in nums if is_even x]   #! list comprehension w/ filter
+[x * 2 for x in nums if x > 1]   #! map + filter together
 
-# Dict comprehension
+#! Dict comprehension
 var pairs = {"a": 1, "b": 2}
-{k: v * 10 for k, v in items pairs}   # → {"a": 10, "b": 20}
+{k: v * 10 for k, v in items pairs}   #! → {"a": 10, "b": 20}
 
-# Group comprehension (dedupe preserved)
-{x for x in [1, 1, 2, 2, 3]}     # → {1, 2, 3}
+#! Groups have no literal or comprehension syntax of their own — build with group():
+group([x for x in [1, 1, 2, 2, 3]])   #! → {1, 2, 3}
 ```
 
 Operator precedence and expression notes:
@@ -801,7 +808,9 @@ Operator precedence and expression notes:
 - Arithmetic: `* / %` bind tighter than `+ -`.
 - Comparison/equality are non-associative except for chained comparisons
   (`0 < x < 10`).
-- Boolean: `and`, `or`, `not` (or `&&`, `||`, `!`).
+- Boolean: use `and` and `not` (word forms). `or` is **not** a boolean operator —
+  it starts the next branch of an `if` chain (`if … or cond … otherwise`).
+  `&&`, `||`, and `!` are not supported; negate with `not`, combine with `and`.
 
 ---
 
@@ -810,13 +819,13 @@ Operator precedence and expression notes:
 ### Import syntax
 
 ```indent
-get math                     # make the whole 'math' module available
-import math                  # 'import' is an alias for 'get'
+get math                     #! make the whole 'math' module available
+import math                  #! 'import' is an alias for 'get'
 
-get Pow from math            # import a single function
-get RandInt from random as R # import + rename
+get Pow from math            #! import a single function
+get RandInt from random as R #! import + rename
 
-# A PascalCase package such as the std lib:
+#! A PascalCase package such as the std lib:
 get Upper from strings
 get Write from fs
 ```
@@ -849,10 +858,10 @@ are **prepended** to the search path automatically.
 and module-level variables become available:
 
 ```indent
-# helper.ind defines: fun double x   and   var helperMsg = "..."
+#! helper.ind defines: fun double x   and   var helperMsg = "..."
 launch "helper.ind"
-var d = double 21          # → 42
-say helperMsg              # the other file's module var is in scope
+var d = double 21          #! → 42
+say helperMsg              #! the other file's module var is in scope
 ```
 
 `run_file "file.ind"` is a deprecated alias. To run a file as a **separate
@@ -875,22 +884,22 @@ lastly:
 
 - The `do:` block runs first.
 - If it throws, the `catch as err:` block runs with `err` bound to the error
-  text (use `error_message(err)` for just the message, `error_type(err)` for the
-  `E###` code).
+  text (use `error_message(err)` for just the message, `error_type(err)` for a
+  short category word like `key_error`).
 - `lastly:` runs in *all* cases (like a `finally` in other languages).
 
 ### Typed errors
 
-`error_type(err)` extracts the error code (e.g. `E000`), and
-`error_message(err)` the human message:
+`error_type(err)` returns a short **category word** (e.g. `key_error`), and
+`error_message(err)` the human-readable message:
 
 ```indent
 do:
     var d = {"a": 1}
     say d["missing"]
 catch as err:
-    say error_type(err)      # → E000
-    say error_message(err)   # → Dictionary has no key 'missing'
+    say error_type(err)      #! → key_error
+    say error_message(err)   #! → Dictionary key not found: missing
 ```
 
 ### The `Result` value
@@ -899,20 +908,20 @@ A lightweight alternative to exceptions: functions return a dict shaped either
 `{"ok": true, "value": ...}` or `{"ok": false, "error": "..."}`.
 
 ```indent
-var r = ok 42        # {"ok": true, "value": 42}
-var e = err "nope"   # {"ok": false, "error": "nope"}
+var r = ok 42        #! {"ok": true, "value": 42}
+var e = err "nope"   #! {"ok": false, "error": "nope"}
 
-is_ok(r)             # → TRUE
-is_err(e)            # → TRUE
-unwrap(r)            # → 42
+is_ok(r)             #! → TRUE
+is_err(e)            #! → TRUE
+unwrap(r)            #! → 42
 ```
 
 ### Assertions
 
 ```indent
-assert 1 == 1            # no-op on success; errors on failure
-assert_eq(1, 1)          # assert two values equal
-assert 1 == 2, "message" # optional failure message
+assert 1 == 1            #! no-op on success; errors on failure
+assert_eq(1, 1)          #! assert two values equal
+assert 1 == 2, "message" #! optional failure message
 ```
 
 ---
@@ -922,57 +931,57 @@ assert 1 == 2, "message" # optional failure message
 ### Reading & writing text files
 
 ```indent
-file_write_text("out.txt", "hello\n")   # write (overwrites)
-file_append_text("out.txt", "more\n")   # append
-var t = file_read_text("out.txt")       # read whole file
-file_size("out.txt")                    # bytes
-file_sha256("out.txt")                  # hash of the file's contents
+file_write_text("out.txt", "hello\n")   #! write (overwrites)
+file_append_text("out.txt", "more\n")   #! append
+var t = file_read_text("out.txt")       #! read whole file
+file_size("out.txt")                    #! bytes
+file_sha256("out.txt")                  #! hash of the file's contents
 ```
 
 ### Paths & directories
 
 ```indent
-os_getcwd()               # current working directory
-os_exists("out.txt")      # → TRUE
-os_is_file("out.txt")     # → TRUE
-os_is_dir("src")          # → TRUE
-os_mkdir("build")         # create a directory
-os_remove("out.txt")      # delete a file
-os_list_dir(".")          # list entries
-glob("src/*.ind")         # files matching a glob
-walk("src")               # recursive file listing
+os_getcwd()               #! current working directory
+os_exists("out.txt")      #! → TRUE
+os_is_file("out.txt")     #! → TRUE
+os_is_dir("src")          #! → TRUE
+os_mkdir("build")         #! create a directory
+os_remove("out.txt")      #! delete a file
+os_list_dir(".")          #! list entries
+glob("src/*.ind")         #! files matching a glob
+walk("src")               #! recursive file listing
 
 os_copy("a.txt", "b.txt")
-os_move("b.txt", "c.txt")   # also renames
+os_move("b.txt", "c.txt")   #! also renames
 os_copy_tree("dir", "backup")
 
-path_join("a", "b", "c.txt")  # "a/b/c.txt" (OS-aware)
-path_basename("/x/y.txt")     # "y.txt"
-path_dirname("/x/y.txt")      # "/x"
-path_ext("/x/y.txt")          # ".txt"
-path_stem("/x/y.txt")         # "y"
-path_abs(".")                 # absolute
-path_expand("~/x")            # expand ~
-path_norm("a/../b")           # normalize → "b"
+path_join("a", "b", "c.txt")  #! "a/b/c.txt" (OS-aware)
+path_basename("/x/y.txt")     #! "y.txt"
+path_dirname("/x/y.txt")      #! "/x"
+path_ext("/x/y.txt")          #! ".txt"
+path_stem("/x/y.txt")         #! "y"
+path_abs(".")                 #! absolute
+path_expand("~/x")            #! expand ~
+path_norm("a/../b")           #! normalize → "b"
 ```
 
 ### Environment variables
 
 ```indent
-os_getenv("HOME")            # value, or empty
-os_getenv("MISSING", "dflt") # with a default
-os_setenv("KEY", "value")    # set for child processes
-os_environ()                 # whole environment as a dict
+os_getenv("HOME")            #! value, or empty
+os_getenv("MISSING", "dflt") #! with a default
+os_setenv("KEY", "value")    #! set for child processes
+os_environ()                 #! whole environment as a dict
 ```
 
 ### Running external programs
 
 ```indent
-os_system("ls -l")           # run & return exit code (0 = ok)
-var r = os_run("echo hi")    # → {ok, status, stdout, stderr}
+os_system("ls -l")           #! run & return exit code (0 = ok)
+var r = os_run("echo hi")    #! → {ok, status, stdout, stderr}
 say r["stdout"]
-os_run_ok("true")            # → TRUE (did it exit 0?)
-os_which("python3")          # path to an executable on PATH, or empty
+os_run_ok("true")            #! → TRUE (did it exit 0?)
+os_which("python3")          #! path to an executable on PATH, or empty
 ```
 
 ### The `with` / `open` file context
@@ -989,8 +998,8 @@ with "file.txt" for read as f:
 ### JSON
 
 ```indent
-var text = json_dumps({"a": 1, "b": [1, 2]})   # → string
-var obj  = json_loads(text)                    # → dict
+var text = json_dumps({"a": 1, "b": [1, 2]})   #! → string
+var obj  = json_loads(text)                    #! → dict
 ```
 
 The `json` std module wraps this in PascalCase (`Loads`, `Dumps`,
@@ -999,17 +1008,17 @@ The `json` std module wraps this in PascalCase (`Loads`, `Dumps`,
 ### TOML & YAML
 
 ```indent
-toml_loads("title = 'T'")          # parse TOML → dict
-toml_dumps({"title": "T"})         # dict → TOML
-yaml_loads("a: 1\nb: 2")           # parse YAML → dict
-yaml_dumps({"a": 1})               # dict → YAML
+toml_loads("title = 'T'")          #! parse TOML → dict
+toml_dumps({"title": "T"})         #! dict → TOML
+yaml_loads("a: 1\nb: 2")           #! parse YAML → dict
+yaml_dumps({"a": 1})               #! dict → YAML
 ```
 
 ### CSV
 
 ```indent
 csv_write("data.csv", [["name", "age"], ["Ada", 28]])
-var rows = csv_read("data.csv")    # list of rows
+var rows = csv_read("data.csv")    #! list of rows
 ```
 
 ### SQLite (bundled — no install)
@@ -1024,10 +1033,10 @@ var one  = sqlite_query_one("db.sqlite", "SELECT v FROM t WHERE id = 1")
 ### Compression & archives
 
 ```indent
-gzip_compress("some text")            # → base64 string
+gzip_compress("some text")            #! → base64 string
 gzip_decompress(gzip_compress("x"))
-zip_list("archive.zip")               # list entries in a zip
-zip_extract("archive.zip", "dest/")   # extract to a folder
+zip_list("archive.zip")               #! list entries in a zip
+zip_extract("archive.zip", "dest/")   #! extract to a folder
 ```
 
 ---
@@ -1040,12 +1049,12 @@ zip_extract("archive.zip", "dest/")   # extract to a folder
 var body = http_get("https://api.example.com/thing")
 var json = http_get_json("https://api.example.com/thing")
 
-http_post_json(url, {"key": "value"})     # → parsed JSON response
+http_post_json(url, {"key": "value"})     #! → parsed JSON response
 http_put_json(url, data)
 http_patch_json(url, data)
 http_delete(url)
 
-# Optional auth header on any request:
+#! Optional auth header on any request:
 http_get(url, "Bearer sk-...")
 ```
 
@@ -1085,8 +1094,8 @@ uses `http_serve_dir("public", 8080)`.
 ```indent
 var sock = ws_connect("wss://echo.example.com")
 ws_send_text(sock, "hello")
-var reply = ws_recv_text(sock)          # blocks until a message arrives
-var r2 = ws_recv_text_timeout(sock, 2)  # wait up to 2 seconds
+var reply = ws_recv_text(sock)          #! blocks until a message arrives
+var r2 = ws_recv_text_timeout(sock, 2)  #! wait up to 2 seconds
 ws_close(sock)
 ```
 
@@ -1107,16 +1116,16 @@ fun slow n
     time_sleep 1
     give n * 2
 
-var t = spawn "slow" 21        # starts immediately on a thread
-task_done(t)                   # → FALSE (still running)
-var result = task_wait(t)      # blocks until done → 42
-task_wait_timeout(t, 3)        # wait, but give up after 3s
+var t = spawn "slow" 21        #! starts immediately on a thread
+task_done(t)                   #! → FALSE (still running)
+var result = task_wait(t)      #! blocks until done → 42
+task_wait_timeout(t, 3)        #! wait, but give up after 3s
 ```
 
 `parallel(fn, list_of_arglists)` gathers a list of calls onto threads:
 
 ```indent
-parallel("slow", [[1], [2], [3]])   # run three in parallel
+parallel("slow", [[1], [2], [3]])   #! run three in parallel
 ```
 
 ### 2. Python-style async — `async fun` / `loop` / `await`
@@ -1147,7 +1156,7 @@ async fun fetch id
 loop:
     var f1 = fetch 1
     var f2 = fetch 2
-    var results = gather f1 f2    # both run concurrently; results in order
+    var results = gather f1 f2    #! both run concurrently; results in order
 ```
 
 `gather` also accepts a list: `gather [f1, f2]`. `sleep(secs)` returns a future
@@ -1165,7 +1174,7 @@ blocking.
 ```indent
 var f1 = http_get_async "https://api.example.com/a"
 var f2 = http_get_async "https://api.example.com/b"
-var results = gather f1 f2     # both run at the same time
+var results = gather f1 f2     #! both run at the same time
 ```
 
 > ⚠️ Indent's concurrency uses threads, and the runtime is not a
@@ -1184,13 +1193,13 @@ takes text and produces a styled string — safe to concatenate or pass to
 `gold`, …), or a color variable.
 
 ```indent
-fg(text, color)          # or colored(text, color) — foreground color
-bg(text, color)          # background color
-style(text, ...)         # bold, italic, underline, strikethrough, dim, ...
-gradient(text, from, to) # fade between two colors
-multicolor(text, ...)    # color each segment
-rainbow(text)            # the full spectrum
-paint(text, fg, bg, style)   # combine everything in one call
+fg(text, color)          #! or colored(text, color) — foreground color
+bg(text, color)          #! background color
+style(text, ...)         #! bold, italic, underline, strikethrough, dim, ...
+gradient(text, from, to) #! fade between two colors
+multicolor(text, ...)    #! color each segment
+rainbow(text)            #! the full spectrum
+paint(text, fg, bg, style)   #! combine everything in one call
 ```
 
 (`bg_gradient`, `bg_multicolor`, `bg_rainbow` style the background plane.)
@@ -1312,7 +1321,7 @@ PascalCase functions that wrap the lowercase builtins. Import any module with
 get Upper from strings
 get Write from fs
 get Sha256 from hash
-say Upper "hello"           # → HELLO
+say Upper "hello"           #! → HELLO
 ```
 
 > 💡 `time` and `datetime` are near-duplicates (both expose now/utc/sleep/
@@ -1516,7 +1525,7 @@ error: 'file_write_text' is not allowed in safe mode
 
 ## 26. Troubleshooting
 
-### "Dictionary has no key 'x'" (`error[E000]`)
+### "Dictionary key not found: x"
 
 You read a key that doesn't exist. Guard with `has_key`:
 
@@ -1530,10 +1539,10 @@ if has_key person "name"
 You forgot to reassign. `append`/`insert`/`dict_set`/etc. return new values:
 
 ```indent
-# WRONG: l doesn't change
+#! WRONG: l doesn't change
 append(l, 5)
 
-# RIGHT
+#! RIGHT
 l = append(l, 5)
 ```
 

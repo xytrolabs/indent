@@ -79,8 +79,8 @@ get ai as AI
 var v1 = AI.Embed("nomic-embed-text", "I love programming")
 var v2 = AI.Embed("nomic-embed-text", "Coding is fun")
 var v3 = AI.Embed("nomic-embed-text", "I enjoy pizza")
-say AI.Similarity(v1, v2)   # high (0.7+)
-say AI.Similarity(v1, v3)   # lower (0.5)
+say AI.Similarity(v1, v2)   #! high (0.7+)
+say AI.Similarity(v1, v3)   #! lower (0.5)
 ```
 
 ### Semantic search

@@ -17,14 +17,14 @@
 Classes let you group data (fields) and behavior (methods) together. Instead of passing around separate variables, you create an **object** that bundles everything:
 
 ```indent
-# Without classes — data and functions are separate
+#! Without classes — data and functions are separate
 var name1 string = "Ada"
 var age1 int = 28
 fun greet1 n a
     say "Hello " + n + ", age " + string(a)
 greet1(name1, age1)
 
-# With classes — everything is bundled
+#! With classes — everything is bundled
 var p dynamic = Person("Ada", 28)
 p.greet()
 ```
@@ -62,14 +62,14 @@ class Rectangle
 var r1 dynamic = Rectangle(10.0, 5.0)
 var r2 dynamic = Rectangle(3.0, 4.0)
 
-say r1.area()           # 50.0
-say r2.perimeter()      # 14.0
-r1.describe()           # "Rectangle 10x5"
+say r1.area()           #! 50.0
+say r2.perimeter()      #! 14.0
+r1.describe()           #! "Rectangle 10x5"
 
-# Access fields directly
-say r1.width            # 10.0
-r1.height is 7.0        # Modify a field
-say r1.area()           # 70.0 (updated)
+#! Access fields directly
+say r1.width            #! 10.0
+r1.height is 7.0        #! Modify a field
+say r1.area()           #! 70.0 (updated)
 ```
 
 ---
@@ -89,9 +89,9 @@ class Counter
 var c dynamic = Counter(0)
 c.increment()
 c.increment()
-say c.value             # 2
+say c.value             #! 2
 c.reset()
-say c.value             # 0
+say c.value             #! 0
 ```
 
 ---
@@ -117,7 +117,7 @@ class BankAccount
 var acc dynamic = BankAccount("Ada", 1000.0)
 acc.deposit(500.0)
 acc.withdraw(200.0)
-acc.withdraw(2000.0)    # "Insufficient funds!"
+acc.withdraw(2000.0)    #! "Insufficient funds!"
 ```
 
 ---
@@ -134,7 +134,7 @@ class Animal
 
 class Dog from Animal
     var breed string
-    fun speak                  # overrides parent
+    fun speak                  #! overrides parent
         say name + " the " + breed + " barks!"
 
 class Cat from Animal
@@ -144,9 +144,9 @@ class Cat from Animal
 
 var d dynamic = Dog("Rex", "Beagle")
 var c dynamic = Cat("Whiskers", "orange")
-d.speak()     # "Rex the Beagle barks!"
-c.speak()     # "Whiskers the orange cat meows!"
-say d.name    # "Rex" — inherited field
+d.speak()     #! "Rex the Beagle barks!"
+c.speak()     #! "Whiskers the orange cat meows!"
+say d.name    #! "Rex" — inherited field
 ```
 
 ### Inheritance Rules
@@ -159,7 +159,7 @@ say d.name    # "Rex" — inherited field
 - **Single inheritance only**: one parent per class
 
 ```indent
-# Multi-level example
+#! Multi-level example
 class Vehicle
     var make string
     fun start
@@ -176,9 +176,9 @@ class SportsCar from Car
         say make + " " + model + " racing at " + string(top_speed) + " mph!"
 
 var s dynamic = SportsCar("Porsche", "911", 200)
-s.start()     # "Starting Porsche"  (from Vehicle)
-s.drive()     # "Driving Porsche 911" (from Car)
-s.race()      # "Porsche 911 racing at 200 mph!"
+s.start()     #! "Starting Porsche"  (from Vehicle)
+s.drive()     #! "Driving Porsche 911" (from Car)
+s.race()      #! "Porsche 911 racing at 200 mph!"
 ```
 
 ---

@@ -269,11 +269,11 @@ file_append_text "weather_log.json" json_dumps(log_entry) + "\n"
 var ws_id int = ws_connect "wss://echo.websocket.org"
 ws_send_text ws_id "Hello!"
 
-# Receive with timeout (seconds)
+#! Receive with timeout (seconds)
 var msg string = ws_recv_text_timeout ws_id 5.0
 say "Received: " + msg
 
-# Non-blocking receive
+#! Non-blocking receive
 var msg2 string = ws_recv_text ws_id
 
 ws_close ws_id
@@ -282,18 +282,18 @@ ws_close ws_id
 ## Math Functions (Extended)
 
 ```indent
-# Advanced trig
+#! Advanced trig
 say math_asin 0.5       #! 0.523... (arcsin in radians)
 say math_acos 0.5       #! 1.047... (arccos)
 say math_atan 1.0       #! 0.785... (arctan)
 say math_atan2 1 1      #! 0.785... (2-arg arctan)
 
-# Logs and exponents
+#! Logs and exponents
 say math_log 8 2        #! 3.0  (log base 2 of 8)
 say math_log10 100      #! 2.0  (log base 10)
 say math_exp 2          #! 7.389... (e^2)
 
-# Rounding
+#! Rounding
 say math_round 3.14159 2   #! 3.14
 say math_round 3.14159 0   #! 3.0
 say math_floor 3.9          #! 3.0
@@ -303,9 +303,9 @@ say math_ceil 3.1           #! 4.0
 ## High-Resolution Timing
 
 ```indent
-# time_perf_counter — monotonic timer, good for benchmarks
+#! time_perf_counter — monotonic timer, good for benchmarks
 var start float = time_perf_counter()
-# ... do work ...
+#! ... do work ...
 var elapsed float = time_perf_counter() - start
 say "Took " + elapsed + " seconds"
 ```

@@ -208,20 +208,20 @@ say default dict_get config "theme" "dark"
 ## System Info & Process Control
 
 ```indent
-# Indent version and runtime info
+#! Indent version and runtime info
 say sys_version()       #! "Indent 2.7.1"
 say sys_platform()      #! "linux"
 say sys_arch()          #! "x86_64"
 say sys_executable()    #! "/home/user/.local/bin/indent"
 
-# Command-line arguments
+#! Command-line arguments
 say sys_argv()          #! ["script.ind", "--verbose"]
 
-# Exit with a status code
-process_exit 0           # success
-process_exit 1           # failure
+#! Exit with a status code
+process_exit 0           #! success
+process_exit 1           #! failure
 
-# File hashing
+#! File hashing
 var hash string = file_sha256 "/path/to/file"
 say hash                #! "a1b2c3..."
 ```

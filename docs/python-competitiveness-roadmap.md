@@ -101,9 +101,9 @@ Runtime was made thread-safe first (module storage `Rc<ModuleInstance>` →
 **Proposed model — task-based concurrency (spawn/join), not async/await:**
 
 ```indent
-var id = spawn "fetch_page" "https://example.com"   # returns a task id
-# ... do other work ...
-var result = task_wait id                           # block for the result
+var id = spawn "fetch_page" "https://example.com"   #! returns a task id
+#! ... do other work ...
+var result = task_wait id                           #! block for the result
 ```
 
 | Builtin | Behavior |

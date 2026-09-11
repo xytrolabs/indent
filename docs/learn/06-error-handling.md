@@ -217,15 +217,15 @@ if is_err bad
     say "Got an error"
 
 #! Unwrap with fallback
-var value int = unwrap good 0       # → 42
-var safe int = unwrap bad 0         # → 0 (fallback)
+var value int = unwrap good 0       #! → 42
+var safe int = unwrap bad 0         #! → 0 (fallback)
 
 #! Unwrap without fallback (crashes on error)
-var required int = unwrap good      # → 42
-# var crash int = unwrap bad        # would crash
+var required int = unwrap good      #! → 42
+#! var crash int = unwrap bad        #! would crash
 
 #! Try: wraps expression evaluation in a result
-var result = try int_or "abc" 0     # catches conversion failure
+var result = try int_or "abc" 0     #! catches conversion failure
 ```
 
 **Chaining with unwrap:**

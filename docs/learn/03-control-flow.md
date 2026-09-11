@@ -44,11 +44,11 @@ var score int = 85
 if score >= 90
     say "A"
 or score >= 80
-    say "B"          # ← This runs, then the chain stops
+    say "B"          #! ← This runs, then the chain stops
 or score >= 70
-    say "C"          # ← Skipped even though condition is true
+    say "C"          #! ← Skipped even though condition is true
 otherwise
-    say "F"          # ← Skipped
+    say "F"          #! ← Skipped
 ```
 
 ---
@@ -60,31 +60,31 @@ Use **parenthesized syntax** for calling functions inside conditions:
 ```indent
 var name string = "Ada"
 
-# ✅ Parenthesized calls work
+#! ✅ Parenthesized calls work
 if starts_with(name, "A")
     say "Name starts with A"
 
-# ✅ Multiple conditions with and/or
+#! ✅ Multiple conditions with and/or
 if len(name) > 0 and starts_with(name, "A")
     say "Non-empty name starting with A"
 
-# ❌ Space-separated calls do NOT work in conditions
-# if starts_with name "A"         ← ERROR!
+#! ❌ Space-separated calls do NOT work in conditions
+#! if starts_with name "A"         ← ERROR!
 ```
 
 ### Common Condition Patterns
 
 ```indent
-# Check if list is non-empty
+#! Check if list is non-empty
 var items dynamic = [1, 2, 3]
 if len(items) > 0
     say "We have items!"
 
-# Check if value is in a list
+#! Check if value is in a list
 if contains(items, 2)
     say "Found 2!"
 
-# Check dict key
+#! Check dict key
 var person dynamic = {"name": "Ada"}
 if has_key(person, "name")
     say "Has name: " + person["name"]
@@ -118,16 +118,16 @@ if not active
 
 ### Truthiness
 ```indent
-# These are "falsy" (evaluate to false in conditions)
-empty              # null
-FALSE / false      # boolean false
-0                  # integer zero
-0.0                # float zero
-""                 # empty string
-[]                 # empty list
-{}                 # empty dict
+#! These are "falsy" (evaluate to false in conditions)
+empty              #! null
+FALSE / false      #! boolean false
+0                  #! integer zero
+0.0                #! float zero
+""                 #! empty string
+[]                 #! empty list
+{}                 #! empty dict
 
-# Everything else is "truthy"
+#! Everything else is "truthy"
 ```
 
 ---
