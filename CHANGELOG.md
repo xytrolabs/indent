@@ -1,5 +1,18 @@
 # Indent Changelog
 
+## Unreleased
+
+### 🧠 `ai` package — system prompts
+- `SetSystemPrompt(text)` sets a default system prompt that is automatically
+  prepended to every `Chat` / `Ask` call; `GetSystemPrompt` / `ClearSystemPrompt`
+  read and clear it.
+- `ChatSystem(model, system, messages)` and `AskSystem(model, system, prompt)`
+  apply a system prompt to a single call (overriding the default).
+- `System(text)` builds a `{"role":"system","content":text}` message dict.
+- The default is prepended only when the `messages` list does not already begin
+  with a `system` message, so a caller-supplied system message always wins.
+- Docs: [`docs/ai-package.md`](docs/ai-package.md).
+
 ## 2.2.1 — 2026-09-11
 
 ### 🚩 `flag` consistency
