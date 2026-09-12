@@ -39,12 +39,32 @@ jobs:
             indent-language/*.vsix
             indent-file-icons/*.vsix
 
+      # NOTE: `secrets` cannot be referenced in an `if:` expression — GitHub
+      # rejects the entire workflow file as invalid ("This run likely failed
+      # because of a workflow file issue"). Pass the token through env and
+      # decide inside the step instead.
       - name: Publish Indent Language to Marketplace
-        if: startsWith(github.ref, 'refs/tags/v') && secrets.VSCE_PAT != ''
+        if: startsWith(github.ref, 'refs/tags/v')
         working-directory: indent-language
-        run: vsce publish -p "${{ secrets.VSCE_PAT }}"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VSCE_PAT:-}" ]]; then
+            echo "VSCE_PAT not configured; skipping Marketplace publish."
+            exit 0
+          fi
+          vsce publish -p "$VSCE_PAT"
 
       - name: Publish Indent File Icons to Marketplace
-        if: startsWith(github.ref, 'refs/tags/v') && secrets.VSCE_PAT != ''
+        if: startsWith(github.ref, 'refs/tags/v')
         working-directory: indent-file-icons
-        run: vsce publish -p "${{ secrets.VSCE_PAT }}"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VSCE_PAT:-}" ]]; then
+            echo "VSCE_PAT not configured; skipping Marketplace publish."
+            exit 0
+          fi
+          vsce publish -p "$VSCE_PAT"
