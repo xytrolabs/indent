@@ -20,10 +20,11 @@ REPO="${DEFAULT_REPO}"
 LOCAL_MODE=0
 INDENT_VERSION="${INDENT_VERSION:-latest}"
 
-bold()  { printf '\033[1m%s\033[0m' "$1"; }
-green() { printf '\033[32m%s\033[0m' "$1"; }
-red()   { printf '\033[31m%s\033[0m' "$1"; }
-warn()  { printf '\033[33m%s\033[0m' "$1" >&2; }
+bold()   { printf '\033[1m%s\033[0m' "$1"; }
+green()  { printf '\033[32m%s\033[0m' "$1"; }
+red()    { printf '\033[31m%s\033[0m' "$1"; }
+yellow() { printf '\033[33m%s\033[0m' "$1"; }
+warn()   { printf '\033[33m%s\033[0m' "$1" >&2; }
 
 show_help() {
   cat <<'HELPEOF'
@@ -129,6 +130,28 @@ else
         echo "  Then re-run this installer."
         exit 1
       fi
+    fi
+
+    # Sanity-check the toolchain. A broken or mismatched rustup install is by far
+    # the most common reason this fallback fails on a freshly-installed machine
+    # (symptom: "the 'rustc' binary ... is not applicable to the ... toolchain").
+    if ! rustc -vV >/dev/null 2>&1; then
+      red "Rust toolchain is broken or incomplete (rustc could not run)."
+      echo "  This usually means a partial or mismatched rustup installation."
+      echo ""
+      echo "  Repair it, then re-run this installer:"
+      echo ""
+      echo "    rustup toolchain uninstall stable"
+      echo "    rustup toolchain install stable --profile minimal"
+      echo "    rustup default stable"
+      echo ""
+      echo "  Or install a fresh Rust toolchain:"
+      echo ""
+      echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+      echo ""
+      echo "  No Rust at all is needed for a pre-built binary; check for one at:"
+      echo "    https://github.com/${REPO}/releases"
+      exit 1
     fi
 
     # Clone and build from source
