@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.2.1
+# Indent Language (.ind) v2.2.2
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,6 +7,13 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ### 🎉 What's New in 2.2.2
+> - 🐛 **Module functions can use their own imports** — a function exported by a
+>   module can now call modules *it* imported, when invoked from another file
+>   (previously: `Unsupported method 'error' for receiver 'debug'`)
+> - 🐛 Installer no longer aborts on a broken `rustc`, and now tells you how to fix it
+> - 🌐 `indent.xytro.site/install.sh` now downloads pre-built binaries
+>
 > ### 🎉 What's New in 2.2.1
 > - 🚩 **`flag` is consistent** — `flag "message"` now works (just like `say`); the
 >   `flag: "message"` colon form still works too

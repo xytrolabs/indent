@@ -1191,7 +1191,19 @@ impl<'a> ExecContext<'a> {
     }
 
     fn get_module(&self, name: &str) -> Option<Arc<ModuleInstance>> {
-        self.rt.modules.get(name).cloned()
+        if let Some(m) = self.rt.modules.get(name) {
+            return Some(m.clone());
+        }
+        // A bare `get mod` binds the module in `rt.modules` *and* as a
+        // `Value::Module` variable. Only the variable survives when a module is
+        // snapshotted into a ModuleInstance, and invoke_external_function
+        // re-injects those vars into the caller's runtime. Without this
+        // fallback, a function exported by one module cannot reach its own
+        // `get`-ed imports when it is called from another file.
+        match self.get_var(name) {
+            Some(Value::Module(m)) => Some(m),
+            _ => None,
+        }
     }
 }
 
@@ -2480,6 +2492,12 @@ fn invoke_object_method_call(
     }
 
     let receiver = ctx.get_var(receiver_name)?;
+
+    // A module is not an object: `mod.func(...)` must go through module
+    // dispatch in resolve_callable, never through builtin method mapping.
+    if matches!(receiver, Value::Module(_)) {
+        return None;
+    }
 
     if !named.is_empty() {
         return Some(Err(format!(
@@ -14587,6 +14605,63 @@ var converted string = string(UInput)
         let mut rt = Runtime::new(main_dir.clone());
         let result = rt.run_file(&main_dir.join("main.ind"));
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn imported_module_functions_can_use_their_own_imports() {
+        // Regression: a function exported by one module must be able to call a
+        // module that *it* imported with a bare `get`, even when invoked from a
+        // file that never imports that inner module.
+        //
+        // A bare `get mod` binds the module in `rt.modules` (used by call
+        // dispatch) and as a `Value::Module` variable (used by member access),
+        // but a ModuleInstance only snapshots variables. So `lib.Go()` running
+        // in main's runtime lost the `helper` module-table entry and fell
+        // through to builtin method mapping, reporting
+        // "Unsupported method 'Hello' for receiver 'helper'".
+        let dir = unique_dir("indent_test_transitive_import");
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        fs::write(dir.join("helper.ind"), "fun Hello\n    give 42\n").expect("write helper");
+        fs::write(
+            dir.join("lib.ind"),
+            "get helper\n\nfun Go\n    var v int = helper.Hello()\n    give v\n",
+        )
+        .expect("write lib");
+        fs::write(
+            dir.join("main.ind"),
+            "get lib\n\nvar got int = lib.Go()\n",
+        )
+        .expect("write main");
+
+        let mut rt = Runtime::new(dir.clone());
+        let result = rt.run_file(&dir.join("main.ind"));
+        assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+        assert!(matches!(rt.vars.get("got"), Some(Value::Int(42))));
+    }
+
+    #[test]
+    fn module_called_as_object_reports_missing_function() {
+        // A genuine typo must not be reported as an "Unsupported method".
+        let dir = unique_dir("indent_test_module_typo");
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        fs::write(dir.join("helper.ind"), "fun Hello\n    give 42\n").expect("write helper");
+        fs::write(
+            dir.join("lib.ind"),
+            "get helper\n\nfun Go\n    helper.Nonexistent()\n",
+        )
+        .expect("write lib");
+        fs::write(dir.join("main.ind"), "get lib\n\nlib.Go()\n").expect("write main");
+
+        let mut rt = Runtime::new(dir.clone());
+        let err = rt
+            .run_file(&dir.join("main.ind"))
+            .expect_err("expected a dispatch error");
+        assert!(
+            err.contains("has no function"),
+            "expected a missing-function error, got: {err}"
+        );
     }
 
     #[test]

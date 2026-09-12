@@ -1,5 +1,34 @@
 # Indent Changelog
 
+## 2.2.2 — 2026-09-11
+
+### 🐛 Module functions can now use their own imports
+- Fixed a real dispatch bug: calling a function exported by one module from a
+  *different* file failed if that function used a module **it** had imported with
+  a bare `get`. Example: `init.ind` does `get debug` and calls `debug.error(...)`;
+  running `init.Initialize()` from `neo.ind` (which never imports `debug`) died
+  with `Unsupported method 'error' for receiver 'debug'`.
+
+  A bare `get mod` binds the module in two places — the module table (used by
+  call dispatch) and a `Value::Module` variable (used by member access). A
+  `ModuleInstance` only snapshots variables, so when the imported function ran in
+  the caller's runtime the module-table entry was gone while the variable stayed,
+  and dispatch fell through to builtin method mapping. Module lookup now falls
+  back to the variable binding, so transitive chains (A → B → C) resolve at any
+  depth, and a module is never treated as an object receiver.
+- Genuine typos now produce a proper `undefined_function` error that names the
+  module and lists its available functions, instead of a misleading
+  "Unsupported method" message.
+
+### 🛠 Installer
+- Fixed the source-build fallback calling an undefined `yellow` helper, which
+  aborted the installer under `set -e` on any machine that fell back to building.
+- The fallback now sanity-checks `rustc` first and prints concrete rustup repair
+  commands when the toolchain is broken or mismatched, instead of a cryptic
+  cargo error.
+- `https://indent.xytro.site/install.sh` now prefers pre-built release binaries;
+  it previously always compiled from source.
+
 ## 2.2.1 — 2026-09-11
 
 ### 🚩 `flag` consistency
