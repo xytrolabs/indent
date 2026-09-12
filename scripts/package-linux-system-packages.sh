@@ -18,7 +18,7 @@ Usage:
 Arguments:
   version        Release version (for example v0.1.1)
   target-triple  Linux target triple (x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu)
-  stage-dir      Directory containing staged release files (indent, air, indentpkg, std/, README.md)
+  stage-dir      Directory containing staged release files (indent, air, std/, README.md)
   out-dir        Output directory for generated .deb/.rpm files
 EOF
 }
@@ -68,10 +68,8 @@ if [[ ! -d "$STAGE_DIR" ]]; then
   exit 1
 fi
 
-# `indentpkg` is optional: it is not shipped by the build (the repo has never
-# contained an `indentpkg` file), so requiring it here aborted every Linux build
-# with "Missing required staged asset". Require only what the release actually
-# stages, and install the optional tools when they are present.
+# AIR (`air`) is the package tool. There is no `indentpkg`: requiring one here
+# aborted every Linux build with "Missing required staged asset".
 for required_path in "$STAGE_DIR/indent" "$STAGE_DIR/air" "$STAGE_DIR/std" "$STAGE_DIR/README.md"; do
   if [[ ! -e "$required_path" ]]; then
     echo "Missing required staged asset: $required_path" >&2
@@ -94,9 +92,6 @@ mkdir -p "$PKGROOT/usr/lib/indent/bin" "$PKGROOT/usr/lib/indent/std" "$PKGROOT/u
 
 install -m 0755 "$STAGE_DIR/indent" "$PKGROOT/usr/lib/indent/bin/indent-bin"
 install -m 0755 "$STAGE_DIR/air" "$PKGROOT/usr/lib/indent/bin/air-bin"
-if [[ -f "$STAGE_DIR/indentpkg" ]]; then
-  install -m 0755 "$STAGE_DIR/indentpkg" "$PKGROOT/usr/lib/indent/bin/indentpkg-bin"
-fi
 cp -a "$STAGE_DIR/std/." "$PKGROOT/usr/lib/indent/std/"
 install -m 0644 "$STAGE_DIR/README.md" "$PKGROOT/usr/share/doc/indent/README.md"
 if [[ -f "$ROOT_DIR/LICENSE" ]]; then
@@ -133,23 +128,6 @@ exec "$INDENT_HOME/bin/air-bin" "$@"
 EOF
 chmod +x "$PKGROOT/usr/bin/air"
 
-cat > "$PKGROOT/usr/bin/indentpkg" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-INDENT_HOME="/usr/lib/indent"
-if [[ ! -x "$INDENT_HOME/bin/indentpkg-bin" ]]; then
-  echo "indentpkg is not available in this Indent installation." >&2
-  exit 1
-fi
-if [[ -z "${INDENT_PATH:-}" ]]; then
-  export INDENT_PATH="$INDENT_HOME"
-else
-  export INDENT_PATH="$INDENT_HOME:${INDENT_PATH}"
-fi
-exec "$INDENT_HOME/bin/indentpkg-bin" "$@"
-EOF
-chmod +x "$PKGROOT/usr/bin/indentpkg"
-
 cat > "$PKGROOT/usr/bin/indent-run" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -180,7 +158,7 @@ Depends: bash, curl
 Installed-Size: $INSTALLED_SIZE
 Description: Indent language runtime and package tooling
  Indent is an indentation-based scripting language with a standalone native runtime,
- package tooling (air/indentpkg), and CLI helpers for run/check/test workflows.
+ package tooling (air), and CLI helpers for run/check/test workflows.
 EOF
 
 DEB_OUTPUT="$OUT_DIR/indent_${VERSION}_${DEB_ARCH}.deb"
@@ -212,7 +190,7 @@ Requires: bash, curl
 
 %description
 Indent is an indentation-based scripting language with a standalone native
-runtime, package tooling (air/indentpkg), and CLI helpers.
+runtime, package tooling (air), and CLI helpers.
 
 %prep
 %setup -q -n indent-root
@@ -227,7 +205,6 @@ cp -a usr %{buildroot}/
 %files
 /usr/bin/indent
 /usr/bin/air
-/usr/bin/indentpkg
 /usr/bin/indent-run
 /usr/bin/indent-debug
 /usr/lib/indent

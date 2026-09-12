@@ -96,9 +96,7 @@ jobs:
           cp "indent-native/target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$STAGE_DIR/"
           cp -r std "$STAGE_DIR/std"
           cp air "$STAGE_DIR/air" 2>/dev/null || true
-          cp indentpkg "$STAGE_DIR/indentpkg" 2>/dev/null || true
           cp air.ps1 "$STAGE_DIR/air.ps1" 2>/dev/null || true
-          cp indentpkg.ps1 "$STAGE_DIR/indentpkg.ps1" 2>/dev/null || true
           cp scripts/install.sh "$STAGE_DIR/install.sh" 2>/dev/null || true
           cp scripts/install.ps1 "$STAGE_DIR/install.ps1" 2>/dev/null || true
           cp README.md "$STAGE_DIR/README.md"
@@ -189,7 +187,6 @@ jobs:
           "$STAGE_DIR/${{ matrix.bin_name }}" test tests
           "$STAGE_DIR/${{ matrix.bin_name }}" examples/demo.ind
           "$STAGE_DIR/air" index
-          "$STAGE_DIR/indentpkg" index
 
           VERSION_CLEAN="${VERSION#v}"
           DEB_ARCH="amd64"
@@ -234,12 +231,8 @@ jobs:
           & $exe examples/demo.ind
 
           $airPs1 = Join-Path $stage "air.ps1"
-          $pkgPs1 = Join-Path $stage "indentpkg.ps1"
           if (Test-Path $airPs1) {
             & powershell -ExecutionPolicy Bypass -File $airPs1 index
-          }
-          if (Test-Path $pkgPs1) {
-            & powershell -ExecutionPolicy Bypass -File $pkgPs1 index
           }
 
   smoke-linux-packages:
@@ -277,13 +270,11 @@ jobs:
 
           command -v indent
           command -v air
-          command -v indentpkg
 
           indent --version
           indent check tests/smoke.ind
           indent test tests
           air index
-          indentpkg index
 
           sudo apt-get remove -y indent
 
@@ -312,12 +303,10 @@ jobs:
               cd /repo
               command -v indent
               command -v air
-              command -v indentpkg
               indent --version
               indent check tests/smoke.ind
               indent test tests
               air index
-              indentpkg index
             '
 
   publish:

@@ -200,7 +200,7 @@ else
     fi
 
     # Copy companion tools from the cloned repo
-    for tool in air indentpkg; do
+    for tool in air; do
       if [[ -f "$BUILD_DIR/${tool}" ]]; then
         cp "$BUILD_DIR/${tool}" "${BIN_DIR}/${tool}"
         chmod +x "${BIN_DIR}/${tool}"
@@ -238,7 +238,7 @@ TOOLEOF
   green "✓ Downloaded indent"
 
   # Install companion tools from the same release
-  for tool in air indentpkg; do
+  for tool in air; do
     TOOL_SRC="$(find "$TMP_DIR" -type f -name "$tool" | head -n1 || true)"
     if [[ -n "$TOOL_SRC" ]]; then
       cp "$TOOL_SRC" "${BIN_DIR}/${tool}"

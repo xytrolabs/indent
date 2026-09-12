@@ -152,7 +152,7 @@ function Install-FromSource {
         if (-not (Test-Path $bin)) { throw "Build finished but no indent.exe was produced" }
         Copy-Item $bin (Join-Path $BinDir "indent.exe") -Force
         Write-Host "✓ Built and installed indent from source" -ForegroundColor Green
-        foreach ($tool in @("air", "indentpkg")) {
+        foreach ($tool in @("air")) {
             $src = Join-Path $buildDir $tool
             if (Test-Path $src) { Copy-Item $src (Join-Path $BinDir $tool) -Force }
         }
@@ -221,7 +221,7 @@ if ($Local) {
             if ($exe) {
                 Copy-Item $exe.FullName (Join-Path $BinDir "indent.exe") -Force
                 Write-Host "✓ Downloaded indent" -ForegroundColor Green
-                foreach ($tool in @("air", "indentpkg")) {
+                foreach ($tool in @("air")) {
                     $toolFile = Get-ChildItem -Path $tmp -Recurse -Filter "$tool.*" | Select-Object -First 1
                     if ($toolFile) {
                         $ext = [System.IO.Path]::GetExtension($toolFile.Name)
@@ -298,7 +298,6 @@ Write-Host "✓ Created launcher: $LauncherDir\indent.cmd" -ForegroundColor Gree
 $ConfigDir = Join-Path $env:USERPROFILE ".config\indent"
 New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 @"
-INDENTPKG_INDEX=https://raw.githubusercontent.com/$Repo/main/packages/index.txt
 AIR_REGISTRY_REPO=$Repo
 AIR_REGISTRY_REF=main
 AIR_REGISTRY_INDEX_PATH=packages/index.txt
