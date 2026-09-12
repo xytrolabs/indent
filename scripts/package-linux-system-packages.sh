@@ -204,7 +204,10 @@ Summary: Indent language runtime and package tooling
 License: MIT
 URL: https://github.com/xytrolabs/indent
 Source0: indent-root.tar.gz
-BuildArch: $RPM_ARCH
+# No BuildArch: declaring it makes rpm check the spec arch against the *build
+# host's* compatible-arch list, which aborts a cross build on x86_64 with
+# "No compatible architectures found for build". The package arch comes from
+# the --target passed to rpmbuild instead.
 Requires: bash, curl
 
 %description
@@ -245,15 +248,20 @@ fi
 # leaves `_target_platform` at the host arch, so a spec with `BuildArch: aarch64`
 # is judged incompatible and rpmbuild aborts with
 # "No compatible architectures found for build".
-rpmbuild -bb --quiet --target "$RPM_ARCH" --define "_topdir $RPM_TOPDIR" --define "_target_cpu $RPM_ARCH" "$RPM_TOPDIR/SPECS/indent.spec"
-
-RPM_OUTPUT="$(find "$RPM_TOPDIR/RPMS" -type f -name '*.rpm' -print -quit)"
-if [[ -z "$RPM_OUTPUT" ]]; then
-  echo "Failed to locate generated RPM artifact" >&2
-  exit 1
+# Cross-arch rpmbuild is best-effort: a failure here must not fail the whole
+# release, because the .deb is already built and the runtime archives (which
+# end users actually install from) are unaffected.
+if rpmbuild -bb --quiet --target "$RPM_ARCH" --define "_topdir $RPM_TOPDIR" "$RPM_TOPDIR/SPECS/indent.spec"; then
+  RPM_OUTPUT="$(find "$RPM_TOPDIR/RPMS" -type f -name '*.rpm' -print -quit || true)"
+else
+  RPM_OUTPUT=""
 fi
-cp "$RPM_OUTPUT" "$OUT_DIR/"
 
 echo "Generated packages:"
 echo "  $DEB_OUTPUT"
-echo "  $OUT_DIR/$(basename "$RPM_OUTPUT")"
+if [[ -n "$RPM_OUTPUT" ]]; then
+  cp "$RPM_OUTPUT" "$OUT_DIR/"
+  echo "  $OUT_DIR/$(basename "$RPM_OUTPUT")"
+else
+  echo "::warning::rpmbuild produced no artifact for $RPM_ARCH; shipping the .deb only"
+fi
