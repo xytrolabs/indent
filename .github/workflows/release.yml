@@ -345,60 +345,14 @@ jobs:
           cd dist
           find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
+      # The formula generator lives in scripts/ (not inline) because a bash
+      # heredoc terminator must sit at column 0, which a YAML block scalar
+      # cannot express — inline heredocs make this whole file invalid YAML.
       - name: Update Homebrew formula
         run: |
           set -euo pipefail
-          VERSION_CLEAN="${GITHUB_REF_NAME#v}"
-          
-          # Get SHA256 for the macOS ARM tarball
-          MACOS_ARM_SHA=$(sha256sum dist/indent-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz 2>/dev/null | cut -d' ' -f1 || echo "UPDATE_ME")
-          MACOS_X64_SHA=$(sha256sum dist/indent-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz 2>/dev/null | cut -d' ' -f1 || echo "UPDATE_ME")
-          LINUX_X64_SHA=$(sha256sum dist/indent-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz 2>/dev/null | cut -d' ' -f1 || echo "UPDATE_ME")
-          
-          # Generate an updated Homebrew formula
-          cat > dist/indent.rb << BREWEOF
-class Indent < Formula
-  desc "Simple, readable, beginner-friendly programming language"
-  homepage "https://github.com/${{ github.repository }}"
-  version "${VERSION_CLEAN}"
-  license "MIT"
-
-  on_macos do
-    on_arm do
-      url "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/indent-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
-      sha256 "${MACOS_ARM_SHA}"
-    end
-    on_intel do
-      url "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/indent-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz"
-      sha256 "${MACOS_X64_SHA}"
-    end
-  end
-
-  on_linux do
-    on_arm do
-      url "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/indent-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "${LINUX_X64_SHA}"
-    end
-    on_intel do
-      url "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/indent-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "${MACOS_X64_SHA}"
-    end
-  end
-
-  def install
-    (libexec/"bin").install "indent"
-    libexec.install "std"
-    libexec.install "packages" if Dir.exist?("packages")
-    (bin/"indent").write_env_script libexec/"bin/indent",
-      INDENT_PATH: "\#{libexec}"
-  end
-
-  test do
-    assert_match "indent #{version}", shell_output("\#{bin}/indent --version")
-  end
-end
-BREWEOF
-          echo "✅ Homebrew formula generated at dist/indent.rb"
+          bash scripts/update-homebrew-formula.sh "${GITHUB_REF_NAME}" dist
+          echo "Homebrew formula generated at dist/indent.rb"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
