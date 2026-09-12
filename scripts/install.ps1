@@ -156,11 +156,30 @@ function Install-FromSource {
             $src = Join-Path $buildDir $tool
             if (Test-Path $src) { Copy-Item $src (Join-Path $BinDir $tool) -Force }
         }
+        # The clone has the complete std/ tree; prefer it over the partial
+        # four-file download below.
+        $srcStd = Join-Path $buildDir "std"
+        if (Test-Path $srcStd) {
+            New-Item -ItemType Directory -Path $StdDir -Force | Out-Null
+            Copy-Item (Join-Path $srcStd "*") $StdDir -Recurse -Force
+            Write-Host "✓ Installed std/ from cloned repo" -ForegroundColor Green
+            $script:stdInstalled = $true
+        }
+        $srcPkgs = Join-Path $buildDir "packages"
+        if (Test-Path $srcPkgs) {
+            New-Item -ItemType Directory -Path $PkgDir -Force | Out-Null
+            Copy-Item (Join-Path $srcPkgs "*") $PkgDir -Recurse -Force
+            Write-Host "✓ Installed packages/ from cloned repo" -ForegroundColor Green
+        }
     } finally {
         Pop-Location
         Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
     }
 }
+
+# Tracks whether the full std/ tree was installed from a release archive or a
+# clone, so the fallback download below does not replace it with four files.
+$stdInstalled = $false
 
 # ---- install binary ----
 if ($Local) {
@@ -211,6 +230,21 @@ if ($Local) {
                         Write-Host "✓ Installed $tool" -ForegroundColor Green
                     }
                 }
+                # Release archives are self-contained: install the complete
+                # std/ (and packages/) they ship.
+                $archiveStd = Get-ChildItem -Path $tmp -Recurse -Directory -Filter "std" | Select-Object -First 1
+                if ($archiveStd) {
+                    New-Item -ItemType Directory -Path $StdDir -Force | Out-Null
+                    Copy-Item (Join-Path $archiveStd.FullName "*") $StdDir -Recurse -Force
+                    Write-Host "✓ Installed std/ from release archive" -ForegroundColor Green
+                    $stdInstalled = $true
+                }
+                $archivePkgs = Get-ChildItem -Path $tmp -Recurse -Directory -Filter "packages" | Select-Object -First 1
+                if ($archivePkgs) {
+                    New-Item -ItemType Directory -Path $PkgDir -Force | Out-Null
+                    Copy-Item (Join-Path $archivePkgs.FullName "*") $PkgDir -Recurse -Force
+                    Write-Host "✓ Installed packages/ from release archive" -ForegroundColor Green
+                }
                 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
                 $installed = $true
             }
@@ -227,14 +261,18 @@ if ($Local) {
 }
 
 # ---- download standard library ----
-Write-Host "→ Installing standard library..."
-$StdBase = "https://raw.githubusercontent.com/$Repo/main/std"
-foreach ($file in @("io.ind", "math.ind", "strings.ind", "testing.ind")) {
-    try {
-        Invoke-WebRequest -Uri "$StdBase/$file" -OutFile (Join-Path $StdDir $file) -TimeoutSec 30
-    } catch { Write-Host "  (skipping $file - not yet in repo)" }
+if ($stdInstalled) {
+    Write-Host "✓ Standard library installed from release archive" -ForegroundColor Green
+} else {
+    Write-Host "→ Installing standard library..."
+    $StdBase = "https://raw.githubusercontent.com/$Repo/main/std"
+    foreach ($file in @("io.ind", "math.ind", "strings.ind", "testing.ind")) {
+        try {
+            Invoke-WebRequest -Uri "$StdBase/$file" -OutFile (Join-Path $StdDir $file) -TimeoutSec 30
+        } catch { Write-Host "  (skipping $file - not yet in repo)" }
+    }
+    Write-Host "✓ Standard library installed" -ForegroundColor Green
 }
-Write-Host "✓ Standard library installed" -ForegroundColor Green
 
 # ---- create launcher ----
 @"

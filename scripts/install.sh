@@ -200,7 +200,7 @@ else
     fi
 
     # Copy companion tools from the cloned repo
-    for tool in air aetherpkg; do
+    for tool in air indentpkg; do
       if [[ -f "$BUILD_DIR/${tool}" ]]; then
         cp "$BUILD_DIR/${tool}" "${BIN_DIR}/${tool}"
         chmod +x "${BIN_DIR}/${tool}"
@@ -219,6 +219,15 @@ TOOLEOF
   curl "${CURL_OPTS[@]}" "$DOWNLOAD_URL" -o "${TMP_DIR}/indent.tar.gz"
   tar -xzf "${TMP_DIR}/indent.tar.gz" -C "$TMP_DIR"
 
+  # Release archives are self-contained: they ship std/ and the companion
+  # tools. Remember the unpack root so the stdlib step installs the complete
+  # standard library from the archive instead of falling back to a partial
+  # download of four files.
+  RELEASE_ROOT="$(find "$TMP_DIR" -maxdepth 1 -type d -name 'indent-*' 2>/dev/null | head -n1 || true)"
+  if [[ -n "$RELEASE_ROOT" && -d "${RELEASE_ROOT}/std" ]]; then
+    STD_SOURCE_DIR="$RELEASE_ROOT"
+  fi
+
   BIN_SRC="$(find "$TMP_DIR" -type f -name indent | head -n1)"
   if [[ -z "$BIN_SRC" ]]; then
     red "Archive does not contain 'indent' binary"
@@ -229,7 +238,7 @@ TOOLEOF
   green "✓ Downloaded indent"
 
   # Install companion tools from the same release
-  for tool in air aetherpkg; do
+  for tool in air indentpkg; do
     TOOL_SRC="$(find "$TMP_DIR" -type f -name "$tool" | head -n1 || true)"
     if [[ -n "$TOOL_SRC" ]]; then
       cp "$TOOL_SRC" "${BIN_DIR}/${tool}"
@@ -249,10 +258,18 @@ fi
 echo "→ Installing standard library..."
 
 # Determine source for stdlib/packages:
-# 1. BUILD_DIR from build-from-source fallback (cloned repo)
-# 2. Local checkout (SCRIPT_DIR)
-# 3. Download from GitHub
-if [[ -n "${BUILD_DIR:-}" && -d "${BUILD_DIR}/std" ]]; then
+# 1. STD_SOURCE_DIR - an unpacked prebuilt release archive (ships std/ + packages/)
+# 2. BUILD_DIR     - the build-from-source fallback (cloned repo)
+# 3. Local checkout (SCRIPT_DIR)
+# 4. Download from GitHub
+if [[ -n "${STD_SOURCE_DIR:-}" && -d "${STD_SOURCE_DIR}/std" ]]; then
+  cp -r "${STD_SOURCE_DIR}/std"/* "$STD_DIR"/
+  green "✓ Installed std/ from release archive"
+  if [[ -d "${STD_SOURCE_DIR}/packages" ]]; then
+    cp -r "${STD_SOURCE_DIR}/packages"/* "$PKG_DIR"/
+    green "✓ Installed packages/ from release archive"
+  fi
+elif [[ -n "${BUILD_DIR:-}" && -d "${BUILD_DIR}/std" ]]; then
   cp -r "${BUILD_DIR}/std"/* "$STD_DIR"/
   green "✓ Installed std/ from cloned repo"
   if [[ -d "${BUILD_DIR}/packages" ]]; then

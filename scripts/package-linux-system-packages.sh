@@ -68,7 +68,11 @@ if [[ ! -d "$STAGE_DIR" ]]; then
   exit 1
 fi
 
-for required_path in "$STAGE_DIR/indent" "$STAGE_DIR/air" "$STAGE_DIR/indentpkg" "$STAGE_DIR/std" "$STAGE_DIR/README.md"; do
+# `indentpkg` is optional: it is not shipped by the build (the repo has never
+# contained an `indentpkg` file), so requiring it here aborted every Linux build
+# with "Missing required staged asset". Require only what the release actually
+# stages, and install the optional tools when they are present.
+for required_path in "$STAGE_DIR/indent" "$STAGE_DIR/air" "$STAGE_DIR/std" "$STAGE_DIR/README.md"; do
   if [[ ! -e "$required_path" ]]; then
     echo "Missing required staged asset: $required_path" >&2
     exit 1
@@ -90,7 +94,9 @@ mkdir -p "$PKGROOT/usr/lib/indent/bin" "$PKGROOT/usr/lib/indent/std" "$PKGROOT/u
 
 install -m 0755 "$STAGE_DIR/indent" "$PKGROOT/usr/lib/indent/bin/indent-bin"
 install -m 0755 "$STAGE_DIR/air" "$PKGROOT/usr/lib/indent/bin/air-bin"
-install -m 0755 "$STAGE_DIR/indentpkg" "$PKGROOT/usr/lib/indent/bin/indentpkg-bin"
+if [[ -f "$STAGE_DIR/indentpkg" ]]; then
+  install -m 0755 "$STAGE_DIR/indentpkg" "$PKGROOT/usr/lib/indent/bin/indentpkg-bin"
+fi
 cp -a "$STAGE_DIR/std/." "$PKGROOT/usr/lib/indent/std/"
 install -m 0644 "$STAGE_DIR/README.md" "$PKGROOT/usr/share/doc/indent/README.md"
 if [[ -f "$ROOT_DIR/LICENSE" ]]; then
