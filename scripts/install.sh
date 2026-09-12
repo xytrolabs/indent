@@ -286,10 +286,35 @@ else
     cp -r "$LOCAL_STD"/* "$STD_DIR"/
     green "✓ Installed std/ from local checkout"
   else
-    for file in io.ind math.ind strings.ind testing.ind; do
-      curl "${CURL_OPTS[@]}" "https://raw.githubusercontent.com/${REPO}/main/std/${file}" -o "${STD_DIR}/${file}" 2>/dev/null || true
-    done
-    green "✓ Downloaded standard library"
+    # Fallback for archives that do not bundle std/ — several published
+    # releases shipped a bare `indent` binary. Fetch the source tree once so
+    # the install still gets the COMPLETE standard library, AIR, and packages,
+    # rather than a handful of hand-listed stdlib files.
+    SRC_TMP="$(mktemp -d)"
+    if curl "${CURL_OPTS[@]}" "https://github.com/${REPO}/archive/refs/heads/main.tar.gz" -o "${SRC_TMP}/src.tar.gz" 2>/dev/null; then
+      if tar -xzf "${SRC_TMP}/src.tar.gz" -C "$SRC_TMP" 2>/dev/null; then
+        SRC_ROOT="$(find "$SRC_TMP" -maxdepth 1 -type d -name 'indent-*' -print -quit || true)"
+        if [[ -n "$SRC_ROOT" && -d "${SRC_ROOT}/std" ]]; then
+          cp -r "${SRC_ROOT}/std"/* "$STD_DIR"/
+          green "✓ Installed std/ from source tree"
+        fi
+        if [[ -n "$SRC_ROOT" && -d "${SRC_ROOT}/packages" ]]; then
+          cp -r "${SRC_ROOT}/packages"/* "$PKG_DIR"/ 2>/dev/null || true
+          green "✓ Installed packages/ from source tree"
+        fi
+        if [[ -n "$SRC_ROOT" && -f "${SRC_ROOT}/air" && ! -x "${BIN_DIR}/air" ]]; then
+          cp "${SRC_ROOT}/air" "${BIN_DIR}/air"
+          chmod +x "${BIN_DIR}/air"
+          cat > "${LAUNCHER_DIR}/air" <<AIREOF
+#!/usr/bin/env bash
+exec "${BIN_DIR}/air" "\$@"
+AIREOF
+          chmod +x "${LAUNCHER_DIR}/air"
+          green "✓ Installed air"
+        fi
+      fi
+    fi
+    rm -rf "$SRC_TMP"
   fi
 
   if [[ -d "$LOCAL_PKG" ]]; then
