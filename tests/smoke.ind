@@ -1,0 +1,3 @@
+#! Smoke test used by the release pipeline to verify a *packaged* build runs.
+#! Keep this dependency-free: it must work from a bare extracted archive.
+say "indent smoke test ok"

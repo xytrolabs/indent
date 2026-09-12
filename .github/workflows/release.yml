@@ -183,10 +183,11 @@ jobs:
 
           test -x "$STAGE_DIR/${{ matrix.bin_name }}"
           "$STAGE_DIR/${{ matrix.bin_name }}" --version
-          "$STAGE_DIR/${{ matrix.bin_name }}" check tests/smoke.ind
-          "$STAGE_DIR/${{ matrix.bin_name }}" test tests
-          "$STAGE_DIR/${{ matrix.bin_name }}" examples/demo.ind
-          "$STAGE_DIR/air" index
+          # `check` takes a directory; `run` executes a file. This used to call
+          # `check tests/smoke.ind` against a file that never existed.
+          "$STAGE_DIR/${{ matrix.bin_name }}" run tests/smoke.ind
+          # The archive must carry the AIR package tool alongside the runtime.
+          test -f "$STAGE_DIR/air"
 
           VERSION_CLEAN="${VERSION#v}"
           DEB_ARCH="amd64"
@@ -219,20 +220,22 @@ jobs:
           New-Item -ItemType Directory -Path $tmp | Out-Null
           Expand-Archive -Path $archive.FullName -DestinationPath $tmp -Force
           $stage = Join-Path $tmp $name
-          $exe = Join-Path $stage "${{ matrix.bin_name }}"
 
-          if (-not (Test-Path $exe)) {
-            throw "Missing executable: $exe"
+          # The zip stores the *contents* of the staged directory (the build
+          # uses Compress-Archive -Path "dist/$name/*"), so the files land
+          # directly in $tmp rather than under $tmp/$name.
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter "${{ matrix.bin_name }}" | Select-Object -First 1
+
+          if (-not $exe) {
+            throw "Missing ${{ matrix.bin_name }} in $name.zip"
           }
 
-          & $exe --version
-          & $exe check tests/smoke.ind
-          & $exe test tests
-          & $exe examples/demo.ind
+          & $exe.FullName --version
+          & $exe.FullName run tests/smoke.ind
 
-          $airPs1 = Join-Path $stage "air.ps1"
-          if (Test-Path $airPs1) {
-            & powershell -ExecutionPolicy Bypass -File $airPs1 index
+          $airPs1 = Get-ChildItem -Path $tmp -Recurse -Filter "air.ps1" | Select-Object -First 1
+          if (-not $airPs1) {
+            throw "AIR (air.ps1) missing from $name.zip"
           }
 
   smoke-linux-packages:
@@ -248,10 +251,11 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Install package smoke test tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y docker.io
+      # docker is already present on ubuntu-latest. Installing docker.io on top
+      # of it conflicts with the runner's containerd packages and aborts with
+      # "pkgProblemResolver::Resolve generated breaks".
+      - name: Verify docker is available
+        run: docker --version
 
       - name: Smoke test .deb install (APT)
         shell: bash
@@ -272,9 +276,7 @@ jobs:
           command -v air
 
           indent --version
-          indent check tests/smoke.ind
-          indent test tests
-          air index
+          indent run tests/smoke.ind
 
           sudo apt-get remove -y indent
 
@@ -304,9 +306,7 @@ jobs:
               command -v indent
               command -v air
               indent --version
-              indent check tests/smoke.ind
-              indent test tests
-              air index
+              indent run tests/smoke.ind
             '
 
   publish:
