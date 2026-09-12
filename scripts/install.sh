@@ -18,6 +18,7 @@ set -euo pipefail
 DEFAULT_REPO="xytrolabs/indent"
 REPO="${DEFAULT_REPO}"
 LOCAL_MODE=0
+BUILD_FROM_SOURCE=0
 INDENT_VERSION="${INDENT_VERSION:-latest}"
 
 bold()   { printf '\033[1m%s\033[0m' "$1"; }
@@ -35,16 +36,18 @@ Usage:
   bash install.sh [--local] [--version VER] [--repo OWNER/REPO]
 
 Options:
-  --local           Install from local cargo build
-  --version VER     Install a specific release version (default: latest)
-  --repo OWNER/REPO GitHub repository for releases
-  --help, -h        Show this help
+  --local               Install from a local cargo build
+  --build-from-source   Compile from source (requires Rust). Never done implicitly.
+  --version VER         Install a specific release version (default: latest)
+  --repo OWNER/REPO     GitHub repository for releases
+  --help, -h            Show this help
 HELPEOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local) LOCAL_MODE=1 ;;
+    --build-from-source) BUILD_FROM_SOURCE=1 ;;
     --version) INDENT_VERSION="$2"; shift ;;
     --repo) REPO="$2"; shift ;;
     --help|-h) show_help; exit 0 ;;
@@ -116,8 +119,29 @@ else
   DOWNLOAD_URL="$(printf "%s" "$RELEASE_JSON" | grep -oE "https://[^\"]*indent-v[^\"]*-${TARGET}\\.tar\\.gz" | head -n1 || true)"
 
   if [[ -z "$DOWNLOAD_URL" ]]; then
-    warn "No pre-built release found — building from source instead..."
-    echo "  (This requires Rust. Install: https://rustup.rs)"
+    # Never force a compile. Some users have no toolchain and no way to install
+    # one, so building from source is strictly opt-in via --build-from-source.
+    if [[ "$BUILD_FROM_SOURCE" -ne 1 ]]; then
+      red "No pre-built binary is available for ${TARGET} in ${REPO}."
+      echo ""
+      echo "  Nothing was compiled and nothing was changed."
+      echo ""
+      echo "  Indent installs a pre-built binary by default, so no compiler is needed."
+      echo "  To get one, either:"
+      echo ""
+      echo "    - install a release that ships a ${TARGET} build:"
+      echo "        https://github.com/${REPO}/releases"
+      echo "    - or ask for a specific version that has one:"
+      echo "        --version <tag>"
+      echo ""
+      echo "  If you do have Rust and want to compile it yourself:"
+      echo "        --build-from-source"
+      echo ""
+      exit 1
+    fi
+
+    warn "No pre-built release found - building from source as requested..."
+    echo "  (Rust is required for this: https://rustup.rs)"
     echo ""
 
     # Check for cargo

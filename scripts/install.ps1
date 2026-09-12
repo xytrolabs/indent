@@ -18,6 +18,8 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$Local,
     [Parameter(Mandatory = $false)]
+    [switch]$BuildFromSource,
+    [Parameter(Mandatory = $false)]
     [string]$Version = "latest"
 )
 
@@ -253,8 +255,28 @@ if ($Local) {
         Write-Host "  (no prebuilt release: $($_.Exception.Message))" -ForegroundColor Yellow
     }
     if (-not $installed) {
+        # Never force a compile: some users have no toolchain and no way to get
+        # one. Building from source is strictly opt-in via -BuildFromSource.
+        if (-not $BuildFromSource) {
+            Write-Host ""
+            Write-Host "No pre-built binary is available for $target in $Repo." -ForegroundColor Red
+            Write-Host ""
+            Write-Host "  Nothing was compiled and nothing was changed."
+            Write-Host ""
+            Write-Host "  Indent installs a pre-built binary by default, so no compiler is needed."
+            Write-Host "  To get one, either:"
+            Write-Host "    - install a release that ships a $target build:"
+            Write-Host "        https://github.com/$Repo/releases" -ForegroundColor Cyan
+            Write-Host "    - or ask for a specific version that has one:"
+            Write-Host "        -Version <tag>"
+            Write-Host ""
+            Write-Host "  If you do have Rust and want to compile it yourself:"
+            Write-Host "        -BuildFromSource"
+            Write-Host ""
+            exit 1
+        }
         Write-Host ""
-        Write-Host "No prebuilt release found for $Repo - building from source instead..." -ForegroundColor Yellow
+        Write-Host "No prebuilt release found - building from source as requested..." -ForegroundColor Yellow
         Write-Host ""
         Install-FromSource
     }
