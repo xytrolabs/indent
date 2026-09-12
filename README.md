@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.2.2
+# Indent Language (.ind) v2.2.3
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,6 +7,11 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ### 🎉 What's New in 2.2.3
+> - 📦 **Installer refreshed** — bundles the full `std/` + AIR, never compiles unless
+>   you pass `--build-from-source`
+> - 🛡 Releases are verified to ship runtime + AIR + std before publishing
+>
 > ### 🎉 What's New in 2.2.2
 > - 🐛 **Module functions can use their own imports** — a function exported by a
 >   module can now call modules *it* imported, when invoked from another file

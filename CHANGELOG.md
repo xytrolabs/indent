@@ -1,5 +1,21 @@
 # Indent Changelog
 
+## 2.2.3 — 2026-09-12
+
+### 📦 Installer refreshed everywhere
+- The installer bundled inside every release archive is now the current one. It
+  installs the full `std/` plus AIR even from an archive that contains only the
+  runtime, and it never compiles from source unless you ask for it with
+  `--build-from-source` (bash) or `-BuildFromSource` (PowerShell).
+- Removed the stale, unreferenced `indent-native/install.sh` duplicate.
+  `scripts/install.sh` is the single source of truth and is what the release
+  stages into the archives.
+
+### 🛡 Batteries-included guarantee
+- Release archives are now verified before publishing to contain the runtime,
+  AIR, and at least 10 standard-library files — on both the tarball and the
+  Windows zip. A bare-binary archive can no longer be published.
+
 ## 2.2.2 — 2026-09-11
 
 ### 🐛 Module functions can now use their own imports
