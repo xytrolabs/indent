@@ -186,8 +186,17 @@ jobs:
           # `check` takes a directory; `run` executes a file. This used to call
           # `check tests/smoke.ind` against a file that never existed.
           "$STAGE_DIR/${{ matrix.bin_name }}" run tests/smoke.ind
-          # The archive must carry the AIR package tool alongside the runtime.
+          # "Batteries included": every archive must ship the runtime, AIR, and
+          # the FULL standard library. Releases used to ship a bare `indent`
+          # binary, which silently broke installs, so fail loudly instead.
           test -f "$STAGE_DIR/air"
+          test -d "$STAGE_DIR/std"
+          STD_COUNT="$(find "$STAGE_DIR/std" -name '*.ind' | wc -l)"
+          if [[ "$STD_COUNT" -lt 10 ]]; then
+            echo "Archive ships only ${STD_COUNT} stdlib files; expected the full std/" >&2
+            exit 1
+          fi
+          echo "Archive OK: runtime + air + ${STD_COUNT} stdlib files"
 
           VERSION_CLEAN="${VERSION#v}"
           DEB_ARCH="amd64"
@@ -237,6 +246,18 @@ jobs:
           if (-not $airPs1) {
             throw "AIR (air.ps1) missing from $name.zip"
           }
+
+          # "Batteries included": the zip must also carry the full standard
+          # library, not just the executable.
+          $stdDir = Get-ChildItem -Path $tmp -Recurse -Directory -Filter "std" | Select-Object -First 1
+          if (-not $stdDir) {
+            throw "Standard library (std/) missing from $name.zip"
+          }
+          $stdCount = (Get-ChildItem -Path $stdDir.FullName -Filter "*.ind").Count
+          if ($stdCount -lt 10) {
+            throw "$name.zip ships only $stdCount stdlib files; expected the full std/"
+          }
+          Write-Host "Archive OK: runtime + air + $stdCount stdlib files"
 
   smoke-linux-packages:
     name: Smoke Test Linux Packages
