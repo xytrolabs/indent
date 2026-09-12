@@ -1,6 +1,6 @@
 # Indent Changelog
 
-## 2.2.3 — 2026-09-12
+## 2.2.2 — 2026-09-11
 
 ### 📦 Installer refreshed everywhere
 - The installer bundled inside every release archive is now the current one. It
@@ -15,8 +15,6 @@
 - Release archives are now verified before publishing to contain the runtime,
   AIR, and at least 10 standard-library files — on both the tarball and the
   Windows zip. A bare-binary archive can no longer be published.
-
-## 2.2.2 — 2026-09-11
 
 ### 🐛 Module functions can now use their own imports
 - Fixed a real dispatch bug: calling a function exported by one module from a
