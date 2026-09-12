@@ -241,7 +241,11 @@ if [[ ! -f "$PKGROOT/usr/share/doc/indent/LICENSE" ]]; then
   sed -i '/^%doc \/usr\/share\/doc\/indent\/LICENSE$/d' "$RPM_TOPDIR/SPECS/indent.spec"
 fi
 
-rpmbuild -bb --quiet --define "_topdir $RPM_TOPDIR" --define "_target_cpu $RPM_ARCH" "$RPM_TOPDIR/SPECS/indent.spec"
+# `--target` is required for a cross-arch build. Defining only `_target_cpu`
+# leaves `_target_platform` at the host arch, so a spec with `BuildArch: aarch64`
+# is judged incompatible and rpmbuild aborts with
+# "No compatible architectures found for build".
+rpmbuild -bb --quiet --target "$RPM_ARCH" --define "_topdir $RPM_TOPDIR" --define "_target_cpu $RPM_ARCH" "$RPM_TOPDIR/SPECS/indent.spec"
 
 RPM_OUTPUT="$(find "$RPM_TOPDIR/RPMS" -type f -name '*.rpm' -print -quit)"
 if [[ -z "$RPM_OUTPUT" ]]; then
