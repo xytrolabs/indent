@@ -1,5 +1,5 @@
 #! =============================================================================
-#! discord.ind 6.6 — The Indent Discord bot library
+#! discord.ind 6.7 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,

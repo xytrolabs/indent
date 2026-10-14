@@ -1,5 +1,5 @@
 #! =============================================================================
-#! ai.ind 1.3 — OpenAI-native AI assistant package for Indent
+#! ai.ind 1.4 — OpenAI-native AI assistant package for Indent
 #! =============================================================================
 #!
 #! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
@@ -10,13 +10,14 @@
 #! System prompts work exactly like the OpenAI Python SDK: put a
 #! {"role":"system","content":"..."} message first in the `messages` list.
 #!
-#! v1.3: ROBUST — never crashes on transient server errors. Every call:
+#! v1.4: ROBUST — never crashes, and reports errors like the OpenAI Python SDK:
 #!   - checks the HTTP response (ok / status)
-#!   - parses JSON defensively (do/catch)
-#!   - guards all indexing with has_key
-#!   - retries with backoff (SetRetries)
-#!   - preserves provider error messages (for example, "Invalid API key")
-#!   - records the last error (GetLastError) and returns empty on failure
+#!   - classifies failures into typed errors (authentication_error, rate_limit_error,
+#!     connection_error, ...)
+#!   - retries ONLY retryable failures (connection, 408/409/429, 5xx) with
+#!     Retry-After + exponential backoff and jitter
+#!   - captures the provider's message/code/param and the x-request-id header
+#!   - records the last error (LastError) and returns empty on failure
 #!
 #! Mirror of the OpenAI Python SDK surface, adapted for Indent:
 #!   Chat      → openai client.chat.completions.create
