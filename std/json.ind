@@ -1,5 +1,7 @@
 #! json.ind
-#! JSON utilities for Indent
+#! JSON utilities for Indent — a superset of Python's `json` module.
+#!
+#!   get Loads, Dumps from json
 
 fun Loads text
     give json_loads text
@@ -12,3 +14,175 @@ fun Stringify value
 
 fun Parse text
     give json_loads text
+
+#! Alias with the json_ prefix for discoverability.
+fun JsonLoads text
+    give json_loads text
+
+fun JsonDumps value
+    give json_dumps value
+
+#! Deep-copy any JSON-compatible value (round-trips through JSON).
+fun Clone value
+    var s = json_dumps value
+    give json_loads s
+
+#! Pretty-print a value as indented JSON (like json.dumps(indent=2)).
+fun Pretty value width = 2
+    var compact = json_dumps value
+    give _Indent compact width
+
+#! Internal: re-indent a compact JSON string.
+fun _Indent text width
+    var pad string = ""
+    var i int = 0
+    repeat while i < width
+        pad is pad + " "
+        i is i + 1
+    var out string = ""
+    var depth int = 0
+    var in_str boolean = false
+    var escape boolean = false
+    var chars = _Chars text
+    repeat ch in chars
+        if escape
+            out is out + ch
+            escape is false
+            next
+        if ch == "\\"
+            out is out + ch
+            escape is true
+            next
+        if in_str
+            out is out + ch
+            if ch == "\""
+                in_str is false
+            next
+        if ch == "\""
+            in_str is true
+            out is out + ch
+            next
+        if ch == "{" or ch == "["
+            depth is depth + 1
+            var padA = _Pad depth pad
+            out is out + ch
+            out is out + "\n"
+            out is out + padA
+            next
+        if ch == "}" or ch == "]"
+            depth is depth - 1
+            var padB = _Pad depth pad
+            out is out + "\n"
+            out is out + padB
+            out is out + ch
+            next
+        if ch == ","
+            var padC = _Pad depth pad
+            out is out + ch
+            out is out + "\n"
+            out is out + padC
+            next
+        if ch == ":"
+            out is out + ": "
+            next
+        if ch == " "
+            next
+        out is out + ch
+    give out
+
+fun _Pad depth pad
+    var out string = ""
+    var i int = 0
+    repeat while i < depth
+        out is out + pad
+        i is i + 1
+    give out
+
+#! Split a string into single characters (helper avoiding empty-separator split).
+fun _Chars text
+    var out dynamic = []
+    var i int = 0
+    var n int = len text
+    repeat while i < n
+        var c = char_at text i
+        out is append out c
+        i is i + 1
+    give out
+
+#! --- JSON Pointer (RFC 6901) — like Python's jsonpointer ---
+
+#! Navigate a value by pointer path "/a/b/0/c". Returns empty if missing.
+fun PointerGet data pointer
+    if pointer == "" or pointer == "/"
+        give data
+    var cur dynamic = data
+    var parts = split pointer "/"
+    repeat part in parts
+        if len(part) == 0
+            next
+        var ty = type_of(cur)
+        if ty == "dict"
+            if has_key cur part
+                cur is cur[part]
+            otherwise
+                give empty
+        or ty == "list"
+            var idx = int(part)
+            if idx >= 0 and idx < len(cur)
+                cur is cur[idx]
+            otherwise
+                give empty
+        otherwise
+            give empty
+    give cur
+
+#! True if the pointer path exists.
+fun Has data pointer
+    var missing = PointerGet data pointer
+    if is_missing missing
+        give false
+    give true
+
+#! Get with a default fallback when the pointer is missing.
+fun GetOr data pointer fallback
+    var v = PointerGet data pointer
+    if is_missing v
+        give fallback
+    give v
+
+#! --- Merging ---
+
+#! Shallow merge: keys of b overwrite keys of a (returns a new dict).
+fun Merge a b
+    var out dynamic = {}
+    repeat k in keys a
+        out[k] is a[k]
+    repeat k in keys b
+        out[k] is b[k]
+    give out
+
+#! Deep merge: nested dicts are merged recursively.
+fun DeepMerge a b
+    var out dynamic = {}
+    repeat k in keys a
+        out[k] is a[k]
+    repeat k in keys b
+        if has_key out k
+            if type_of(out[k]) == "dict" and type_of(b[k]) == "dict"
+                out[k] is DeepMerge out[k] b[k]
+            otherwise
+                out[k] is b[k]
+        otherwise
+            out[k] is b[k]
+    give out
+
+#! --- File helpers (like json.load / json.dump) ---
+
+fun FromFile path
+    var content = file_read_text path
+    give json_loads content
+
+fun ToFile path value
+    var text = json_dumps value
+    file_write_text path text
+    give empty

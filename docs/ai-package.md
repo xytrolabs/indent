@@ -5,11 +5,13 @@ works with **real OpenAI** *and* a **local Ollama** server (which exposes the
 same OpenAI API at `/v1`). Chat completions, embeddings, model listing, cosine
 similarity, and semantic search — all in pure Indent, no Python needed.
 
-> **🛡️ Robust (v1.2)**: never crashes on transient server errors. Every call
+> **🛡️ Robust (v1.3)**: never crashes on transient server errors. Every call
 > checks the HTTP response, parses JSON defensively, guards indexing, retries
 > with backoff, and returns `empty`/`[]` gracefully on failure instead of
-> throwing. Inspect failures with `GetLastError()` / `GetLastStatus()` /
-> `WasError()`, or configure retries with `SetRetries(n)`.
+> throwing. Failed API responses preserve the provider's message, such as
+> `Invalid API key`, `model not found`, or a rate-limit explanation. Inspect
+> failures with `GetLastError()` / `GetLastStatus()` / `WasError()`, or
+> configure retries with `SetRetries(n)`.
 
 > Install: `air install ai` — import with `get ai as AI` (namespace, `AI.Chat`)
 > or per-function: `get Chat from ai`.
@@ -44,6 +46,12 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 | `GetLastStatus()` | — | Last HTTP status (0 = no response). |
 | `WasError()` | — | True if the most recent call failed. |
 
+When an OpenAI-compatible server returns an error response such as
+`{"error":{"message":"Invalid API key"}}`, `GetLastError()` returns
+`Invalid API key` and `GetLastStatus()` returns `401`. The result value remains
+`empty` for `Chat`/`Ask` or `[]` for list/vector APIs so existing programs do
+not crash, but the reason is no longer discarded.
+
 ---
 
 ## Core API
@@ -51,7 +59,15 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 | Function | OpenAI SDK equivalent | Description |
 |---|---|---|
 | `Chat(model, messages)` | `client.chat.completions.create()` | Chat completion; `messages` = list of `{"role","content"}`; returns assistant reply text. |
+| `ChatWithSystem(model, systemPrompt, userPrompt)` | — | Chat with system instruction and user prompt directly in one call. |
+| `ChatWithOptions(model, messages, options)` | — | Chat with custom parameters (`temperature`, `max_tokens`, `top_p`, `json`, `seed`). |
 | `Ask(model, prompt)` | `client.chat.completions.create()` | Single-prompt completion; returns generated text. |
+| `AskJson(model, prompt)` | — | Structured JSON completion: requests and parses response into an Indent dictionary. |
+| `NewConversation([systemPrompt])` | — | Initialize conversation state dict. |
+| `Converse(conv, model, userText)` | — | Multi-turn chat turn: returns `{"reply": text, "conv": updatedConv}`. |
+| `NewVectorStore()` | — | In-memory semantic vector store for instant RAG. |
+| `VectorStoreAdd(store, id, text[, metadata])` | — | Embed text and add item to vector store; returns updated store. |
+| `VectorStoreSearch(store, query[, topK])` | — | Semantic search across store items; returns top ranked matches. |
 | `Embed(model, text)` | `client.embeddings.create()` | Single text → embedding vector (list of floats). |
 | `EmbedMany(model, texts)` | `client.embeddings.create()` | Batch: list of texts → list of vectors. |
 | `Models()` | `client.models.list()` | List model IDs from the server. |
@@ -72,6 +88,59 @@ var history = [{"role":"system","content":"You are a terse assistant."}]
 history is history + [{"role":"user","content":"What is the capital of France?"}]
 var answer = AI.Chat("qwen2.5:0.5b", history)
 say answer
+```
+
+You can also skip the message plumbing entirely:
+
+```indent
+get ChatWithSystem from ai
+var answer = ChatWithSystem("qwen2.5:0.5b", "You are terse.", "Capital of France?")
+```
+
+### High-level helpers (one call, no prompt plumbing)
+
+These use the **default chat model** (`SetDefaultModel`), so you rarely type a
+model name:
+
+| Function | Description |
+|---|---|
+| `ChatDefault(messages)` | Chat using the default model |
+| `AskDefault(prompt)` | Single-prompt using the default model |
+| `ChatWithSystem(model, system, user)` | System + user prompt in one call |
+| `ChatWithOptions(model, messages, options)` | Full control: `temperature`, `max_tokens`, `top_p`, `seed`, `json` |
+| `AskJson(model, prompt)` | Ask for and parse a JSON object → dict |
+| `Summarize(text[, n])` | Bullet-point summary (default 3 points) |
+| `Translate(text, language)` | Translate text into a target language |
+| `Classify(text, labels)` | Return the single best matching label |
+| `Extract(text, fields)` | Pull structured fields → dict |
+
+```indent
+get Summarize, Translate, Classify, Extract from ai
+
+say Summarize(article, 5)
+say Translate("Good morning", "Japanese")
+var cat = Classify("My order never arrived", ["billing", "shipping", "other"])
+var fields = Extract("Ada, 36, London", ["name", "age", "city"])
+```
+
+### Conversations & agents (stateful)
+
+```indent
+get NewConversation, Converse from ai
+var conv = NewConversation("You are a helpful coding assistant.")
+var turn = Converse(conv, "qwen2.5:0.5b", "Write a haiku about Rust.")
+say turn.reply
+conv = turn.conv          #! carry the updated history forward
+```
+
+### Vector store + RAG (zero dependencies)
+
+```indent
+get NewVectorStore, VectorStoreAdd, RagAnswer from ai
+var store = NewVectorStore()
+store = VectorStoreAdd(store, "doc1", "Indent is a simple scripting language.")
+store = VectorStoreAdd(store, "doc2", "Python is a general-purpose language.")
+say RagAnswer(store, "What is Indent?", 2)
 ```
 
 ### Embeddings + similarity

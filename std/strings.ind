@@ -81,3 +81,67 @@ fun IsEmpty text
 
 fun Lines text
     give split text "\n"
+
+fun Chr code
+    give chr code
+
+fun Ord char
+    give ord char
+
+fun CharAt text index
+    give char_at text index
+
+fun Interpolate template vars = empty
+    give interpolate template vars
+
+#! --- Extra helpers (Python str parity) ---
+
+#! Split on line breaks (handles \n, \r\n).
+fun Lines text
+    give str_splitlines text
+
+#! Remove a prefix if present.
+fun RemovePrefix text prefix
+    give str_removeprefix text prefix
+
+#! Remove a suffix if present.
+fun RemoveSuffix text suffix
+    give str_removesuffix text suffix
+
+#! Split around the first occurrence of sep: [before, sep, after].
+fun Partition text sep
+    give str_partition text sep
+
+#! Split a string into single characters.
+fun Chars text
+    var out dynamic = []
+    var i int = 0
+    var n int = len text
+    repeat while i < n
+        var c = char_at text i
+        out is append out c
+        i is i + 1
+    give out
+
+#! True when the string is empty or only whitespace.
+fun IsBlank text
+    var t = trim text
+    var n = len(t)
+    if n == 0
+        give true
+    give false
+
+#! Repeat a string n times (like Python's str * n).
+fun Repeat text count
+    give repeat_str text count
+
+#! Pad a string on the left with zeros to the given width.
+fun ZFill text width
+    give str_zfill text width
+
+#! Count occurrences of a substring (non-overlapping).
+fun CountOccurrences text sub
+    if len(sub) == 0
+        give 0
+    var parts = split text sub
+    give len(parts) - 1

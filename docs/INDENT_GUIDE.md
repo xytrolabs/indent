@@ -360,29 +360,28 @@ say "Hello " + name + "!"
 
 Put a variable name between percent signs inside any string and its value is
 substituted (rendered as text). Works in double- **and** single-quoted strings,
-anywhere a string is used (not just `say`):
+anywhere a string is used:
 
 ```indent
 var name = "Ada"
 var n = 42
-say "Hi %name%, n=%n%"     #! → "Hi Ada, n=42"
-var msg = "Hello %name%"   #! interpolation happens in any string
-say msg                    #! → "Hello Ada"
-say 'single quotes %name% too'
+say "Hi %name%, n=%n%"          #! → "Hi Ada, n=42"
+var msg = "Hello %name%"        #! interpolation happens in any string
+say msg                         #! → "Hello Ada"
+say 'single quotes %name% too'  #! → "single quotes Ada too"
 ```
 
 Rules to know:
 
-- **Simple variable names only** — not expressions or member access. `"%d.k%"`
-  is left literally as `%d.k%`; use `"%d%"` (the whole value) or concatenate
-  (`"x " + d.k`).
+- **Simple variable names & dotted chains** — e.g. `%name%` or `%user.city%`.
 - **Any value type** works — strings, ints, floats, lists, dicts — each renders
   as text (a dict prints its `{...}` form).
 - **Undefined names and stray `%` are left as-is** (no error): `"%nope%"` prints
   literally, and `"100% done"` / `"%%"` are unchanged.
 - There is **no escape** for a literal `%name%` when `name` exists — build such
   text with concatenation, or rename the placeholder.
-- For **positional/named templates**, use `format(...)` / `sformat(...)` below.
+- For **positional/named templates**, you can also use `format(...)` / `sformat(...)`,
+  or `interpolate(template[, dict])`.
 
 ### Quotes & escapes
 

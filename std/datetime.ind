@@ -21,3 +21,92 @@ fun PerfCounter
 
 fun Timestamp
     give time_now
+
+fun IsoNow
+    give time_format(time_now, "%Y-%m-%d %H:%M:%S")
+
+fun DateNow
+    give time_format(time_now, "%Y-%m-%d")
+
+fun TimeNow
+    give time_format(time_now, "%H:%M:%S")
+
+#! --- Duration & relative-time helpers ---
+
+#! Format a number of seconds as a compact human duration, e.g. "1h 30m 5s".
+fun DurationText seconds
+    var total = int(seconds)
+    var neg = false
+    if total < 0
+        neg is true
+        total is 0 - total
+    var d = div_int total 86400
+    var rem = mod_int total 86400
+    var h = div_int rem 3600
+    rem is mod_int rem 3600
+    var m = div_int rem 60
+    var s = mod_int rem 60
+    var out string = ""
+    if d > 0
+        out is out + string(d) + "d "
+    if h > 0
+        out is out + string(h) + "h "
+    if m > 0
+        out is out + string(m) + "m "
+    if s > 0
+        out is out + string(s) + "s"
+    if len(out) == 0
+        out is "0s"
+    out is trim out
+    if neg
+        give "-" + out
+    give out
+
+#! Human relative time, e.g. "3 minutes ago" or "in 2 hours".
+fun Relative timestamp
+    var diff = time_now - timestamp
+    var future = false
+    if diff < 0
+        future is true
+        diff is 0 - diff
+    var d = int(diff)
+    var out string = ""
+    if d < 60
+        var n1 = string(d)
+        out is n1 + " seconds"
+    or d < 3600
+        var m2 = div_int d 60
+        var n2 = string(m2)
+        out is n2 + " minutes"
+    or d < 86400
+        var m3 = div_int d 3600
+        var n3 = string(m3)
+        out is n3 + " hours"
+    or d < 2592000
+        var m4 = div_int d 86400
+        var n4 = string(m4)
+        out is n4 + " days"
+    or d < 31104000
+        var m5 = div_int d 2592000
+        var n5 = string(m5)
+        out is n5 + " months"
+    otherwise
+        var m6 = div_int d 31104000
+        var n6 = string(m6)
+        out is n6 + " years"
+    if future
+        give "in " + out
+    give out + " ago"
+
+#! Unix timestamp `n` seconds from now.
+fun NowPlus n
+    give time_now + n
+
+#! Whole days between two unix timestamps.
+fun DaysBetween a b
+    var diff = b - a
+    if diff < 0
+        diff is 0 - diff
+    var d = int(diff)
+    give div_int d 86400
+

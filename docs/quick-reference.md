@@ -57,15 +57,31 @@ x %= 5     #! x = x % 5
 Works with numeric variables. `+=` also merges lists and dicts.
 
 ## String Interpolation
+Indent supports native `%name%` interpolation in double- and single-quoted strings everywhere (assignments, arguments, lists, dicts, returns, and `say`):
 ```indent
 var name string = "Ada"
-var n = 42
-say "Hello %name%!"          #! → "Hello Ada!"
-say "n=%n%"                  #! → "n=42"  (ints/floats/lists/dicts render too)
-say 'single quotes %name%'   #! works in single quotes as well
+var age = 36
+var user = {"city": "London"}
+
+var msg = "Hello %name%, age %age%!"   #! → real string "Hello Ada, age 36!"
+var loc = 'User in %user.city%'        #! dotted chains work too
+say msg                                #! → "Hello Ada, age 36!"
 ```
-Only **simple variable names** — `%d.k%` and expressions are left literal, and an
-undefined name or stray `%` is left as-is (no error).
+- **Simple names & dotted chains**: `%name%`, `%user.city%`.
+- **Undefined names and literal `%`**: `"%unknown%"` and `"100%"` are preserved verbatim.
+- **`interpolate(template[, dict])`**: Programmatically evaluate templates with context or explicit dicts.
+
+### Operators & Method Chaining
+```indent
+#! Exponentiation & repetition
+var power = 2 ** 10                       #! → 1024
+var text  = "ha" * 3                      #! → "hahaha"
+var items = [1, 2] * 3                    #! → [1, 2, 1, 2, 1, 2]
+
+#! Chained methods & member access
+var clean = "  hello world  ".strip().upper()  #! → "HELLO WORLD"
+var city  = user.city                          #! dotted access on dicts
+```
 
 ## Functions
 ```indent

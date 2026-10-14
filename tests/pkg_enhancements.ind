@@ -1,0 +1,131 @@
+#! Test enhanced std packages: json, fs, strings
+get Loads from json
+get Dumps from json
+get Pretty from json
+get Clone from json
+get Merge from json
+get DeepMerge from json
+get GetOr from json
+get Has from json
+get FromFile from json
+get ToFile from json
+
+get ReadOr from fs
+get WriteLines from fs
+get ReadLines from fs
+get WriteJson from fs
+get ReadJson from fs
+get MkdirAll from fs
+get RemoveIfExists from fs
+
+get Lines from strings
+get RemovePrefix from strings
+get RemoveSuffix from strings
+get Partition from strings
+get Chars from strings
+get IsBlank from strings
+get ZFill from strings
+get CountOccurrences from strings
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+say "=== 1. JSON helpers ==="
+var d = {"name": "Ada", "age": 36}
+var s = Dumps d
+var back = Loads s
+assert_eq(back.name, "Ada")
+assert_eq(back.age, 36)
+
+#! Deep clone is independent
+var c = Clone d
+assert_eq(c.name, "Ada")
+
+#! Pointer access
+var p = {"user": {"name": "Ada", "roles": ["admin", "dev"]}}
+var pn = GetOr p "/user/name" "?"
+assert_eq(pn, "Ada")
+var pr = GetOr p "/user/roles/1" "?"
+assert_eq(pr, "dev")
+var pm = GetOr p "/user/missing" "none"
+assert_eq(pm, "none")
+var h1 = Has p "/user/name"
+assert_eq(h1, true)
+var h2 = Has p "/nope"
+assert_eq(h2, false)
+
+#! Merge (shallow + deep)
+var a = {"x": 1, "y": 2}
+var b = {"y": 20, "z": 3}
+var m = Merge(a, b)
+assert_eq(m.x, 1)
+assert_eq(m.y, 20)
+assert_eq(m.z, 3)
+
+var dm = DeepMerge({"cfg": {"a": 1, "b": 2}}, {"cfg": {"b": 9, "c": 3}})
+assert_eq(dm.cfg.a, 1)
+assert_eq(dm.cfg.b, 9)
+assert_eq(dm.cfg.c, 3)
+
+#! Pretty output contains newlines and indentation
+var pretty = Pretty d
+var has_name = contains(pretty, "name")
+assert(has_name)
+
+#! File round-trip
+ToFile "/tmp/indent_json_pkg.json" d
+var from_file = FromFile "/tmp/indent_json_pkg.json"
+assert_eq(from_file.name, "Ada")
+RemoveIfExists "/tmp/indent_json_pkg.json"
+
+say "=== 2. FS helpers ==="
+WriteLines "/tmp/indent_lines.txt" ["alpha", "beta", "gamma"]
+var lines = ReadLines "/tmp/indent_lines.txt"
+assert_eq(len(lines), 3)
+assert_eq(lines[0], "alpha")
+assert_eq(lines[2], "gamma")
+
+WriteJson "/tmp/indent_fs.json" {"k": "v"}
+var rj = ReadJson "/tmp/indent_fs.json"
+assert_eq(rj.k, "v")
+
+var ro = ReadOr "/tmp/does_not_exist_xyz.txt" "default"
+assert_eq(ro, "default")
+RemoveIfExists "/tmp/indent_lines.txt"
+RemoveIfExists "/tmp/indent_fs.json"
+
+var deepdir = "/tmp/indent_pkg_a/b/c"
+MkdirAll deepdir
+var ddx = os_exists deepdir
+assert_eq(ddx, true)
+
+say "=== 3. String helpers ==="
+var lns = Lines "a\nb\nc"
+assert_eq(lns, ["a", "b", "c"])
+var rpf = RemovePrefix "foobar" "foo"
+assert_eq(rpf, "bar")
+var rsf = RemoveSuffix "foobar" "bar"
+assert_eq(rsf, "foo")
+var part = Partition "key=value" "="
+assert_eq(part[0], "key")
+assert_eq(part[1], "=")
+assert_eq(part[2], "value")
+var chs = Chars "abc"
+assert_eq(chs, ["a", "b", "c"])
+var ib1 = IsBlank "   "
+assert_eq(ib1, true)
+var ib2 = IsBlank " x "
+assert_eq(ib2, false)
+var zf = ZFill "42" 5
+assert_eq(zf, "00042")
+var co = CountOccurrences "banana" "an"
+assert_eq(co, 2)
+
+say "package enhancements: ALL PASS"

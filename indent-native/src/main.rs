@@ -8,7 +8,7 @@ use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::process;
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::{connect as ws_connect_blocking, Message as WsMessage};
@@ -848,7 +848,37 @@ fn iterable_items(value: &Value) -> Option<Vec<Value>> {
     }
 }
 
-/// Interpolate %varname% placeholders in a string with values from the execution context.
+/// Helper to resolve simple identifiers or dotted chains like `user.name`
+/// from the execution context.
+fn resolve_context_value(name: &str, ctx: &ExecContext<'_>) -> Option<Value> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.contains('.') {
+        return ctx.get_var(trimmed);
+    }
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    let mut cur = ctx.get_var(parts[0])?;
+    for p in &parts[1..] {
+        match cur {
+            Value::Dict(ref map) => {
+                cur = map.get(*p)?.clone();
+            }
+            Value::Object { ref fields, .. } => {
+                cur = fields.get(*p)?.clone();
+            }
+            Value::Module(ref m) => {
+                cur = m.vars.get(*p)?.clone();
+            }
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
+/// Interpolate placeholders (%var%, ${var}, or {var}) in a string with values
+/// from the execution context. Supports dotted names (e.g. `%user.name%`).
 fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
@@ -863,7 +893,7 @@ fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
             }
             if j < bytes.len() && j > start {
                 let var_name = &s[start..j];
-                if let Some(val) = ctx.get_var(var_name) {
+                if let Some(val) = resolve_context_value(var_name, ctx) {
                     out.push_str(&val.to_string());
                 } else {
                     // Keep literal %varname% if var not found
@@ -873,6 +903,43 @@ fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
                 }
                 i = j + 1;
                 continue;
+            }
+        }
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != b'}' {
+                j += 1;
+            }
+            if j < bytes.len() && j > start {
+                let var_name = &s[start..j];
+                if let Some(val) = resolve_context_value(var_name, ctx) {
+                    out.push_str(&val.to_string());
+                } else {
+                    out.push_str("${");
+                    out.push_str(var_name);
+                    out.push('}');
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        if bytes[i] == b'{' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != b'}' {
+                j += 1;
+            }
+            if j < bytes.len() && j > start {
+                let var_name = &s[start..j];
+                // Only treat as variable placeholder if it looks like an identifier or dotted chain
+                if var_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                    if let Some(val) = resolve_context_value(var_name, ctx) {
+                        out.push_str(&val.to_string());
+                        i = j + 1;
+                        continue;
+                    }
+                }
             }
         }
         out.push(bytes[i] as char);
@@ -2263,6 +2330,17 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return http_serve_builtin(&handler, port, ctx);
     }
 
+    // Handle interpolate builtin — evaluate %var%, ${var}, or {var} in string.
+    if callee == "interpolate" {
+        if positional.is_empty() {
+            return Err("interpolate expects at least 1 argument: interpolate(template, [vars])".to_string());
+        }
+        if positional.len() == 1 || (positional.len() == 2 && matches!(positional[1], Value::Empty)) {
+            let template = positional[0].to_string();
+            return Ok(Value::Str(interpolate_string(&template, ctx)));
+        }
+    }
+
     // User-defined and imported functions take precedence over builtins
     // (Python-style shadowing), so std library functions like `Upper` or
     // `Append` are not hidden by case-insensitive builtin lookup.
@@ -2298,12 +2376,14 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
 fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static str> {
     match receiver {
         Value::List(_) => match method {
-            "append" => Some("append"),
-            "extend" => Some("extend"),
+            "append" | "push" => Some("append"),
+            "extend" | "concat" => Some("extend"),
             "insert" => Some("insert"),
+            "unshift" => Some("unshift"),
             "pop" => Some("pop"),
+            "shift" => Some("shift"),
             "remove" => Some("remove"),
-            "index" => Some("index"),
+            "index" | "indexof" => Some("index"),
             "copy" => Some("copy"),
             "clear" => Some("clear"),
             "count" => Some("count"),
@@ -2316,15 +2396,25 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
             "all" => Some("all"),
             "enumerate" => Some("enumerate"),
             "zip" => Some("zip"),
-            "contains" | "has" => Some("contains"),
+            "contains" | "has" | "includes" => Some("contains"),
+            "find" => Some("find"),
             "len" => Some("len"),
             "slice" => Some("slice"),
+            "join" => Some("join"),
+            "flatten" | "flat" => Some("flatten"),
+            "unique" => Some("unique"),
+            "chunk" => Some("chunk"),
+            "first" => Some("first"),
+            "last" => Some("last"),
             _ => None,
         },
         Value::Set(_) => match method {
             "add" => Some("set_add"),
             "remove" => Some("set_remove"),
-            "contains" | "has" => Some("set_contains"),
+            "contains" | "has" | "includes" => Some("set_contains"),
+            "union" => Some("set_union"),
+            "intersection" => Some("set_intersection"),
+            "difference" => Some("set_difference"),
             "len" => Some("len"),
             "copy" => Some("copy"),
             "clear" => Some("clear"),
@@ -2334,38 +2424,49 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
             "upper" => Some("upper"),
             "lower" => Some("lower"),
             "trim" | "strip" => Some("trim"),
-            "lstrip" => Some("lstrip"),
-            "rstrip" => Some("rstrip"),
+            "lstrip" | "trimstart" | "trim_start" => Some("lstrip"),
+            "rstrip" | "trimend" | "trim_end" => Some("rstrip"),
             "capitalize" => Some("capitalize"),
             "title" => Some("title"),
             "swapcase" => Some("swapcase"),
             "replace" => Some("replace"),
             "split" => Some("split"),
+            "splitlines" => Some("str_splitlines"),
             "starts_with" | "startswith" => Some("starts_with"),
             "ends_with" | "endswith" => Some("ends_with"),
-            "contains" | "has" => Some("contains"),
+            "contains" | "has" | "includes" => Some("contains"),
             "find" => Some("find"),
-            "index" => Some("index"),
+            "index" | "indexof" => Some("index"),
             "copy" => Some("copy"),
             "clear" => Some("clear"),
             "count" => Some("count"),
             "len" => Some("len"),
             "reverse" => Some("reverse"),
             "slice" => Some("slice"),
+            "pad_left" | "padleft" | "padstart" => Some("pad_left"),
+            "pad_right" | "padright" | "padend" => Some("pad_right"),
+            "repeat" => Some("repeat_str"),
+            "zfill" => Some("str_zfill"),
+            "removeprefix" | "remove_prefix" => Some("str_removeprefix"),
+            "removesuffix" | "remove_suffix" => Some("str_removesuffix"),
+            "partition" => Some("str_partition"),
+            "join" => Some("join"),
+            "char_at" | "charat" => Some("char_at"),
+            "char_code" | "charcode" | "charcodeat" => Some("ord"),
             _ => None,
         },
         Value::Dict(_) => match method {
             "keys" => Some("keys"),
             "values" => Some("values"),
-            "items" => Some("items"),
+            "items" | "entries" => Some("items"),
             "get" => Some("dict_get"),
             "set" => Some("dict_set"),
             "update" => Some("dict_update"),
-            "remove" => Some("dict_remove"),
+            "remove" | "pop" => Some("dict_remove"),
             "copy" => Some("copy"),
             "clear" => Some("clear"),
-            "has_key" | "contains_key" => Some("has_key"),
-            "contains" | "has" => Some("contains"),
+            "has_key" | "contains_key" | "has" => Some("has_key"),
+            "contains" | "includes" => Some("contains"),
             "len" => Some("len"),
             _ => None,
         },
@@ -2506,48 +2607,184 @@ fn invoke_object_method_call(
         )));
     }
 
-    // Handle Object method dispatch (classes)
+    Some(invoke_method_on_value(receiver, method_name, positional, ctx))
+}
+
+fn invoke_method_on_value(
+    target_val: Value,
+    method: &str,
+    args: &[Value],
+    ctx: &ExecContext<'_>,
+) -> Result<Value, String> {
+    let method_lc = method.to_ascii_lowercase();
+
+    // 1. Handle Object method dispatch (classes)
     if let Value::Object {
-        fields,
-        methods,
-        class_name,
+        ref fields,
+        ref methods,
+        ref class_name,
         ..
-    } = &receiver
+    } = target_val
     {
-        let method_lc = method_name.to_ascii_lowercase();
         if let Some(method_def) = methods.get(&method_lc) {
-            // Create a scope with object fields as local variables
-            let result = invoke_object_method(method_def, fields, positional, ctx);
-            return Some(result);
+            return invoke_object_method(method_def, fields, args, ctx);
         }
-        return Some(Err(format!(
-            "Object '{}' of class '{}' has no method '{}'",
-            receiver_name, class_name, method_name
-        )));
+        if let Some(Value::Func(fn_name)) = fields.get(method) {
+            let exprs: Vec<Expr> = args.iter().map(|v| match v {
+                Value::Int(i) => Expr::Int(*i),
+                Value::Float(f) => Expr::Float(*f),
+                Value::Bool(b) => Expr::Bool(*b),
+                Value::Str(s) => Expr::Str(s.clone()),
+                Value::Empty => Expr::Empty,
+                _ => Expr::Str(v.to_string()),
+            }).collect();
+            let mut temp_rt = Runtime::new(PathBuf::from("."));
+            temp_rt.vars = fields.clone();
+            temp_rt.classes = ctx.rt.classes.clone();
+            temp_rt.funcs = ctx.rt.funcs.clone();
+            temp_rt.callables = ctx.rt.callables.clone();
+            let mut temp_ctx = ExecContext::new(&mut temp_rt);
+            return invoke_callable_expr(fn_name, &exprs, &mut temp_ctx);
+        }
+        return Err(format!(
+            "Object of class '{class_name}' has no method '{method}'"
+        ));
     }
 
-    let method_lc = method_name.to_ascii_lowercase();
-    let builtin_name = match map_object_method_builtin(&receiver, &method_lc) {
+    // 2. Dict with function property (JS-style objects)
+    if let Value::Dict(ref map) = target_val {
+        if let Some(Value::Func(fn_name)) = map.get(method) {
+            let exprs: Vec<Expr> = args.iter().map(|v| match v {
+                Value::Int(i) => Expr::Int(*i),
+                Value::Float(f) => Expr::Float(*f),
+                Value::Bool(b) => Expr::Bool(*b),
+                Value::Str(s) => Expr::Str(s.clone()),
+                Value::Empty => Expr::Empty,
+                _ => Expr::Str(v.to_string()),
+            }).collect();
+            let mut temp_rt = Runtime::new(PathBuf::from("."));
+            temp_rt.vars = map.clone();
+            temp_rt.classes = ctx.rt.classes.clone();
+            temp_rt.funcs = ctx.rt.funcs.clone();
+            temp_rt.callables = ctx.rt.callables.clone();
+            let mut temp_ctx = ExecContext::new(&mut temp_rt);
+            return invoke_callable_expr(fn_name, &exprs, &mut temp_ctx);
+        }
+    }
+
+    // 2b. Module function invocation
+    if let Value::Module(ref m) = target_val {
+        if let Some(func_def) = m.funcs.get(method) {
+            let mut temp_rt = Runtime::new(PathBuf::from("."));
+            temp_rt.vars = m.vars.clone();
+            temp_rt.classes = ctx.rt.classes.clone();
+            temp_rt.funcs = ctx.rt.funcs.clone();
+            temp_rt.callables = ctx.rt.callables.clone();
+            let mut temp_ctx = ExecContext::new(&mut temp_rt);
+            return invoke_function(func_def, args, &HashMap::new(), &mut temp_ctx);
+        }
+        return Err(format!("Module has no function '{method}'"));
+    }
+
+    // 3. Built-in mapped methods on List, Str, Dict, Set
+    let builtin_name = match map_object_method_builtin(&target_val, &method_lc) {
         Some(name) => name,
         None => {
-            return Some(Err(format!(
-                "Unsupported method '{}' for receiver '{}'",
-                method_name, receiver_name
-            )))
+            return Err(format!(
+                "Unsupported method '{}' for {} value",
+                method, target_val.type_name()
+            ));
         }
     };
 
-    let mut args = Vec::with_capacity(positional.len() + 1);
-    args.push(receiver);
-    args.extend(positional.iter().cloned());
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(target_val);
+    call_args.extend(args.iter().cloned());
 
-    Some(match invoke_builtin(builtin_name, &args) {
+    match invoke_builtin(builtin_name, &call_args) {
         Some(result) => result,
         None => Err(format!(
             "Internal error: mapped method '{}' is not implemented",
             builtin_name
         )),
-    })
+    }
+}
+
+fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    match target_val {
+        Value::Dict(ref map) => {
+            if let Some(v) = map.get(field) {
+                Ok(v.clone())
+            } else if field == "length" || field == "len" || field == "size" {
+                Ok(Value::Int(map.len() as i64))
+            } else {
+                Err(format!("Dictionary has no key '{field}'"))
+            }
+        }
+        Value::Object { ref fields, .. } => {
+            if let Some(v) = fields.get(field) {
+                Ok(v.clone())
+            } else {
+                Err(format!("Object has no field '{field}'"))
+            }
+        }
+        Value::Module(ref m) => {
+            if let Some(v) = m.vars.get(field) {
+                Ok(v.clone())
+            } else if m.funcs.contains_key(field) {
+                Ok(Value::Func(field.to_string()))
+            } else {
+                Err(format!("Module has no attribute '{field}'"))
+            }
+        }
+        Value::List(ref items) => {
+            if field == "length" || field == "len" {
+                Ok(Value::Int(items.len() as i64))
+            } else if field == "first" {
+                items.first().cloned().ok_or_else(|| "List is empty".to_string())
+            } else if field == "last" {
+                items.last().cloned().ok_or_else(|| "List is empty".to_string())
+            } else {
+                Err(format!("List has no property '{field}'"))
+            }
+        }
+        Value::Str(ref s) => {
+            if field == "length" || field == "len" {
+                Ok(Value::Int(s.chars().count() as i64))
+            } else {
+                Err(format!("String has no property '{field}'"))
+            }
+        }
+        Value::Set(ref s) => {
+            if field == "length" || field == "len" || field == "size" {
+                Ok(Value::Int(s.len() as i64))
+            } else {
+                Err(format!("Set has no property '{field}'"))
+            }
+        }
+        _ => Err(format!("Cannot access '.{field}' on {} value", target_val.type_name())),
+    }
+}
+
+fn invoke_callable_value(
+    callee_val: &Value,
+    args: &[Value],
+    ctx: &mut ExecContext<'_>,
+) -> Result<Value, String> {
+    match callee_val {
+        Value::Func(name) => {
+            let exprs: Vec<Expr> = args.iter().map(|v| match v {
+                Value::Int(i) => Expr::Int(*i),
+                Value::Float(f) => Expr::Float(*f),
+                Value::Bool(b) => Expr::Bool(*b),
+                Value::Str(s) => Expr::Str(s.clone()),
+                Value::Empty => Expr::Empty,
+                _ => Expr::Str(v.to_string()),
+            }).collect();
+            invoke_callable_expr(name, &exprs, ctx)
+        }
+        _ => Err(format!("Value of type {} is not callable", callee_val.type_name())),
+    }
 }
 
 fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, String> {
@@ -2831,6 +3068,17 @@ fn invoke_callable_expr(
         return http_serve_builtin(&handler, port, ctx);
     }
 
+    // Handle interpolate builtin — evaluate %var%, ${var}, or {var} in string.
+    if callee == "interpolate" {
+        if positional.is_empty() {
+            return Err("interpolate expects at least 1 argument: interpolate(template, [vars])".to_string());
+        }
+        if positional.len() == 1 || (positional.len() == 2 && matches!(positional[1], Value::Empty)) {
+            let template = positional[0].to_string();
+            return Ok(Value::Str(interpolate_string(&template, ctx)));
+        }
+    }
+
     // User-defined and imported functions take precedence over builtins
     // (Python-style shadowing) — must match exec_call_inner so expression-level
     // calls to module functions (e.g. `Count(items)` inside a module) are not
@@ -2909,29 +3157,30 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
 const INDENT_BUILTINS: &[&str] = &[
     "abs", "add_int", "all", "any", "append", "ask", "assert", "assert_eq",
     "base64_decode", "base64_encode", "between_int", "bool", "boolean", "builtins",
-    "capitalize", "clamp", "clear", "coalesce", "colored", "contains", "coop", "copy", "count",
+    "capitalize", "char_at", "char_code", "chr", "clamp", "clear", "coalesce", "colored", "contains", "coop", "copy", "count",
     "bg", "bg_gradient", "bg_multicolor", "bg_rainbow", "fg", "gradient", "multicolor",
     "paint", "rainbow", "style",
     "counter", "csv_read", "csv_write", "dec", "default", "dict_get", "dict_items",
-    "dict_remove", "dict_set", "dict_update", "div_int", "ends_with", "enumerate",
+    "dict_remove", "dict_set", "dict_update", "div_int", "ends_with", "entries", "enumerate",
     "err", "error_message", "error_type", "extend", "false", "file_append_text",
     "file_read_text", "file_sha256", "file_size", "file_write_text", "filter", "find",
-    "float", "float_or", "format", "future", "future_cancel", "future_done",
+    "flat", "float", "float_or", "format", "from_char_code", "future", "future_cancel", "future_done",
     "future_result", "future_wait_for", "gather", "glob", "group", "gui_show_html",
     "gzip_compress", "gzip_decompress", "hash_sha256", "has_key", "http_delete",
     "http_delete_async", "http_get", "http_get_async", "http_patch_json",
     "http_post_json", "http_post_json_async", "http_put_json", "http_put_json_async",
-    "http_serve_dir", "http_serve", "inc", "index", "insert", "int", "int_or", "is_err", "is_even",
-    "is_missing", "is_odd", "is_ok", "items", "join", "json_dumps", "json_loads",
+    "http_serve_dir", "http_serve", "http_set_timeout", "http_timeout", "inc", "index", "insert", "int", "int_or", "interpolate",
+    "is_err", "is_even", "is_finite", "is_missing", "is_nan", "is_odd", "is_ok", "items", "join",
+    "json_dumps", "json_loads", "json_parse", "json_stringify",
     "keys", "len", "log", "lower", "lstrip", "map", "chain", "flatten", "chunk",
     "product", "permutations", "combinations", "accumulate", "cycle", "repeat_item",
     "takewhile", "dropwhile", "unique", "partition", "group_by", "max_key", "min_key",
     "reduce", "zip_longest", "pairwise", "filterfalse", "compress", "starmap", "first", "last",
     "math_abs", "math_acos", "math_asin", "math_atan", "math_atan2", "math_ceil",
-    "math_cos", "math_degrees", "math_e", "math_exp", "math_factorial", "math_floor",
+    "math_clamp", "math_cos", "math_degrees", "math_e", "math_exp", "math_factorial", "math_floor",
     "math_gcd", "math_hypot", "math_lcm", "math_log", "math_log10", "math_log2",
-    "math_pi", "math_pow", "math_radians", "math_round", "math_sin", "math_sqrt",
-    "math_tan", "math_tau", "max", "min", "mod_int", "mul_int", "ok", "os_chdir",
+    "math_pi", "math_pow", "math_radians", "math_round", "math_sign", "math_sin", "math_sqrt",
+    "math_tan", "math_tau", "math_trunc", "max", "min", "mod_int", "mul_int", "ok", "ord", "os_chdir",
     "os_copy", "os_copy_tree", "os_environ", "os_exists", "os_getcwd", "os_getenv",
     "os_is_dir", "os_is_file", "os_list_dir", "os_mkdir", "os_move", "os_remove",
     "os_rename", "os_run", "os_run_ok", "os_setenv", "os_system", "os_which", "pad_left", "pad_right",
@@ -2941,18 +3190,18 @@ const INDENT_BUILTINS: &[&str] = &[
     "python_exec", "python_run_file", "random_choice", "random_float", "random_int",
     "random_randint", "random_sample", "random_seed", "random_shuffle", "random_uniform",
     "range", "regex_findall", "regex_match",
-    "regex_replace", "regex_search", "regex_split", "remove", "repeat_str",
+    "regex_replace", "regex_search", "regex_split", "remove", "repeat", "repeat_str",
     "replace", "reverse", "rstrip", "run_file", "say", "set", "set_add", "set_contains",
     "set_difference", "set_intersection", "set_remove", "set_union", "sformat",
-    "sleep", "slice", "sort", "spawn", "split", "sqlite_exec", "sqlite_query",
+    "shift", "sign", "sleep", "slice", "sort", "spawn", "split", "sqlite_exec", "sqlite_query",
     "sqlite_query_one", "starts_with", "str", "str_center", "string", "str_ljust",
     "str_partition", "str_removeprefix", "str_removesuffix", "str_rjust",
     "str_splitlines", "str_zfill", "sub_int", "sum", "swapcase", "sys_arch",
     "sys_argv", "sys_executable", "sys_platform", "sys_version", "task_done",
     "task_result", "task_wait", "task_wait_all", "task_wait_timeout", "time_format",
     "time_now", "time_parse", "time_perf_counter", "time_sleep", "time_utc",
-    "title", "to_list", "toml_dumps", "toml_loads", "trim", "true", "try", "type_of", "typeof",
-    "is_list", "is_dict", "is_string", "is_number", "is_int", "is_float", "is_bool", "is_group",
+    "title", "to_list", "toml_dumps", "toml_loads", "trim", "true", "trunc", "try", "type_of", "typeof",
+    "unshift", "is_list", "is_dict", "is_string", "is_number", "is_int", "is_float", "is_bool", "is_group",
     "is_generator", "unwrap", "upper", "uuid", "values", "walk", "ws_close", "ws_connect",
     "ws_recv_text", "ws_recv_text_timeout", "ws_send_text", "yaml_dumps",
     "yaml_loads", "zip", "zip_extract", "zip_list",
@@ -3119,10 +3368,10 @@ fn builtin_category(name: &str) -> &'static str {
     if name.starts_with("python_") { return "interop"; }
     if name.starts_with("base64_") || name.starts_with("hash_") || name == "uuid" { return "crypto"; }
     if name.starts_with("set_") || name == "set" || name == "group" { return "group"; }
-    if name.starts_with("dict_") || matches!(name, "keys" | "values" | "items" | "has_key") { return "dict"; }
+    if name.starts_with("dict_") || matches!(name, "keys" | "values" | "items" | "entries" | "has_key") { return "dict"; }
     if matches!(name, "ok" | "err" | "is_ok" | "is_err" | "unwrap" | "try") { return "result"; }
     if matches!(name, "is_list" | "is_dict" | "is_string" | "is_number" | "is_int"
-        | "is_float" | "is_bool" | "is_group" | "is_generator" | "type_of" | "typeof" | "type_name") {
+        | "is_float" | "is_bool" | "is_group" | "is_generator" | "is_nan" | "is_finite" | "type_of" | "typeof" | "type_name") {
         return "types";
     }
 
@@ -3130,17 +3379,19 @@ fn builtin_category(name: &str) -> &'static str {
         "upper" | "lower" | "trim" | "lstrip" | "rstrip" | "capitalize" | "title"
         | "swapcase" | "replace" | "split" | "join" | "starts_with" | "ends_with"
         | "contains" | "find" | "slice" | "len" | "reverse" | "format" | "sformat"
-        | "repeat_str" | "pad_left" | "pad_right" | "string" => "string",
+        | "repeat_str" | "repeat" | "pad_left" | "pad_right" | "string"
+        | "char_at" | "char_code" | "from_char_code" | "chr" | "ord" | "interpolate" => "string",
         "append" | "extend" | "insert" | "pop" | "remove" | "sort" | "enumerate"
         | "zip" | "range" | "count" | "index" | "sum" | "min" | "max" | "any" | "all"
-        | "filter" | "map" | "copy" | "clear" | "chain" | "flatten" | "chunk"
+        | "filter" | "map" | "copy" | "clear" | "chain" | "flatten" | "flat" | "chunk"
         | "product" | "permutations" | "combinations" | "accumulate" | "cycle"
         | "repeat_item" | "takewhile" | "dropwhile" | "unique" | "partition" | "group_by"
         | "max_key" | "min_key" | "reduce" | "zip_longest" | "pairwise"
-        | "filterfalse" | "compress" | "starmap" | "first" | "last" | "to_list" => "list",
+        | "filterfalse" | "compress" | "starmap" | "first" | "last" | "to_list"
+        | "shift" | "unshift" => "list",
         "abs" | "int" | "float" | "int_or" | "float_or" | "between_int" | "is_even"
         | "is_odd" | "inc" | "dec" | "add_int" | "sub_int" | "mul_int" | "div_int"
-        | "mod_int" | "bool" | "boolean" | "clamp" | "counter" => "math",
+        | "mod_int" | "bool" | "boolean" | "clamp" | "math_clamp" | "sign" | "trunc" | "counter" => "math",
         "say" | "print" | "ask" | "log" | "colored" | "colorize" | "fg" | "bg"
         | "style" | "gradient" | "bg_gradient" | "multicolor" | "bg_multicolor"
         | "rainbow" | "bg_rainbow" | "paint" => "io",
@@ -3167,24 +3418,24 @@ fn is_safe_builtin(name: &str) -> bool {
         name,
         "abs" | "add_int" | "all" | "any" | "append" | "assert" | "assert_eq"
         | "between_int" | "bool" | "boolean" | "builtins" | "capitalize" | "clamp"
-        | "clear" | "coalesce" | "colored" | "contains" | "copy" | "count" | "counter"
+        | "char_at" | "char_code" | "chr" | "clear" | "coalesce" | "colored" | "contains" | "copy" | "count" | "counter"
         | "bg" | "bg_gradient" | "bg_multicolor" | "bg_rainbow" | "fg" | "gradient"
         | "multicolor" | "paint" | "rainbow" | "style" | "dec" | "default" | "dict_get"
         | "dict_items" | "dict_remove" | "dict_set" | "dict_update" | "div_int"
-        | "ends_with" | "enumerate" | "extend" | "false" | "filter" | "find" | "float"
-        | "float_or" | "format" | "group" | "gzip_compress" | "gzip_decompress"
-        | "hash_sha256" | "has_key" | "inc" | "index" | "insert" | "int" | "int_or"
-        | "items" | "join" | "json_dumps" | "json_loads" | "keys" | "len" | "lower"
+        | "ends_with" | "entries" | "enumerate" | "extend" | "false" | "filter" | "find" | "flat" | "float"
+        | "float_or" | "format" | "from_char_code" | "group" | "gzip_compress" | "gzip_decompress"
+        | "hash_sha256" | "has_key" | "inc" | "index" | "insert" | "int" | "int_or" | "interpolate"
+        | "items" | "join" | "json_dumps" | "json_loads" | "json_parse" | "json_stringify" | "keys" | "len" | "lower"
         | "lstrip" | "map" | "chain" | "flatten" | "chunk" | "product" | "permutations"
         | "combinations" | "accumulate" | "cycle" | "repeat_item" | "takewhile"
         | "dropwhile" | "unique" | "partition" | "group_by" | "max_key" | "min_key"
         | "reduce" | "zip_longest" | "pairwise" | "filterfalse" | "compress" | "starmap"
-        | "first" | "last" | "max" | "min" | "mod_int" | "mul_int" | "ok" | "pad_left"
-        | "pad_right" | "pop" | "print" | "range" | "remove" | "repeat_str" | "replace"
-        | "reverse" | "rstrip" | "say" | "set" | "sformat" | "slice" | "sort" | "split"
+        | "first" | "last" | "max" | "min" | "mod_int" | "mul_int" | "ok" | "ord" | "pad_left"
+        | "pad_right" | "pop" | "print" | "range" | "remove" | "repeat" | "repeat_str" | "replace"
+        | "reverse" | "rstrip" | "say" | "set" | "sformat" | "shift" | "sign" | "slice" | "sort" | "split"
         | "starts_with" | "str" | "string" | "sub_int" | "sum" | "swapcase" | "title"
-        | "to_list" | "toml_dumps" | "toml_loads" | "trim" | "true" | "type_of"
-        | "typeof" | "upper" | "values" | "uuid" | "yaml_dumps" | "yaml_loads"
+        | "to_list" | "toml_dumps" | "toml_loads" | "trim" | "true" | "trunc" | "type_of"
+        | "typeof" | "unshift" | "upper" | "values" | "uuid" | "yaml_dumps" | "yaml_loads"
         | "time_format" | "time_parse" | "time_now" | "time_perf_counter" | "time_utc"
         | "sys_arch" | "sys_platform" | "sys_version"
     )
@@ -3480,16 +3731,63 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             Some(Ok(Value::List(pieces)))
         }
         "join" => {
-            if positional.len() != 2 {
-                return Some(Err("join expects exactly 2 arguments: join(list, separator)".to_string()));
+            if positional.is_empty() || positional.len() > 2 {
+                return Some(Err("join expects 1 or 2 arguments: join(list, [separator]) or join(separator, list)".to_string()));
             }
-            let items = match &positional[0] {
-                Value::List(v) => v,
-                _ => return Some(Err(format!("join expects a list, got {}", positional[0].type_name()))),
+            let (items, sep) = if positional.len() == 1 {
+                match &positional[0] {
+                    Value::List(v) => (v.clone(), String::new()),
+                    _ => return Some(Err(format!("join expects a list, got {}", positional[0].type_name()))),
+                }
+            } else {
+                match (&positional[0], &positional[1]) {
+                    (Value::List(v), sep_val) => (v.clone(), sep_val.to_string()),
+                    (sep_val, Value::List(v)) => (v.clone(), sep_val.to_string()),
+                    _ => return Some(Err(format!("join expects a list and a separator, got {} and {}", positional[0].type_name(), positional[1].type_name()))),
+                }
             };
-            let sep = positional[1].to_string();
             let out = items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&sep);
             Some(Ok(Value::Str(out)))
+        }
+        "chr" | "from_char_code" => {
+            if positional.len() != 1 {
+                return Some(Err("chr expects exactly 1 argument (code)".to_string()));
+            }
+            let code = match positional[0].as_number() {
+                Some(n) => n as u32,
+                None => return Some(Err("chr code must be integer".to_string())),
+            };
+            match char::from_u32(code) {
+                Some(c) => Some(Ok(Value::Str(c.to_string()))),
+                None => Some(Err(format!("chr invalid Unicode code point: {code}"))),
+            }
+        }
+        "ord" | "char_code" => {
+            if positional.len() != 1 {
+                return Some(Err("ord expects exactly 1 argument (string)".to_string()));
+            }
+            let s = positional[0].to_string();
+            match s.chars().next() {
+                Some(c) => Some(Ok(Value::Int(c as u32 as i64))),
+                None => Some(Err("ord expects non-empty string".to_string())),
+            }
+        }
+        "char_at" => {
+            if positional.len() != 2 {
+                return Some(Err("char_at expects exactly 2 arguments (string, index)".to_string()));
+            }
+            let s = positional[0].to_string();
+            let idx = match &positional[1] {
+                Value::Int(i) => *i,
+                _ => return Some(Err("char_at index must be int".to_string())),
+            };
+            let count = s.chars().count();
+            if let Some(norm) = normalize_index(count, idx) {
+                let ch = s.chars().nth(norm).unwrap_or('\0');
+                Some(Ok(Value::Str(ch.to_string())))
+            } else {
+                Some(Ok(Value::Str(String::new())))
+            }
         }
         "upper" => {
             if positional.len() != 1 {
@@ -4110,6 +4408,33 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             result.insert("list".to_string(), Value::List(out));
             Some(Ok(Value::Dict(result)))
         }
+        "unshift" => {
+            if positional.len() != 2 {
+                return Some(Err("unshift expects exactly 2 arguments: unshift(list, item)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v,
+                _ => return Some(Err(format!("unshift expects a list, got {}", positional[0].type_name()))),
+            };
+            let mut out = Vec::with_capacity(items.len() + 1);
+            out.push(positional[1].clone());
+            out.extend(items.iter().cloned());
+            Some(Ok(Value::List(out)))
+        }
+        "shift" => {
+            if positional.len() != 1 {
+                return Some(Err("shift expects exactly 1 argument: shift(list)".to_string()));
+            }
+            let items = match &positional[0] {
+                Value::List(v) => v,
+                _ => return Some(Err(format!("shift expects a list, got {}", positional[0].type_name()))),
+            };
+            if items.is_empty() {
+                Some(Ok(Value::List(Vec::new())))
+            } else {
+                Some(Ok(Value::List(items[1..].to_vec())))
+            }
+        }
         "remove" => {
             if positional.len() != 2 {
                 return Some(Err(
@@ -4179,7 +4504,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(Ok(Value::List(out)))
         }
-        "items" | "dict_items" => {
+        "items" | "dict_items" | "entries" => {
             if positional.len() != 1 {
                 return Some(Err("items expects exactly 1 argument (dictionary)".to_string()));
             }
@@ -4444,7 +4769,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
 
             Some(Ok(Value::Empty))
         }
-        "clamp" => {
+        "clamp" | "math_clamp" => {
             if positional.len() != 3 {
                 return Some(Err(
                     "clamp expects exactly 3 arguments: clamp(value, min, max)".to_string(),
@@ -5032,6 +5357,27 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 ))),
             }
         }
+        "is_nan" => {
+            if positional.len() != 1 {
+                return Some(Err("is_nan expects exactly 1 argument".to_string()));
+            }
+            let is_n = match &positional[0] {
+                Value::Float(f) => f.is_nan(),
+                _ => false,
+            };
+            Some(Ok(Value::Bool(is_n)))
+        }
+        "is_finite" => {
+            if positional.len() != 1 {
+                return Some(Err("is_finite expects exactly 1 argument".to_string()));
+            }
+            let is_f = match &positional[0] {
+                Value::Int(_) => true,
+                Value::Float(f) => f.is_finite(),
+                _ => false,
+            };
+            Some(Ok(Value::Bool(is_f)))
+        }
         "http_get" => {
             if positional.is_empty() || positional.len() > 2 {
                 return Some(Err(
@@ -5113,6 +5459,23 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             Some(http_serve_dir_builtin(&dir, port))
         }
         // ── Async I/O — run an HTTP builtin on a background thread, return a future id ──
+        "http_set_timeout" => {
+            if positional.len() != 1 {
+                return Some(Err("http_set_timeout expects exactly 1 argument (seconds)".to_string()));
+            }
+            let secs = match positional[0].as_number() {
+                Some(n) if n >= 0.0 => n,
+                _ => return Some(Err("http_set_timeout seconds must be a non-negative number".to_string())),
+            };
+            HTTP_TIMEOUT_MS.store((secs * 1000.0) as u64, Ordering::Relaxed);
+            Some(Ok(Value::Empty))
+        }
+        "http_timeout" => {
+            if !positional.is_empty() {
+                return Some(Err("http_timeout takes no arguments".to_string()));
+            }
+            Some(Ok(Value::Float(http_timeout().as_secs_f64())))
+        }
         "http_get_async" => {
             if positional.is_empty() || positional.len() > 2 {
                 return Some(Err("http_get_async expects 1 or 2 arguments: http_get_async(url, [authorization])".to_string()));
@@ -5151,7 +5514,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let height: i32 = positional.get(3).and_then(|v| v.to_string().parse().ok()).unwrap_or(800);
             return Some(gui_show_html_builtin(&html, &title, width, height));
         }
-        "json_dumps" => {
+        "json_dumps" | "json_stringify" => {
             if positional.len() != 1 {
                 return Some(Err("json_dumps expects exactly 1 argument".to_string()));
             }
@@ -5161,7 +5524,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Err(e) => Some(Err(format!("json_dumps failed: {e}"))),
             }
         }
-        "json_loads" => {
+        "json_loads" | "json_parse" => {
             if positional.len() != 1 {
                 return Some(Err("json_loads expects exactly 1 argument".to_string()));
             }
@@ -5602,6 +5965,27 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(math_round_builtin(&positional[0], &positional[1]))
         }
+        "math_trunc" | "trunc" => {
+            if positional.len() != 1 {
+                return Some(Err("trunc expects exactly 1 argument".to_string()));
+            }
+            match positional[0].as_number() {
+                Some(n) => Some(Ok(Value::Int(n.trunc() as i64))),
+                None => Some(Err("trunc expects a number".to_string())),
+            }
+        }
+        "math_sign" | "sign" => {
+            if positional.len() != 1 {
+                return Some(Err("sign expects exactly 1 argument".to_string()));
+            }
+            match positional[0].as_number() {
+                Some(n) => {
+                    let s = if n > 0.0 { 1 } else if n < 0.0 { -1 } else { 0 };
+                    Some(Ok(Value::Int(s)))
+                }
+                None => Some(Err("sign expects a number".to_string())),
+            }
+        }
         "math_sin" => {
             if positional.len() != 1 {
                 return Some(Err("math_sin expects exactly 1 argument".to_string()));
@@ -5922,7 +6306,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Some(Ok(Value::Str(format!("{}{}", text, padding))))
             }
         }
-        "repeat_str" => {
+        "repeat_str" | "repeat" => {
             if positional.len() != 2 {
                 return Some(Err("repeat_str expects exactly 2 arguments: repeat_str(text, count)".to_string()));
             }
@@ -5960,6 +6344,22 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 i += 2;
             }
             Some(Ok(Value::Str(result)))
+        }
+        "interpolate" => {
+            if positional.is_empty() {
+                return Some(Err("interpolate expects at least 1 argument: interpolate(template, [vars])".to_string()));
+            }
+            let mut template = positional[0].to_string();
+            if positional.len() > 1 {
+                if let Value::Dict(ref map) = positional[1] {
+                    for (k, v) in map {
+                        template = template.replace(&format!("%{}%", k), &v.to_string());
+                        template = template.replace(&format!("${{{}}}", k), &v.to_string());
+                        template = template.replace(&format!("{{{}}}", k), &v.to_string());
+                    }
+                }
+            }
+            Some(Ok(Value::Str(template)))
         }
         // ── UUID ───────────────────────────────────────────────
         "uuid" => {
@@ -6287,7 +6687,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             Some(Ok(Value::List(out)))
         }
-        "flatten" => {
+        "flatten" | "flat" => {
             if positional.len() != 1 {
                 return Some(Err("flatten expects exactly 1 argument (list)".to_string()));
             }
@@ -8309,36 +8709,111 @@ fn time_format_builtin(timestamp: &Value, format: Option<&Value>) -> Result<Valu
         Value::Int(i) => *i as f64,
         _ => return Err("time_format expects a numeric timestamp".to_string()),
     };
-    let fmt_str = format.map(|v| v.to_string()).unwrap_or_else(|| "%Y-%m-%d %H:%M:%S".to_string());
-    // Simple formatting using chrono-style specifiers
-    let secs = ts_secs.trunc() as i64;
-    let nanos = ((ts_secs - ts_secs.trunc()) * 1_000_000_000.0) as u32;
-    let d = UNIX_EPOCH + std::time::Duration::new(secs as u64, nanos);
-    // Basic format: just return ISO 8601 for now
-    let total_secs = d.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let days = total_secs / 86400;
-    let time_secs = total_secs % 86400;
-    let hours = time_secs / 3600;
-    let minutes = (time_secs % 3600) / 60;
-    let seconds = time_secs % 60;
-    let result = if fmt_str.contains("%Y") {
-        // Very basic date calc (approximately correct for ~50 years around 2000)
-        let year = 1970 + (days / 365) as i64;
-        let day_of_year = days % 365;
-        let mut month = 1;
-        let months_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        let mut remaining = day_of_year as usize;
-        for &md in &months_days {
-            if remaining < md { break; }
-            remaining -= md;
-            month += 1;
+    let fmt_str = format
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "%Y-%m-%d %H:%M:%S".to_string());
+
+    let secs = ts_secs.floor() as i64;
+    let d = UNIX_EPOCH + std::time::Duration::new(secs as u64, 0);
+    let total_secs = d.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+
+    // Break the epoch second count into calendar fields (UTC), using the
+    // civil-from-days algorithm (accurate for the full i64 range, incl. leap years).
+    let days = total_secs.div_euclid(86400);
+    let tod = total_secs.rem_euclid(86400);
+    let hours = tod / 3600;
+    let minutes = (tod % 3600) / 60;
+    let seconds = tod % 60;
+
+    let (year, month, day) = civil_from_days(days);
+
+    // Day of year (1-based) for %j.
+    let jan1_days = days_from_civil(year, 1, 1);
+    let day_of_year = days - jan1_days + 1;
+
+    // Weekday: 1970-01-01 was a Thursday (index 4 with Sunday = 0).
+    let weekday = (days.rem_euclid(7) + 4).rem_euclid(7);
+
+    const MONTHS: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August",
+        "September", "October", "November", "December",
+    ];
+    const DAYS: [&str; 7] = [
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    ];
+
+    let hour12 = if hours % 12 == 0 { 12 } else { hours % 12 };
+    let ampm = if hours < 12 { "AM" } else { "PM" };
+
+    let mut out = String::with_capacity(fmt_str.len() + 8);
+    let bytes = fmt_str.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 1 < bytes.len() {
+            let spec = bytes[i + 1] as char;
+            i += 2;
+            match spec {
+                'Y' => out.push_str(&format!("{:04}", year)),
+                'y' => out.push_str(&format!("{:02}", year.rem_euclid(100))),
+                'm' => out.push_str(&format!("{:02}", month)),
+                'd' => out.push_str(&format!("{:02}", day)),
+                'e' => out.push_str(&format!("{:2}", day)),
+                'H' => out.push_str(&format!("{:02}", hours)),
+                'I' => out.push_str(&format!("{:02}", hour12)),
+                'M' => out.push_str(&format!("{:02}", minutes)),
+                'S' => out.push_str(&format!("{:02}", seconds)),
+                'p' => out.push_str(ampm),
+                'P' => out.push_str(&ampm.to_lowercase()),
+                'j' => out.push_str(&format!("{:03}", day_of_year)),
+                'w' => out.push_str(&format!("{}", weekday)),
+                'A' => out.push_str(DAYS[weekday as usize]),
+                'a' => out.push_str(&DAYS[weekday as usize][..3]),
+                'B' => out.push_str(MONTHS[(month - 1) as usize]),
+                'b' | 'h' => out.push_str(&MONTHS[(month - 1) as usize][..3]),
+                'F' => out.push_str(&format!("{:04}-{:02}-{:02}", year, month, day)),
+                'T' => out.push_str(&format!("{:02}:{:02}:{:02}", hours, minutes, seconds)),
+                'R' => out.push_str(&format!("{:02}:{:02}", hours, minutes)),
+                'D' => out.push_str(&format!("{:02}/{:02}/{:02}", month, day, year.rem_euclid(100))),
+                's' => out.push_str(&format!("{}", total_secs)),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                '%' => out.push('%'),
+                other => {
+                    out.push('%');
+                    out.push(other);
+                }
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
         }
-        let day = remaining + 1;
-        format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
-    } else {
-        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
-    };
-    Ok(Value::Str(result))
+    }
+    Ok(Value::Str(out))
+}
+
+/// Days since 1970-01-01 for a civil date (proleptic Gregorian), via Hinnant's algorithm.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as i64; // [0, 399]
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146097 + doe - 719468
+}
+
+/// Civil (year, month, day) from days since 1970-01-01 (Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 fn time_parse_builtin(datetime_str: &Value, _format: Option<&Value>) -> Result<Value, String> {
@@ -8350,7 +8825,7 @@ fn time_parse_builtin(datetime_str: &Value, _format: Option<&Value>) -> Result<V
             parts[0].parse::<i64>(), parts[1].parse::<i64>(), parts[2].parse::<i64>(),
             parts[3].parse::<i64>(), parts[4].parse::<i64>(), parts[5].parse::<f64>(),
         ) {
-            let days = (y - 1970) * 365 + (m - 1) * 30 + (d - 1) as i64;
+            let days = days_from_civil(y, m as u32, d as u32);
             let ts = days as f64 * 86400.0 + h as f64 * 3600.0 + min as f64 * 60.0 + s;
             return Ok(Value::Float(ts));
         }
@@ -8811,35 +9286,70 @@ fn value_to_json(value: &Value) -> JsonValue {
     }
 }
 
-fn http_response_value(status: i64, body: String) -> Value {
+/// Shared HTTP client — created once and reused for every request. Reusing the
+/// client keeps the connection pool (and TLS sessions) alive, so successive
+/// calls to the same host skip the TCP + TLS handshake. This is the single
+/// biggest HTTP performance win for bots (Discord) and AI clients.
+static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .pool_max_idle_per_host(16)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new())
+});
+
+/// Per-request timeout in milliseconds. 0 = use the default (30s). Settable at
+/// runtime with the `http_set_timeout(seconds)` builtin.
+static HTTP_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
+
+fn http_timeout() -> Duration {
+    let ms = HTTP_TIMEOUT_MS.load(Ordering::Relaxed);
+    Duration::from_millis(if ms == 0 { 30_000 } else { ms })
+}
+
+fn http_response_value(status: i64, body: String, headers: HashMap<String, Value>) -> Value {
     let mut out = HashMap::new();
     out.insert("ok".to_string(), Value::Bool((200..300).contains(&status)));
     out.insert("status".to_string(), Value::Int(status));
     out.insert("body".to_string(), Value::Str(body));
+    out.insert("headers".to_string(), Value::Dict(headers));
     Value::Dict(out)
 }
 
+/// Collect response headers into an Indent dict (lowercased names → values).
+fn http_headers_map(resp: &reqwest::blocking::Response) -> HashMap<String, Value> {
+    let mut out = HashMap::new();
+    for (k, v) in resp.headers().iter() {
+        if let Ok(s) = v.to_str() {
+            out.insert(k.as_str().to_ascii_lowercase(), Value::Str(s.to_string()));
+        }
+    }
+    out
+}
+
 fn http_get_builtin(url: &str, authorization: &str) -> Result<Value, String> {
-    let client = reqwest::blocking::Client::new();
-    let mut req = client.get(url);
+    let mut req = HTTP_CLIENT.get(url).timeout(http_timeout());
     if !authorization.trim().is_empty() {
         req = req.header(reqwest::header::AUTHORIZATION, authorization.trim());
     }
 
     let resp = req.send().map_err(|e| format!("http_get request failed: {e}"))?;
     let status = resp.status().as_u16() as i64;
+    let headers = http_headers_map(&resp);
     let body = resp
         .text()
         .map_err(|e| format!("http_get failed to read response body: {e}"))?;
-    Ok(http_response_value(status, body))
+    Ok(http_response_value(status, body, headers))
 }
 
 fn http_post_json_builtin(url: &str, payload: Value, authorization: &str) -> Result<Value, String> {
-    let client = reqwest::blocking::Client::new();
     let json_payload = value_to_json(&payload);
 
-    let mut req = client
+    let mut req = HTTP_CLIENT
         .post(url)
+        .timeout(http_timeout())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&json_payload);
 
@@ -8851,18 +9361,19 @@ fn http_post_json_builtin(url: &str, payload: Value, authorization: &str) -> Res
         .send()
         .map_err(|e| format!("http_post_json request failed: {e}"))?;
     let status = resp.status().as_u16() as i64;
+    let headers = http_headers_map(&resp);
     let body = resp
         .text()
         .map_err(|e| format!("http_post_json failed to read response body: {e}"))?;
-    Ok(http_response_value(status, body))
+    Ok(http_response_value(status, body, headers))
 }
 
 fn http_put_json_builtin(url: &str, payload: Value, authorization: &str) -> Result<Value, String> {
-    let client = reqwest::blocking::Client::new();
     let json_payload = value_to_json(&payload);
 
-    let mut req = client
+    let mut req = HTTP_CLIENT
         .put(url)
+        .timeout(http_timeout())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&json_payload);
 
@@ -8874,18 +9385,19 @@ fn http_put_json_builtin(url: &str, payload: Value, authorization: &str) -> Resu
         .send()
         .map_err(|e| format!("http_put_json request failed: {e}"))?;
     let status = resp.status().as_u16() as i64;
+    let headers = http_headers_map(&resp);
     let body = resp
         .text()
         .map_err(|e| format!("http_put_json failed to read response body: {e}"))?;
-    Ok(http_response_value(status, body))
+    Ok(http_response_value(status, body, headers))
 }
 
 fn http_patch_json_builtin(url: &str, payload: Value, authorization: &str) -> Result<Value, String> {
-    let client = reqwest::blocking::Client::new();
     let json_payload = value_to_json(&payload);
 
-    let mut req = client
+    let mut req = HTTP_CLIENT
         .patch(url)
+        .timeout(http_timeout())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&json_payload);
 
@@ -8897,15 +9409,15 @@ fn http_patch_json_builtin(url: &str, payload: Value, authorization: &str) -> Re
         .send()
         .map_err(|e| format!("http_patch_json request failed: {e}"))?;
     let status = resp.status().as_u16() as i64;
+    let headers = http_headers_map(&resp);
     let body = resp
         .text()
         .map_err(|e| format!("http_patch_json failed to read response body: {e}"))?;
-    Ok(http_response_value(status, body))
+    Ok(http_response_value(status, body, headers))
 }
 
 fn http_delete_builtin(url: &str, authorization: &str) -> Result<Value, String> {
-    let client = reqwest::blocking::Client::new();
-    let mut req = client.delete(url);
+    let mut req = HTTP_CLIENT.delete(url).timeout(http_timeout());
 
     if !authorization.trim().is_empty() {
         req = req.header(reqwest::header::AUTHORIZATION, authorization.trim());
@@ -8915,10 +9427,11 @@ fn http_delete_builtin(url: &str, authorization: &str) -> Result<Value, String> 
         .send()
         .map_err(|e| format!("http_delete request failed: {e}"))?;
     let status = resp.status().as_u16() as i64;
+    let headers = http_headers_map(&resp);
     let body = resp
         .text()
         .map_err(|e| format!("http_delete failed to read response body: {e}"))?;
-    Ok(http_response_value(status, body))
+    Ok(http_response_value(status, body, headers))
 }
 
 fn http_serve_dir_builtin(dir: &str, port: u16) -> Result<Value, String> {
@@ -9507,6 +10020,8 @@ enum Expr {
         true_expr: Box<Expr>,
         false_expr: Box<Expr>,
     },
+    Member { target: Box<Expr>, field: String },
+    MethodCall { target: Box<Expr>, method: String, args: Vec<Expr> },
 }
 
 // Preprocess an expression string: convert space-separated function calls
@@ -9563,7 +10078,13 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
         Expr::Int(v) => Ok(Value::Int(*v)),
         Expr::Float(v) => Ok(Value::Float(*v)),
         Expr::Bool(v) => Ok(Value::Bool(*v)),
-        Expr::Str(v) => Ok(Value::Str(v.clone())),
+        Expr::Str(v) => {
+            if v.contains('%') {
+                Ok(Value::Str(interpolate_string(v, ctx)))
+            } else {
+                Ok(Value::Str(v.clone()))
+            }
+        }
         Expr::Empty => Ok(Value::Empty),
         Expr::List(items) => {
             let mut out = Vec::with_capacity(items.len());
@@ -9736,6 +10257,18 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             } else {
                 eval_ast(false_expr, ctx)
             }
+        }
+        Expr::Member { target, field } => {
+            let target_val = eval_ast(target, ctx)?;
+            resolve_member_access(target_val, field, ctx)
+        }
+        Expr::MethodCall { target, method, args } => {
+            let target_val = eval_ast(target, ctx)?;
+            let mut arg_vals = Vec::with_capacity(args.len());
+            for a in args {
+                arg_vals.push(eval_ast(a, ctx)?);
+            }
+            invoke_method_on_value(target_val, method, &arg_vals, ctx)
         }
     }
 }
@@ -10159,7 +10692,37 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
             }
         },
         "-" => numeric_bin(a, b, |x, y| x - y),
-        "*" => numeric_bin(a, b, |x, y| x * y),
+        "*" => {
+            match (&a, &b) {
+                (Value::Str(s), Value::Int(n)) | (Value::Int(n), Value::Str(s)) => {
+                    let count = if *n < 0 { 0 } else { *n as usize };
+                    Ok(Value::Str(s.repeat(count)))
+                }
+                (Value::List(l), Value::Int(n)) | (Value::Int(n), Value::List(l)) => {
+                    let count = if *n < 0 { 0 } else { *n as usize };
+                    let mut out = Vec::with_capacity(l.len() * count);
+                    for _ in 0..count {
+                        out.extend(l.iter().cloned());
+                    }
+                    Ok(Value::List(out))
+                }
+                _ => numeric_bin(a, b, |x, y| x * y),
+            }
+        },
+        "**" => match (&a, &b) {
+            (Value::Int(x), Value::Int(y)) if *y >= 0 && *y <= 62 => {
+                if let Some(res) = x.checked_pow(*y as u32) {
+                    Ok(Value::Int(res))
+                } else {
+                    Ok(Value::Float((*x as f64).powf(*y as f64)))
+                }
+            }
+            _ => {
+                let x = a.as_number().ok_or_else(|| format!("Expected number for '**', got {}", a.type_name()))?;
+                let y = b.as_number().ok_or_else(|| format!("Expected number for '**', got {}", b.type_name()))?;
+                Ok(Value::Float(x.powf(y)))
+            }
+        },
         "/" => numeric_bin(a, b, |x, y| x / y),
         "%" => numeric_bin(a, b, |x, y| x % y),
         "==" => Ok(Value::Bool(eq_values(&a, &b))),
@@ -10365,7 +10928,7 @@ impl<'a> Lexer<'a> {
                 None
             };
             if let Some(sym) = two {
-                if ["==", "!=", ">=", "<=", "<<", ">>"].contains(&sym) {
+                if ["==", "!=", ">=", "<=", "<<", ">>", "**"].contains(&sym) {
                     out.push(Token::Sym(sym.to_string()));
                     self.i += 2;
                     continue;
@@ -10460,6 +11023,37 @@ impl<'a> Lexer<'a> {
     fn read_number(&mut self) -> String {
         let bytes = self.src.as_bytes();
         let start = self.i;
+        if bytes[self.i] == b'0' && self.i + 1 < bytes.len() {
+            let next_c = bytes[self.i + 1] as char;
+            if next_c == 'x' || next_c == 'X' {
+                self.i += 2;
+                while self.i < bytes.len() && (bytes[self.i] as char).is_ascii_hexdigit() {
+                    self.i += 1;
+                }
+                let hex_str = &self.src[start + 2..self.i];
+                if let Ok(val) = i64::from_str_radix(hex_str, 16) {
+                    return val.to_string();
+                }
+            } else if next_c == 'b' || next_c == 'B' {
+                self.i += 2;
+                while self.i < bytes.len() && (bytes[self.i] == b'0' || bytes[self.i] == b'1') {
+                    self.i += 1;
+                }
+                let bin_str = &self.src[start + 2..self.i];
+                if let Ok(val) = i64::from_str_radix(bin_str, 2) {
+                    return val.to_string();
+                }
+            } else if next_c == 'o' || next_c == 'O' {
+                self.i += 2;
+                while self.i < bytes.len() && (bytes[self.i] >= b'0' && bytes[self.i] <= b'7') {
+                    self.i += 1;
+                }
+                let oct_str = &self.src[start + 2..self.i];
+                if let Ok(val) = i64::from_str_radix(oct_str, 8) {
+                    return val.to_string();
+                }
+            }
+        }
         while self.i < bytes.len() && (bytes[self.i] as char).is_ascii_digit() {
             self.i += 1;
         }
@@ -10756,10 +11350,28 @@ impl ExprParser {
     }
 
     fn parse_mul(&mut self) -> Result<Expr, String> {
-        let mut node = self.parse_unary()?;
+        let mut node = self.parse_power()?;
         loop {
             let op = match self.peek() {
                 Some(Token::Sym(s)) if s == "*" || s == "/" || s == "%" => s.clone(),
+                _ => break,
+            };
+            let _ = self.next();
+            let rhs = self.parse_power()?;
+            node = Expr::Binary {
+                op,
+                lhs: Box::new(node),
+                rhs: Box::new(rhs),
+            };
+        }
+        Ok(node)
+    }
+
+    fn parse_power(&mut self) -> Result<Expr, String> {
+        let mut node = self.parse_unary()?;
+        loop {
+            let op = match self.peek() {
+                Some(Token::Sym(s)) if s == "**" => s.clone(),
                 _ => break,
             };
             let _ = self.next();
@@ -10798,6 +11410,37 @@ impl ExprParser {
     fn parse_postfix(&mut self) -> Result<Expr, String> {
         let mut node = self.parse_primary()?;
         loop {
+            if self.match_sym(".") {
+                let field = match self.next() {
+                    Some(Token::Ident(name)) => name,
+                    tok => return Err(format!("Expected member name after '.', got {:?}", tok)),
+                };
+                if self.match_sym("(") {
+                    let mut args = vec![];
+                    if !self.match_sym(")") {
+                        loop {
+                            args.push(self.parse_expr()?);
+                            if self.match_sym(",") {
+                                continue;
+                            }
+                            self.expect_sym(")")?;
+                            break;
+                        }
+                    }
+                    node = Expr::MethodCall {
+                        target: Box::new(node),
+                        method: field,
+                        args,
+                    };
+                } else {
+                    node = Expr::Member {
+                        target: Box::new(node),
+                        field,
+                    };
+                }
+                continue;
+            }
+
             if self.match_sym("(") {
                 let mut args = vec![];
                 if !self.match_sym(")") {
@@ -10811,11 +11454,21 @@ impl ExprParser {
                     }
                 }
 
-                let callee = match node {
-                    Expr::Var(parts) => parts,
-                    _ => return Err("Function call target must be an identifier".to_string()),
-                };
-                node = Expr::Call { callee, args };
+                match node {
+                    Expr::Var(parts) => {
+                        node = Expr::Call { callee: parts, args };
+                    }
+                    Expr::Member { target, field } => {
+                        node = Expr::MethodCall {
+                            target,
+                            method: field,
+                            args,
+                        };
+                    }
+                    other => {
+                        return Err(format!("Expression is not callable: {:?}", other));
+                    }
+                }
                 continue;
             }
 
@@ -10912,6 +11565,12 @@ impl ExprParser {
 
                 let mut parts = vec![name];
                 while self.match_sym(".") {
+                    // If this dot is followed by an identifier AND a '(', it is a method call,
+                    // so stop here and let parse_postfix handle it as a method call on this object/chain!
+                    if self.peek_sym_n(1, "(") {
+                        self.i -= 1; // unconsume the '.'
+                        break;
+                    }
                     let next = self
                         .next()
                         .ok_or_else(|| "Expected identifier after '.'".to_string())?;
@@ -10924,7 +11583,20 @@ impl ExprParser {
             }
             Token::Sym(s) if s == "(" => {
                 let inner = self.parse_expr()?;
-                self.expect_sym(")")?;
+                if !self.match_sym(")") {
+                    if let Expr::Var(callee) = inner {
+                        let mut args = Vec::new();
+                        while !self.match_sym(")") {
+                            let arg = self.parse_add()?;
+                            args.push(arg);
+                            if self.match_sym(",") {
+                                continue;
+                            }
+                        }
+                        return Ok(Expr::Call { callee, args });
+                    }
+                    self.expect_sym(")")?;
+                }
                 Ok(inner)
             }
             Token::Sym(s) if s == "[" => {
@@ -11121,6 +11793,13 @@ impl ExprParser {
 
     fn peek_sym(&self, expected: &str) -> bool {
         match self.peek() {
+            Some(Token::Sym(s)) => s == expected,
+            _ => false,
+        }
+    }
+
+    fn peek_sym_n(&self, n: usize, expected: &str) -> bool {
+        match self.tokens.get(self.i + n) {
             Some(Token::Sym(s)) => s == expected,
             _ => false,
         }
@@ -12822,10 +13501,10 @@ fn infer_type_from_expr(expr: &str) -> &str {
     // Literal inference
     if s == "empty" || s == "null" { return "empty"; }
     if s == "TRUE" || s == "FALSE" || s == "YES" || s == "NO" || s == "true" || s == "false" { return "boolean"; }
-    if s.starts_with('"') || s.starts_with('\'') { return "string"; }
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) { return "string"; }
     if s.starts_with('#') { return "color"; }
-    if s.starts_with('[') { return "list"; }
-    if s.starts_with('{') { return "dict"; }
+    if s.starts_with('[') && s.ends_with(']') { return "list"; }
+    if s.starts_with('{') && s.ends_with('}') { return "dict"; }
     // Number inference
     if let Ok(_) = s.parse::<i64>() { return "int"; }
     if let Ok(_) = s.parse::<f64>() { return "float"; }
@@ -13448,13 +14127,12 @@ fn run_test_suite(path: &Path) -> Result<(), String> {
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut failures = Vec::new();
+    let original_dir = env::current_dir().ok();
 
     for file in &files {
-        let mut runtime = Runtime::new(
-            file.parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf(),
-        );
+        let parent = file.parent().unwrap_or(Path::new("."));
+        let _ = env::set_current_dir(parent);
+        let mut runtime = Runtime::new(parent.to_path_buf());
         match runtime.run_file(file) {
             Ok(()) => {
                 passed += 1;
@@ -13466,6 +14144,10 @@ fn run_test_suite(path: &Path) -> Result<(), String> {
                 failures.push(format!("{}\n{}", file.display(), e));
             }
         }
+    }
+
+    if let Some(dir) = original_dir {
+        let _ = env::set_current_dir(dir);
     }
 
     println!("\nTest summary: {} passed, {} failed", passed, failed);

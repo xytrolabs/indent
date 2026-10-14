@@ -1,6 +1,62 @@
 # Indent Changelog
 
+## Unreleased — language & package parity
+
+### ✨ Language (all additive — nothing removed)
+- **Native `%name%` interpolation now works in every string**, not just inside
+  `say`. `var msg = "Hello %name%"` produces a real interpolated string usable
+  in assignments, comparisons, `len()`, function arguments, lists/dicts and
+  returns. Dotted chains work too (`"User: %user.name%"`). Undefined names and
+  stray `%` (`"100% done"`) are left literal, as before.
+- **Exponentiation `**`** — `2 ** 10` → `1024`.
+- **Repetition with `*`** — `"ha" * 3` → `"hahaha"`, `[1, 2] * 3` → `[1,2,1,2,1,2]`.
+- **Chained member & method calls** — `"  hi  ".strip().upper()`, `d.user.name`,
+  `items[0].name`.
+- **Number base literals** — `0xFF` (hex), `0b1010` (binary), `0o777` (octal).
+- **Parenthesized calls as arguments / in collections** —
+  `append l (f x y)` and `[(f 1 2), 0xFF]` now parse.
+- `interpolate(template[, vars])` builtin for runtime template evaluation.
+
+### ➕ New builtins
+- Strings/Unicode: `chr` (`from_char_code`), `ord` (`char_code`),
+  `char_at`, `repeat` (`repeat_str`).
+- Lists: `shift`, `unshift`, `flat` (alias of `flatten`).
+- Dicts: `entries` (alias of `items`).
+- JSON: `json_parse` (alias of `json_loads`), `json_stringify` (alias of `json_dumps`).
+- Math/number: `math_clamp`, `trunc` (`math_trunc`), `sign` (`math_sign`),
+  `is_nan`, `is_finite`.
+
+### 🕐 `time_format` / `time_parse` rewritten
+- `time_format` now implements real `strftime` specifiers (`%Y %y %m %d %H %I %M
+  %S %p %A %a %B %b %j %w %F %T %s %%`) instead of returning a fixed string, and
+  its date math is calendar-accurate (correct for leap years across the full
+  timestamp range). `time_parse` round-trips exactly.
+
+### 📦 Standard library
+- **`ai`** — added `ChatWithSystem`, `ChatWithOptions`, `ChatDefault`,
+  `AskDefault`, `AskJson`, `Summarize`, `Translate`, `Classify`, `Extract`,
+  `NewConversation`/`Converse` (stateful chat), an in-memory **vector store**
+  (`NewVectorStore`/`VectorStoreAdd`/`VectorStoreSearch`) and `RagAnswer`.
+  Errors from the provider are preserved (`GetLastError`).
+- **`json`** — `Clone`, `Pretty`, JSON Pointer (`PointerGet`/`Has`/`GetOr`),
+  `Merge`, `DeepMerge`, `FromFile`, `ToFile`.
+- **`fs`** — `MkdirAll`, `ReadLines`, `WriteLines`, `ReadJson`, `WriteJson`,
+  `ReadOr`, `RemoveIfExists`, `CopyIfMissing`, `CopyTree`, `Move`, `Size`, `Walk`.
+- **`strings`** — `Lines`, `RemovePrefix`, `RemoveSuffix`, `Partition`, `Chars`,
+  `IsBlank`, `Repeat`, `ZFill`, `CountOccurrences`, `Chr`, `Ord`, `CharAt`.
+- **`datetime`** — `DurationText`, `Relative`, `NowPlus`, `DaysBetween`,
+  `IsoNow`/`DateNow`/`TimeNow`.
+- **`web`** — `Created`, `Redirect`, `NotFound`, `BadRequest`, `ServerError`,
+  `StaticFile` (MIME-sniffing static file server).
+- **`discord`** — shipped in `std/` for out-of-the-box use.
+
+### 🧪 Tests
+- 3 new test suites (`modern_parity_features`, `pkg_enhancements`,
+  `datetime_pkg`, `datetime_format_builtins`, `ai_pkg_features`); the full suite
+  now reports **45/45 passing** (was 41, with 3 pre-existing failures).
+
 ## 2.2.2 — 2026-09-11
+
 
 ### 📦 Installer refreshed everywhere
 - The installer bundled inside every release archive is now the current one. It

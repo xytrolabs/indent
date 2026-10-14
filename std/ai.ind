@@ -1,5 +1,5 @@
 #! =============================================================================
-#! ai.ind 1.2 — OpenAI-native AI assistant package for Indent
+#! ai.ind 1.3 — OpenAI-native AI assistant package for Indent
 #! =============================================================================
 #!
 #! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
@@ -10,11 +10,12 @@
 #! System prompts work exactly like the OpenAI Python SDK: put a
 #! {"role":"system","content":"..."} message first in the `messages` list.
 #!
-#! v1.2: ROBUST — never crashes on transient server errors. Every call:
+#! v1.3: ROBUST — never crashes on transient server errors. Every call:
 #!   - checks the HTTP response (ok / status)
 #!   - parses JSON defensively (do/catch)
 #!   - guards all indexing with has_key
 #!   - retries with backoff (SetRetries)
+#!   - preserves provider error messages (for example, "Invalid API key")
 #!   - records the last error (GetLastError) and returns empty on failure
 #!
 #! Mirror of the OpenAI Python SDK surface, adapted for Indent:
@@ -84,6 +85,38 @@ fun AuthHeader
         give ""
     give "Bearer " + _apiKey
 
+#! Extract a useful provider error from an HTTP response body.
+#! OpenAI-compatible APIs usually return {"error":{"message":"..."}}, but
+#! local servers also commonly return a top-level message or detail field.
+fun _ResponseError status body
+    var fallback is "request failed (status " + string(status) + ")"
+    if len(body) == 0
+        give fallback
+
+    var parsed = empty
+    do:
+        parsed is json_loads(body)
+    catch as e:
+        var raw is trim(body)
+        give fallback + ": " + raw
+
+    if type_of(parsed) == "dict"
+        if has_key parsed "error"
+            var api_error is parsed["error"]
+            if type_of(api_error) == "dict"
+                if has_key api_error "message"
+                    give string(api_error["message"])
+                if has_key api_error "code"
+                    give string(api_error["code"])
+            give string(api_error)
+        if has_key parsed "message"
+            give string(parsed["message"])
+        if has_key parsed "detail"
+            give string(parsed["detail"])
+
+    var raw_body is trim(body)
+    give fallback + ": " + raw_body
+
 #! --- internal: safe POST JSON with retry + error capture ---
 #! Returns {"ok", "status", "data"} where data is the parsed body (or empty).
 #! Never throws. On failure sets _lastError / _lastStatus.
@@ -99,6 +132,7 @@ fun _PostJson path payload
         do:
             resp is http_post_json(_base + path, payload, AuthHeader())
         catch as e:
+            _lastError is string(e)
             resp is empty
         if type_of(resp) == "dict"
             if has_key resp "ok"
@@ -107,6 +141,8 @@ fun _PostJson path payload
                 status is resp["status"]
             if has_key resp "body"
                 body is resp["body"]
+        if not ok
+            _lastError is _ResponseError status body
         if ok
             if len(body) == 0
                 ok is false
@@ -149,6 +185,7 @@ fun _GetJson path
         do:
             resp is http_get(_base + path, AuthHeader())
         catch as e:
+            _lastError is string(e)
             resp is empty
         if type_of(resp) == "dict"
             if has_key resp "ok"
@@ -157,6 +194,8 @@ fun _GetJson path
                 status is resp["status"]
             if has_key resp "body"
                 body is resp["body"]
+        if not ok
+            _lastError is _ResponseError status body
         if ok
             if len(body) == 0
                 ok is false
@@ -285,3 +324,161 @@ fun Search query docs
             var sim = Similarity(q, v)
             scored is scored + [[sim, d]]
     give reverse(sort(scored))
+
+#! --- Chat with a system prompt and single user prompt ---
+fun ChatWithSystem model systemPrompt userPrompt
+    var msgs = []
+    if len(systemPrompt) > 0
+        msgs is append msgs {"role": "system", "content": systemPrompt}
+    msgs is append msgs {"role": "user", "content": userPrompt}
+    give Chat(model, msgs)
+
+#! --- Chat with options: temperature, max_tokens, json mode, etc. ---
+fun ChatWithOptions model messages options
+    var payload = {"model": model, "messages": messages}
+    if has_key options "temperature"
+        payload["temperature"] is options["temperature"]
+    if has_key options "max_tokens"
+        payload["max_tokens"] is options["max_tokens"]
+    if has_key options "top_p"
+        payload["top_p"] is options["top_p"]
+    if has_key options "seed"
+        payload["seed"] is options["seed"]
+    if has_key options "json"
+        if options["json"] == true
+            payload["response_format"] is {"type": "json_object"}
+    var r = _PostJson("/chat/completions", payload)
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "choices"
+            var choices = data["choices"]
+            if len(choices) > 0
+                var first = choices[0]
+                if has_key first "message"
+                    var msg = first["message"]
+                    if has_key msg "content"
+                        give msg["content"]
+    give empty
+
+#! --- Ask for structured JSON output ---
+#! Prompts the model to return a JSON object and parses it into an Indent dictionary.
+fun AskJson model prompt
+    var msgs = [{"role": "system", "content": "You are a helpful assistant that always responds with valid JSON."}, {"role": "user", "content": prompt}]
+    var reply = ChatWithOptions(model, msgs, {"json": true})
+    if len(reply) == 0
+        give empty
+    var parsed = empty
+    do:
+        parsed is json_loads(reply)
+    catch as e:
+        _lastError is "JSON parse failed: " + string(e)
+        give empty
+    give parsed
+
+#! --- Conversation / Agent state management ---
+fun NewConversation systemPrompt = ""
+    var conv = {"messages": []}
+    if len(systemPrompt) > 0
+        conv["messages"] is [{"role": "system", "content": systemPrompt}]
+    give conv
+
+fun Converse conv model userText
+    var msgs = conv["messages"]
+    msgs is append msgs {"role": "user", "content": userText}
+    var reply = Chat(model, msgs)
+    if len(reply) > 0
+        msgs is append msgs {"role": "assistant", "content": reply}
+    var updated = {"messages": msgs}
+    give {"reply": reply, "conv": updated}
+
+#! --- In-Memory Semantic Vector Store ---
+fun NewVectorStore
+    give {"items": []}
+
+fun VectorStoreAdd store id text metadata = {}
+    var vec = Embed(_defaultEmbedModel, text)
+    if len(vec) == 0
+        give store
+    var item = {"id": id, "text": text, "embedding": vec, "metadata": metadata}
+    var items = store["items"]
+    items is append items item
+    give {"items": items}
+
+fun VectorStoreSearch store query topK = 5
+    var q = Embed(_defaultEmbedModel, query)
+    if len(q) == 0
+        give []
+    var items = store["items"]
+    var scored = []
+    repeat it in items
+        var sim = Similarity(q, it["embedding"])
+        var match = {"id": it["id"], "text": it["text"], "similarity": sim, "metadata": it["metadata"]}
+        scored is append scored [sim, match]
+    var sorted_matches = reverse(sort(scored))
+    var results = []
+    var count = 0
+    repeat sm in sorted_matches
+        if count < topK
+            results is append results sm[1]
+            count is count + 1
+    give results
+
+#! ============================================================================
+#! High-level helpers — one-call convenience wrappers (simpler than raw SDK).
+#! These use the DEFAULT chat model (set with SetDefaultModel).
+#! ============================================================================
+
+#! Chat using the default model. Same as Chat(_defaultModel, messages).
+fun ChatDefault messages
+    give Chat(_defaultModel, messages)
+
+#! Ask using the default model. Same as Ask(_defaultModel, prompt).
+fun AskDefault prompt
+    give Ask(_defaultModel, prompt)
+
+#! Summarize text in `sentences` bullet points (default 3).
+fun Summarize text sentences = 3
+    var sys = "You are a concise summarizer. Reply with at most " + string(sentences) + " short bullet points, each on its own line, no preamble."
+    give ChatWithSystem(_defaultModel, sys, text)
+
+#! Translate text into `language` (e.g. "French", "Japanese").
+fun Translate text language
+    var sys = "You are a professional translator. Translate the user's text into " + language + ". Reply with only the translation."
+    give ChatWithSystem(_defaultModel, sys, text)
+
+#! Classify text into one of the given labels; returns the chosen label string.
+fun Classify text labels
+    var joined = join labels ", "
+    var sys = "You are a classifier. Choose exactly one label from this list: " + joined + ". Reply with only the label, nothing else."
+    var reply = ChatWithSystem(_defaultModel, sys, text)
+    if len(reply) == 0
+        give ""
+    var clean = trim reply
+    repeat lab in labels
+        if clean == lab
+            give lab
+    repeat lab in labels
+        if contains clean lab
+            give lab
+    give clean
+
+#! Extract structured fields from text; returns a dict of {field: value}.
+fun Extract text fields
+    var joined = join fields ", "
+    var sys = "Extract these fields from the user's text: " + joined + ". Reply with only a JSON object mapping each field name to its value, using null when absent."
+    var prompt = "Text:\n" + text
+    var full = prompt + "\n\n(" + sys + ")"
+    give AskJson(_defaultModel, full)
+
+#! Retrieval-augmented answer: answer `question` using the vector store's top matches.
+fun RagAnswer store question topK = 3
+    var hits = VectorStoreSearch store question topK
+    if len(hits) == 0
+        give AskDefault question
+    var context string = ""
+    repeat h in hits
+        context is context + "- " + h["text"] + "\n"
+    var sys = "Answer the question using only the provided context. If the answer is not in the context, say you don't know."
+    var user = "Context:\n" + context + "\nQuestion: " + question
+    give ChatWithSystem(_defaultModel, sys, user)
+

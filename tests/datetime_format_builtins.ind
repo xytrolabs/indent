@@ -1,0 +1,59 @@
+#! Test the improved time_format strftime specifiers and time_parse accuracy
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+#! 2021-03-04 05:06:07 UTC = 1614834367
+var ts = 1614834367
+
+var y = time_format ts "%Y"
+assert_eq(y, "2021")
+
+var md = time_format ts "%m-%d"
+assert_eq(md, "03-04")
+
+var hms = time_format ts "%H:%M:%S"
+assert_eq(hms, "05:06:07")
+
+var f = time_format ts "%F"
+assert_eq(f, "2021-03-04")
+
+var t = time_format ts "%T"
+assert_eq(t, "05:06:07")
+
+#! Day of week: 2021-03-04 was a Thursday
+var wd = time_format ts "%A"
+assert_eq(wd, "Thursday")
+
+#! Month name
+var mon = time_format ts "%B"
+assert_eq(mon, "March")
+
+#! 12-hour + AM/PM
+var h12 = time_format ts "%I %p"
+assert_eq(h12, "05 AM")
+
+#! Epoch round-trip
+var e = time_format ts "%s"
+assert_eq(e, "1614834367")
+
+#! Leap-year correctness: 2020-02-29 12:00:00 = 1582977600
+var leap = time_format 1582977600 "%Y-%m-%d"
+assert_eq(leap, "2020-02-29")
+
+#! time_parse should round-trip and be calendar-accurate
+var parsed = time_parse "2021-03-04 05:06:07" ""
+var pback = time_format parsed "%Y-%m-%d %H:%M:%S"
+assert_eq(pback, "2021-03-04 05:06:07")
+
+#! A leap year parse must not drift
+var lparsed = time_parse "2020-02-29 12:00:00" ""
+assert_eq(lparsed, 1582977600)
+
+say "time_format/time_parse: ALL PASS"

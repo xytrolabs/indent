@@ -227,7 +227,12 @@ var age int = ask("int", "Age: ")
 | `str_removesuffix(text, suffix)` | string | Strip `suffix` if present |
 | `str_partition(text, sep)` | list | `[before, sep, after]` |
 | `format(template, a, b, ...)` | string | Positional formatting — `{0}`, `{1}`, ... |
-| `sformat(template, k, v, ...)` | string | Named formatting — `{key}`; also `%name%` interpolation |
+| `sformat(template, k, v, ...)` | string | Named formatting with `{key}` placeholders (returns a real string; does **not** expand `%name%`) |
+| `interpolate(template[, dict])` | string | Interpolate `${var}`, `{var}`, or `%var%` placeholders from scope or dict |
+| `chr(code)` | string | Character for ASCII/Unicode codepoint (alias `from_char_code`) |
+| `ord(char)` | int | ASCII/Unicode codepoint of character (alias `char_code`) |
+| `char_at(text, idx)` | string | Character at 0-based index |
+| `repeat(text, count)` | string | Repeat string `count` times (or use `"str" * count`) |
 | `contains(s, sub)` | boolean | Check if string contains substring |
 | `find(s, sub)` | int | Find position of substring (-1 if not found) |
 | `slice(s, start, end)` | string | Extract substring from `start` to `end` |
@@ -244,6 +249,9 @@ var age int = ask("int", "Age: ")
 | `append(list, item)` | list | **New** list with item appended (original unchanged) |
 | `extend(list, items)` | list | **New** list with items concatenated |
 | `insert(list, index, value)` | list | **New** list with value at index |
+| `shift(list)` | list | **New** list with first item removed |
+| `unshift(list, item)` | list | **New** list with item prepended at beginning |
+| `flat(list)` | list | Recursively flattened list (alias `flatten`) |
 | `pop(list)` | list | **New** list with last item removed |
 | `remove(list, value)` | list | **New** list with first matching value removed |
 | `contains(coll, item)` | boolean | Check if item is in collection |
@@ -328,6 +336,9 @@ var total = reduce "add_int" [1,2,3,4]      #! → 10
 | `math_hypot(a, b)` | float | `sqrt(a² + b²)` |
 | `math_log2(x)` | float | Base-2 logarithm |
 | `math_degrees(x)` / `math_radians(x)` | float | Angle conversion |
+| `trunc(x)` | int | Truncate float to integer (alias `math_trunc`) |
+| `sign(x)` | int | Signum: `-1`, `0`, or `1` (alias `math_sign`) |
+| `math_clamp(v, min, max)` | number | Clamp value between `min` and `max` (alias `clamp`) |
 
 ### Random extras
 
@@ -346,7 +357,8 @@ var total = reduce "add_int" [1,2,3,4]      #! → 10
 | `keys(dict)` | list | All keys (sorted) |
 | `values(dict)` | list | All values (sorted by key) |
 | `has_key(dict, key)` | boolean | Check if key exists |
-| `items(dict)` | list | List of `[key, value]` pairs |
+| `items(dict)` | list | List of `[key, value]` pairs (alias `entries`) |
+| `entries(dict)` | list | List of `[key, value]` pairs (alias of `items`) |
 | `dict_get(dict, key)` | any | Get value by key |
 | `dict_set(dict, key, value)` | dict | **New** dict with key set |
 | `dict_remove(dict, key)` | dict | **New** dict with key removed |
@@ -424,8 +436,8 @@ set_difference(a, b)        #! → {1, 2}
 
 | Function | Returns | Description |
 |---|---|---|
-| `json_loads(text)` | dynamic | Parse JSON string → Indent value |
-| `json_dumps(value)` | string | Serialize Indent value → JSON string |
+| `json_loads(text)` | dynamic | Parse JSON string → Indent value (alias `json_parse`) |
+| `json_dumps(value)` | string | Serialize Indent value → JSON string (alias `json_stringify`) |
 
 ---
 
@@ -974,8 +986,32 @@ loop:
 | Function | Returns | Description |
 |---|---|---|
 | `time_utc()` | float | Unix timestamp (alias for `time_now`) |
-| `time_format(ts, [fmt])` | string | Format timestamp (default: `"%Y-%m-%d %H:%M:%S"`) |
-| `time_parse(str, [fmt])` | float | Parse datetime string to timestamp |
+| `time_format(ts, [fmt])` | string | Format a timestamp (UTC). Default `"%Y-%m-%d %H:%M:%S"`. |
+| `time_parse(str, [fmt])` | float | Parse an ISO-like datetime string to a Unix timestamp (calendar-accurate, incl. leap years) |
+
+**`time_format` supports `strftime`-style specifiers:**
+
+| Specifier | Meaning | Example |
+|---|---|---|
+| `%Y` / `%y` | Year (4-digit / 2-digit) | `2021` / `21` |
+| `%m` | Month, zero-padded | `03` |
+| `%d` | Day of month, zero-padded | `04` |
+| `%H` / `%I` | Hour 24-hour / 12-hour | `05` / `05` |
+| `%M` / `%S` | Minute / second | `06` / `07` |
+| `%p` / `%P` | AM/PM (upper / lower) | `AM` / `am` |
+| `%A` / `%a` | Weekday name (full / short) | `Thursday` / `Thu` |
+| `%B` / `%b` | Month name (full / short) | `March` / `Mar` |
+| `%j` | Day of year (3-digit) | `063` |
+| `%w` | Weekday number (0=Sunday) | `4` |
+| `%F` | `%Y-%m-%d` | `2021-03-04` |
+| `%T` | `%H:%M:%S` | `05:06:07` |
+| `%s` | Unix epoch seconds | `1614834367` |
+| `%%` | Literal `%` | `%` |
+
+```indent
+say time_format(1614834367, "%A, %B %d, %Y")   #! → "Thursday, March 04, 2021"
+say time_format(1614834367, "%F %T")           #! → "2021-03-04 05:06:07"
+```
 
 ## Crypto & Encoding (🆕 v1.2)
 

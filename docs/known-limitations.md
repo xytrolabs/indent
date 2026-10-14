@@ -16,13 +16,8 @@ you know what to expect (and what not to fight).
   methods (`to_string`, `equals`, `add`, …), but not Python-style decorators or
   computed properties.
 - **A few expression quirks** to be aware of:
-  - Function calls are **not** allowed inside list literals (e.g. `[f 1 2]`).
-    Build lists with `append` from precomputed variables instead.
-  - Parenthesized function calls as arguments fail to parse (e.g.
-    `append l (f x y)`). Precompute the result into a variable first.
-  - String `+` concatenation inside function-call arguments fails to parse.
-    Precompute into a variable first. (The `say` keyword accepts it fine.)
-  - Chained index + member access (`a.b[0].c`) fails to parse — split into steps.
+  - Space-separated calls without parentheses inside list literals should be parenthesized: `[(f 1 2)]`.
+  - String `+` concatenation inside space-separated function arguments should be parenthesized: `foo ("a" + b)`.
 
 ## Runtime
 
@@ -32,8 +27,8 @@ you know what to expect (and what not to fight).
   functions.
 - **Missing dict keys throw** (both `d["k"]` and `d.k`): `Dictionary has no key
   'k'`. Guard with `has_key` before accessing optional keys.
-- **Hex literals (`0x3498DB`) are not supported.** Use the `HexColor "RRGGBB"`
-  helper for hex colors.
+- **Number base literals**: `0x...` (hex), `0b...` (binary), and `0o...` (octal)
+  are supported integers (e.g. `0xFF` = 255, `0b1010` = 10).
 - **Safety limits on loops.** `while`/`repeat`/`range` have built-in caps to
   stop runaway infinite loops. Long-running servers should use the async/task
   model rather than a single tight loop.

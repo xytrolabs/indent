@@ -15,6 +15,15 @@ fun Insert items index value
 fun Pop items
     give pop items
 
+fun Shift items
+    give shift items
+
+fun Unshift items value
+    give unshift items value
+
+fun Flat items
+    give flat items
+
 fun Remove items value
     give remove items value
 
@@ -97,6 +106,9 @@ fun Values d
 
 fun Items d
     give items d
+
+fun Entries d
+    give entries d
 
 fun HasKey d key
     give has_key d key

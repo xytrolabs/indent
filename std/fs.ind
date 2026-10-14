@@ -23,8 +23,19 @@ fun Delete path
     os_remove path
 
 fun Copy src dst
-    var content = Read src
-    Write dst content
+    give os_copy src dst
+
+fun CopyTree src dst
+    give os_copy_tree src dst
+
+fun Move src dst
+    give os_move src dst
+
+fun Size path
+    give file_size path
+
+fun Walk path
+    give walk path
 
 fun Rename old new
     os_rename old new
@@ -35,5 +46,71 @@ fun ListDir path
 fun Mkdir path
     os_mkdir path
 
+#! Recursively create a directory (like Python's os.makedirs(exist_ok=True)).
+fun MkdirAll path
+    var isEmpty = len(path) == 0
+    if isEmpty
+        give empty
+    var already = os_exists path
+    if already
+        give empty
+    var normed = path_norm path
+    var parts = split normed "/"
+    var acc string = ""
+    repeat part in parts
+        if len(part) == 0
+            acc is "/"
+            next
+        if acc == ""
+            acc is part
+        otherwise
+            acc is acc + "/" + part
+        if not os_exists acc
+            os_mkdir acc
+    give empty
+
 fun Sha256 path
     give file_sha256 path
+
+#! --- High-level helpers ---
+
+#! Read a file split into lines (newline-separated).
+fun ReadLines path
+    var content = file_read_text path
+    give str_splitlines content
+
+#! Write a list of lines to a file, each on its own line.
+fun WriteLines path lines
+    var sep = "\n"
+    var text = join lines sep
+    file_write_text path text
+    give empty
+
+#! Read and parse a JSON file.
+fun ReadJson path
+    var content = file_read_text path
+    give json_loads content
+
+#! Serialize a value to JSON and write it to a file.
+fun WriteJson path value
+    var text = json_dumps value
+    file_write_text path text
+    give empty
+
+#! Return the file contents or a default when the file does not exist.
+fun ReadOr path fallback
+    if os_exists path
+        give file_read_text path
+    give fallback
+
+#! Remove a file only if it exists (no error when missing).
+fun RemoveIfExists path
+    if os_exists path
+        os_remove path
+    give empty
+
+#! Copy a file only when the destination does not already exist.
+fun CopyIfMissing src dst
+    if not os_exists dst
+        give os_copy src dst
+    give false

@@ -1,0 +1,50 @@
+#! Test new AI package functionality (vector store, conversation state, similarity)
+get Similarity from ai
+get NewVectorStore from ai
+get NewConversation from ai
+get ChatWithSystem from ai
+get ChatWithOptions from ai
+get AskJson from ai
+get Summarize from ai
+get Translate from ai
+get Classify from ai
+get Extract from ai
+get RagAnswer from ai
+get VectorStoreAdd from ai
+get VectorStoreSearch from ai
+get Converse from ai
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+say "=== 1. Vector Store & Cosine Similarity ==="
+var v1 = [1.0, 0.0, 0.0]
+var v2 = [1.0, 0.0, 0.0]
+var v3 = [0.0, 1.0, 0.0]
+
+var s_ident = Similarity v1 v2
+assert(s_ident > 0.99)
+
+var s_ortho = Similarity v1 v3
+assert(s_ortho < 0.01)
+
+var store = NewVectorStore()
+assert_eq(len(store.items), 0)
+
+say "=== 2. Conversation State Management ==="
+var conv = NewConversation("You are a helpful coding assistant.")
+assert_eq(len(conv.messages), 1)
+assert_eq(conv.messages[0].role, "system")
+assert_eq(conv.messages[0].content, "You are a helpful coding assistant.")
+
+var conv2 = NewConversation()
+assert_eq(len(conv2.messages), 0)
+
+say "AI package features: ALL PASS"

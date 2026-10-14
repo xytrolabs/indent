@@ -1,0 +1,173 @@
+#! Test modern Python/JS parity features and syntax simplifications
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+say "=== 1. Native String Interpolation (%name%) ==="
+var name = "Ada"
+var age = 36
+var user = {"name": "Lovelace", "city": "London"}
+
+#! Direct string variable interpolation in double quotes
+var s1 = "Hello %name%, you are %age%!"
+say "s1 = " + s1
+assert_eq(s1, "Hello Ada, you are 36!")
+
+#! Direct string variable interpolation in single quotes
+var s1_single = 'Hello %name%, you are %age%!'
+assert_eq(s1_single, "Hello Ada, you are 36!")
+
+#! Dotted member access interpolation %user.name%
+var s2 = "User: %user.name% from %user.city%"
+say "s2 = " + s2
+assert_eq(s2, "User: Lovelace from London")
+
+#! String interpolation inside function arguments and data structures
+var greetings = ["Hi %name%", "Welcome %user.name%!"]
+assert_eq(greetings[0], "Hi Ada")
+assert_eq(greetings[1], "Welcome Lovelace!")
+
+#! Comparison and length of interpolated string values
+assert_eq(len("Hi %name%"), 6)
+assert("Hi %name%" == "Hi Ada")
+
+#! Unmatched % or missing vars remain literal
+var untouched = "100% complete with %unknown%"
+assert_eq(untouched, "100% complete with %unknown%")
+
+#! interpolate() builtin
+var s5 = interpolate("Hi %name%!")
+assert_eq(s5, "Hi Ada!")
+
+var s6 = interpolate("Hello %who%", {"who": "World"})
+assert_eq(s6, "Hello World")
+
+say "Native string %interpolation%: OK"
+
+say "=== 2. Repetition & Exponentiation Operators ==="
+#! String repetition with *
+var repeated = "ha" * 3
+say "repeated = " + repeated
+assert_eq(repeated, "hahaha")
+
+var repeated_rev = 3 * "go"
+assert_eq(repeated_rev, "gogogo")
+
+#! List repetition with *
+var list_rep = [1, 2] * 3
+assert_eq(len(list_rep), 6)
+assert_eq(list_rep[0], 1)
+assert_eq(list_rep[2], 1)
+
+#! Exponentiation with **
+var p1 = 2 ** 10
+say "2 ** 10 = " + string(p1)
+assert_eq(p1, 1024)
+
+var p2 = 3 ** 3
+assert_eq(p2, 27)
+
+say "Repetition & Exponentiation: OK"
+
+say "=== 3. Chained Member & Method Calls ==="
+#! Literal string method call
+var trimmed = "  hello world  ".strip()
+assert_eq(trimmed, "hello world")
+
+#! Chained method call on string
+var upper_trimmed = "  hello  ".strip().upper()
+say "upper_trimmed = " + upper_trimmed
+assert_eq(upper_trimmed, "HELLO")
+
+#! Chained member access on dict
+var d = {"user": {"name": "ada"}}
+var n = d.user.name
+assert_eq(n, "ada")
+
+var n_upper = d.user.name.upper()
+assert_eq(n_upper, "ADA")
+
+#! Method on list
+var list_len = [10, 20, 30].len()
+assert_eq(list_len, 3)
+
+say "Chained calls: OK"
+
+say "=== 4. Character & Unicode Helpers ==="
+assert_eq(chr(65), "A")
+assert_eq(from_char_code(66), "B")
+assert_eq(ord("A"), 65)
+assert_eq(char_code("B"), 66)
+assert_eq(char_at("Indent", 0), "I")
+assert_eq(char_at("Indent", 2), "d")
+
+say "=== 5. Array/List Helpers (shift, unshift, flat, entries) ==="
+var arr = [10, 20, 30]
+var shifted = shift(arr)
+assert_eq(shifted, [20, 30])
+
+var unshifted = unshift([20, 30], 10)
+assert_eq(unshifted, [10, 20, 30])
+
+var nested = [[1, 2], [3, [4, 5]]]
+var flattened = flat(nested)
+assert_eq(len(flattened), 5)
+assert_eq(flattened, [1, 2, 3, 4, 5])
+
+var dict_items = entries({"a": 1})
+assert_eq(len(dict_items), 1)
+
+say "=== 6. JSON Parity (json_parse & json_stringify) ==="
+var payload = {"count": 42, "status": "ok"}
+var json_str = json_stringify(payload)
+var back_obj = json_parse(json_str)
+assert_eq(back_obj.count, 42)
+assert_eq(back_obj.status, "ok")
+
+say "=== 7. Math & Type Utilities ==="
+assert_eq(math_clamp(15, 0, 10), 10)
+assert_eq(math_clamp(-5, 0, 10), 0)
+assert_eq(math_clamp(5, 0, 10), 5)
+
+assert_eq(trunc(3.7), 3)
+assert_eq(trunc(-3.7), -3)
+assert_eq(sign(42), 1)
+assert_eq(sign(-42), -1)
+assert_eq(sign(0), 0)
+
+assert_eq(is_finite(100), true)
+assert_eq(is_nan(0.0), false)
+
+say "=== 8. Number Bases & Parenthesized Function Calls ==="
+#! Hex, binary, and octal literals
+var hex_val = 0xFF
+assert_eq(hex_val, 255)
+
+var color_val = 0x3498DB
+assert_eq(color_val, 3447003)
+
+var bin_val = 0b1010
+assert_eq(bin_val, 10)
+
+var oct_val = 0o777
+assert_eq(oct_val, 511)
+
+#! Parenthesized function call as argument
+fun add3 a b c
+    give a + b + c
+
+var res_nested = append [1, 2] (add3 10 20 30)
+assert_eq(len(res_nested), 3)
+assert_eq(res_nested[2], 60)
+
+var list_with_calls = [ (add3 1 2 3), 0xFF ]
+assert_eq(list_with_calls[0], 6)
+assert_eq(list_with_calls[1], 255)
+
+say "modern parity features: ALL PASS"

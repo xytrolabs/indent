@@ -1,0 +1,57 @@
+#! Test datetime package helpers
+get DurationText from datetime
+get DaysBetween from datetime
+get NowPlus from datetime
+get IsoNow from datetime
+get DateNow from datetime
+get TimeNow from datetime
+get Relative from datetime
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+say "=== datetime helpers ==="
+var d1 = DurationText 90
+assert_eq(d1, "1m 30s")
+
+var d2 = DurationText 3661
+assert_eq(d2, "1h 1m 1s")
+
+var d3 = DurationText 0
+assert_eq(d3, "0s")
+
+var d4 = DurationText 90061
+assert_eq(d4, "1d 1h 1m 1s")
+
+var now = time_now
+var fmt_iso = IsoNow()
+var has_dash = contains(fmt_iso, "-")
+assert(has_dash)
+
+var fmt_date = DateNow()
+assert_eq(len(fmt_date), 10)
+
+var fmt_time = TimeNow()
+assert_eq(len(fmt_time), 8)
+
+var np = NowPlus 3600
+assert(np > now)
+
+var days = DaysBetween 0 172800
+assert_eq(days, 2)
+
+var rel_past = Relative (now - 7200)
+assert_eq(rel_past, "2 hours ago")
+
+var rel_future = Relative (now + 7200)
+var is_future = starts_with rel_future "in "
+assert(is_future)
+
+say "datetime helpers: ALL PASS"

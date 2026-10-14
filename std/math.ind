@@ -89,3 +89,12 @@ fun IsEven n
 
 fun IsOdd n
     give is_odd n
+
+fun Trunc n
+    give trunc n
+
+fun Sign n
+    give sign n
+
+fun Clamp value low high
+    give math_clamp value low high

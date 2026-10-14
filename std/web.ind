@@ -30,6 +30,40 @@ fun Text body
 fun Send status body content_type
     give {"status": status, "body": body, "content_type": content_type}
 
+fun Created obj
+    var s = json_dumps obj
+    give {"status": 201, "body": s, "content_type": "application/json"}
+
+fun Redirect url status = 302
+    give {"status": status, "body": "", "headers": {"Location": url}, "content_type": "text/plain"}
+
+fun NotFound msg = "Not Found"
+    give {"status": 404, "body": msg, "content_type": "text/plain"}
+
+fun BadRequest msg = "Bad Request"
+    give {"status": 400, "body": msg, "content_type": "text/plain"}
+
+fun ServerError msg = "Internal Server Error"
+    give {"status": 500, "body": msg, "content_type": "text/plain"}
+
+fun StaticFile path
+    if not os_exists path
+        give NotFound()
+    var content = file_read_text path
+    var ext = path_ext path
+    var ct = "text/plain"
+    if ext == ".html" or ext == ".htm"
+        ct is "text/html; charset=utf-8"
+    if ext == ".json"
+        ct is "application/json"
+    if ext == ".js"
+        ct is "application/javascript"
+    if ext == ".css"
+        ct is "text/css"
+    if ext == ".svg"
+        ct is "image/svg+xml"
+    give {"status": 200, "body": content, "content_type": ct}
+
 #! ---- run an Indent code string in a fresh indent process ----
 #! Returns {ok, status, stdout, stderr}.
 

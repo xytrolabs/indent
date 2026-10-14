@@ -186,6 +186,11 @@ air install markdown yaml logger
 | `Get(data, pointer)` | Navigate `/a/b/c` |
 | `Has(data, pointer)` | True if exists |
 
+> **Built into `json`**: the std `json` module now also ships
+> `PointerGet(data, ptr)`, `Has(data, ptr)`, `GetOr(data, ptr, fallback)`,
+> `Merge`, `DeepMerge`, `Clone`, `Pretty`, `FromFile` and `ToFile` — so you do
+> not need a separate package.
+
 ### `csv` — CSV
 | Function | Description |
 |---|---|
@@ -300,7 +305,7 @@ air install markdown yaml logger
 
 > Full guide: [`docs/ai-package.md`](ai-package.md)
 
-An **OpenAI-native** client that talks to *any* OpenAI-compatible API — works with **real OpenAI** *and* a **local Ollama** server (which exposes the same OpenAI API at `/v1`). Mirrors the OpenAI Python SDK surface: chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent. **Robust (v1.2): never crashes on transient errors — retries with backoff and exposes `GetLastError()`/`GetLastStatus()`/`WasError()`.**
+An **OpenAI-native** client that talks to *any* OpenAI-compatible API — works with **real OpenAI** *and* a **local Ollama** server (which exposes the same OpenAI API at `/v1`). Mirrors the OpenAI Python SDK surface: chat completions, embeddings, model listing, cosine similarity, and semantic search, all in pure Indent. **Robust (v1.3): never crashes on transient errors — retries with backoff, preserves provider messages such as `Invalid API key`, and exposes `GetLastError()`/`GetLastStatus()`/`WasError()`.**
 
 ```indent
 get ai as AI
@@ -331,6 +336,22 @@ var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
 | `GetLastError()` | — | Last error message (`""` = success) |
 | `GetLastStatus()` | — | Last HTTP status (0 = no response) |
 | `WasError()` | — | True if the last call failed |
+
+**High-level helpers (v1.4)** — one call, no prompt plumbing; all use the default model:
+
+| Function | Description |
+|---|---|
+| `ChatWithSystem(model, system, user)` | System + user prompt in one call |
+| `ChatWithOptions(model, messages, options)` | Control `temperature`/`max_tokens`/`top_p`/`seed`/`json` |
+| `ChatDefault(messages)` / `AskDefault(prompt)` | Use the default model |
+| `AskJson(model, prompt)` | Structured JSON reply → dict |
+| `Summarize(text[, n])` | Bullet-point summary |
+| `Translate(text, language)` | Translate into a language |
+| `Classify(text, labels)` | Best-matching label |
+| `Extract(text, fields)` | Structured field extraction → dict |
+| `NewConversation([system])` / `Converse(conv, model, text)` | Stateful multi-turn chat |
+| `NewVectorStore()` / `VectorStoreAdd` / `VectorStoreSearch` | In-memory semantic store |
+| `RagAnswer(store, question[, k])` | Retrieval-augmented answer |
 
 Two import styles — dot-call namespace or per-function:
 ```indent
