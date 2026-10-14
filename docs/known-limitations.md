@@ -67,12 +67,34 @@ you know what to expect (and what not to fight).
     or collect items and `extend` once at the end.
   - `l is l + [x]` in a loop is **always** O(n²) — measured 6.5 s for 20 000
     items. Never build a list that way; see `benchmarks/`.
-- Measured reference numbers (release build, Indent 2.3; run `benchmarks/`
-  yourself): a function call ≈ 250 ns for one argument, `i is i + 1` ≈ 160 ns,
-  `if` + comparison ≈ 245 ns, 100 000 calls ≈ 0.05 s, 20 000 `append`s ≈
-  0.007 s, 20 000 index writes ≈ 0.015 s. Loading the whole `discord` + `ai`
-  package stack plus all puzzle modules costs ≈ 48 ms, so **startup is not the
-  bottleneck for a bot — network round-trips are**.
+- Measured reference numbers (release build, Indent 2.4; run `benchmarks/`
+  yourself): a function call ≈ 0.25 µs for one argument regardless of how big the
+  function is, `i is i + 1` ≈ 0.16 µs, `if` + comparison ≈ 0.25 µs, 100 000 calls
+  ≈ 0.05 s, 20 000 `append`s ≈ 0.007 s, 20 000 index writes ≈ 0.015 s. Loading the
+  whole `discord` + `ai` package stack plus all puzzle modules costs ≈ 48 ms, so
+  **startup is not the bottleneck for a bot — network round-trips are**.
+
+## The `__incache__` parsed-program cache
+
+Indent keeps a `__pycache__`-style cache: the first run of a file writes its
+parsed program to `__incache__/<name>.inc` next to the source, and later runs
+load that instead of lexing and parsing the file again.
+
+- It is an **optimisation, never a dependency**. Missing, stale, corrupt or
+  unreadable caches simply mean "parse the file", and so do read-only installs
+  and full disks. A cache file is never executed as source.
+- It is invalidated by source **size, modification time (nanoseconds) and an
+  FNV-1a hash of the text**, plus a format version that changes when the grammar
+  or AST layout changes. Editing a file (even to a same-length value) takes
+  effect on the very next run.
+- Writes are atomic (temp file + rename), so concurrent runs cannot see or leave
+  a half-written cache.
+- `__incache__/` is git-ignored; add it to your own `.gitignore` in projects that
+  do not use this repo's.
+- Controls: `--no-cache`, `INDENT_NO_AST_CACHE=1`, `--clear-cache`.
+- Deploying a *different build* of the same Indent version: the cache is keyed by
+  the source, not the binary, so bump `AST_CACHE_FORMAT` in `main.rs` if you
+  change the parser in a way that leaves the version number alone.
 
 
 ## Ecosystem

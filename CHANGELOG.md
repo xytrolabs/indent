@@ -1,5 +1,63 @@
 # Indent Changelog
 
+## 2.4.0 — 2026-10-14 (parsed-program cache + call cost fix) 🚀
+
+Second performance release in a row, and the biggest single win so far.
+
+### 🧠 The per-call cost no longer scales with the size of a function
+`resolve_callable` clones the resolved callable on **every call**, and a
+`FunctionDef` was stored by value — so each call deep-copied the parameters and
+the **entire body AST**. A 302-statement function cost **16.4 µs per call even
+when only 2 of its statements executed** — 54× a two-statement function, because
+every call paid for the whole body:
+Function definitions are now shared behind an `Arc`, so resolving, storing and
+passing a function is a refcount bump:
+
+| Case | 2.3.0 | 2.4.0 |
+|---|---|---|
+| Call into a 302-statement body | 16.36 µs | **0.36 µs** (**45×**) |
+| Call into a 2-statement body | 0.30 µs | 0.26 µs |
+| Hot-path suite (per run) | 632 ms | **604 ms** |
+| 100 000 calls | 0.130 s | **0.120 s** |
+
+This is what made "big" functions (Discord handlers, puzzle handlers, AI
+helpers, parsers) disproportionately slow — the tax was proportional to the
+body, on every single call.
+
+### 💾 `__incache__/` — Indent's answer to `__pycache__`
+The first time a file is run, its **parsed program** is written next to it as
+`<name>.inc` inside `__incache__/`. Subsequent runs deserialise that program
+(bincode) and skip reading, pre-processing, lexing and parsing entirely — the
+steps that dominate startup for module-heavy scripts.
+
+| Startup (per run) | no cache | **cache** |
+|---|---|---|
+| `get CtxSend from discord` (119 KB module) | 4.67 ms | **2.44 ms** (1.9×) |
+| 5 std imports (`json`, `fs`, `strings`, `discord`, `ai`) | 6.09 ms | **3.27 ms** (1.9×) |
+
+- Cache files live in `__incache__/` beside the source, exactly like
+  `__pycache__/`, and are git-ignored.
+- A cache is used only if it matches the source **size, modification time (ns)
+  and an FNV-1a hash of the text**, plus a format version that is bumped
+  whenever the grammar or AST layout changes. Editing a file invalidates it
+  immediately — verified with a same-length edit.
+- Writing is atomic (temp file + rename), so a concurrent reader never sees a
+  half-written cache.
+- **Always optional**: read-only installs, full disks, deleted sources and
+  corrupt cache files all fall back to parsing. A cache is never treated as
+  source (the language/test/puzzle enumerators only accept `.ind`/`.ath`).
+- Controls: `--no-cache` (ignore it for one run), `INDENT_NO_AST_CACHE=1`,
+  `--clear-cache` (delete every `__incache__` under the current directory).
+
+### 🧪 Tests
+- 6 new Rust tests cover the cache: round-trip, invalidation on a same-length
+  edit, corrupt/truncated/bad-version files, a deleted source, the disable
+  switch, and an end-to-end run where a *cached* module is imported and called.
+- New benchmarks: `bench_deep_calls.ind` (per-call cost vs body size) and
+  `ab_compare.sh` (A/B the current build against a previous binary).
+
+**Verification:** 51/51 language tests cold *and* warm, 27/27 Rust tests.
+
 ## 2.3.0 — 2026-10-14 (performance release) 🚀
 
 > Major optimizations and general improvements coming to Indent in 2.3!

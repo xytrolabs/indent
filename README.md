@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.3.0
+# Indent Language (.ind) v2.4.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,7 +7,43 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
-> ## 🚀 Indent 2.3 — the performance release
+> ## 🚀 Indent 2.4 — a parsed-program cache and a 45× call fix
+>
+> ### `__incache__/` — Indent's `__pycache__`
+> The first run of a file writes its **parsed program** to `__incache__/<name>.inc`
+> beside the source. Later runs load that instead of reading, pre-processing,
+> lexing and parsing the file — the part that dominates startup once you import
+> anything. Editing the file invalidates the cache immediately (size, mtime and a
+> source hash are checked, plus a format version).
+>
+> | Startup (per run) | no cache | **cached** |
+> |---|---|---|
+> | `get CtxSend from discord` (119 KB module) | 4.88 ms | **2.47 ms** |
+> | 5 std imports (`json`, `fs`, `strings`, `discord`, `ai`) | 6.19 ms | **3.26 ms** |
+> | the 51-file test suite | 5.55 s | **3.96 s** |
+>
+> It is always optional: read-only installs, full disks, deleted sources and
+> corrupt caches just fall back to parsing. `--no-cache` ignores it for a run,
+> `INDENT_NO_AST_CACHE=1` disables it, `--clear-cache` deletes it.
+>
+> ### 🧠 Calls no longer cost more in bigger functions
+> Resolving a function deep-copied its **entire body AST on every call**, so a
+> 302-statement function cost 16.4 µs per call *even when only two of its
+> statements ran*. Function definitions are now shared (`Arc`), so a call is a
+> refcount bump:
+>
+> | Case | before | after |
+> |---|---|---|
+> | 20 000 calls into a 302-statement body | 407 ms | **13 ms** (**31×**) |
+> | Per call into that body | 16.36 µs | **0.36 µs** (**45×**) |
+> | Interpreter hot-path suite | 632 ms | **604 ms** |
+>
+> Anything with sizable functions — Discord handlers, puzzle handlers, AI
+> helpers, parsers — was paying this tax on every invocation.
+>
+> **Verification:** 51/51 language tests (cold and warm), 27/27 Rust tests.
+>
+> ### 🎉 What's New in 2.3.0
 >
 > **Major optimizations and general improvements coming to Indent in 2.3!**
 > To become a real competitive force, Indent development has focused on

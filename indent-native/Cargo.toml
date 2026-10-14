@@ -1,6 +1,6 @@
 [package]
 name = "indent"
-version = "2.3.0"
+version = "2.4.0"
 edition = "2024"
 
 # Release profile tuned for a tree-walking interpreter: the evaluator is one hot
@@ -20,6 +20,10 @@ incremental = false
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1"
+# Used for the on-disk AST cache (`__incache__/*.inc`): the parsed program is
+# serialised with bincode so a re-run can skip lexing and parsing entirely.
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
 sha2 = "0.10"
 regex = "1"

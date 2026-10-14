@@ -3,6 +3,9 @@ __pycache__/
 .venv/
 *.pyc
 
+# Indent parsed-program cache (like __pycache__)
+__incache__/
+
 # Rust
 indent-native/target/
 Aether-Forge-IDE/src-tauri/target/

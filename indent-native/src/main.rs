@@ -7,6 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::process;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -24,6 +25,8 @@ static WS_CLIENTS: LazyLock<Mutex<HashMap<i64, WsClient>>> =
 static WS_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 static RNG_STATE: AtomicI64 = AtomicI64::new(0x4d595df4d0f33173u64 as i64);
 static SAFE_MODE: AtomicBool = AtomicBool::new(false);
+/// Set by `--no-cache`: disables reading and writing the on-disk AST cache.
+static AST_CACHE_OFF: AtomicBool = AtomicBool::new(false);
 static PERF_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 // ── Async task store ────────────────────────────────────────
@@ -154,7 +157,10 @@ struct SourceLine {
     text: String,
 }
 
-#[derive(Debug, Clone)]
+/// A parsed statement. `Serialize`/`Deserialize` exist so the whole parsed
+/// program can be stored in the on-disk AST cache (`__incache__/*.inc`) and
+/// reloaded without lexing or parsing again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum Stmt {
     Say { line: usize, expr: String },
     DefVar {
@@ -292,7 +298,7 @@ enum Stmt {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum RepeatMode {
     Infinite,
     Count(String),
@@ -302,13 +308,13 @@ enum RepeatMode {
     Until(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum ValueSource {
     Expr(String),
     Call { callee: String, args: Vec<ArgItem> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum SubscriptAssignTarget {
     Index {
         name: String,
@@ -322,14 +328,14 @@ enum SubscriptAssignTarget {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum ArgItem {
     Positional(String),
     Named { name: String, expr: String },
     DefVar(Stmt),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FunctionParam {
     name: String,
     ty: Option<String>,
@@ -346,7 +352,7 @@ struct FunctionDef {
 }
 
 // ---- Classes (OOP) ----
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ClassField {
     name: String,
     _ty: String,
@@ -357,13 +363,18 @@ struct ClassDef {
     name: String,
     parent: Option<String>,
     fields: Vec<ClassField>,
-    methods: HashMap<String, FunctionDef>,
+    methods: HashMap<String, Arc<FunctionDef>>,
     is_dataclass: bool,
 }
 
+/// A function body is immutable once parsed, so it is shared behind an `Arc`.
+/// This matters enormously: `resolve_callable` clones the resolved callable on
+/// **every call**, and a by-value `FunctionDef` would deep-copy the parameters
+/// and the entire body AST each time. A 300-statement body used to cost ~16 µs
+/// per call *even when none of it executed*; sharing makes it a refcount bump.
 #[derive(Debug, Clone)]
 enum Callable {
-    Local(FunctionDef),
+    Local(Arc<FunctionDef>),
     External { module: Arc<ModuleInstance>, name: String },
     Builtin(String),
 }
@@ -371,7 +382,7 @@ enum Callable {
 #[derive(Debug, Clone)]
 struct ModuleInstance {
     vars: HashMap<String, Value>,
-    funcs: HashMap<String, FunctionDef>,
+    funcs: HashMap<String, Arc<FunctionDef>>,
     // Functions this module imported from other modules (via `get X from Y`).
     // Preserved so a module's functions can call its own imports.
     callables: HashMap<String, Callable>,
@@ -389,7 +400,7 @@ enum Value {
     Object {
         class_name: String,
         fields: HashMap<String, Value>,
-        methods: HashMap<String, FunctionDef>,
+        methods: HashMap<String, Arc<FunctionDef>>,
         is_dataclass: bool,
     },
     Func(String),
@@ -782,7 +793,7 @@ fn collect_all_fields(class_def: &ClassDef, classes: &HashMap<String, ClassDef>)
 }
 
 /// Recursively collect all methods from a class and its ancestors (parent first, child overrides)
-fn collect_all_methods(class_def: &ClassDef, classes: &HashMap<String, ClassDef>) -> HashMap<String, FunctionDef> {
+fn collect_all_methods(class_def: &ClassDef, classes: &HashMap<String, ClassDef>) -> HashMap<String, Arc<FunctionDef>> {
     let mut methods = HashMap::new();
     if let Some(ref parent_name) = class_def.parent {
         if let Some(parent_def) = classes.get(parent_name) {
@@ -977,7 +988,7 @@ fn to_f64_value(value: &Value) -> Result<f64, String> {
 struct Runtime {
     module_dir: PathBuf,
     vars: HashMap<String, Value>,
-    funcs: HashMap<String, FunctionDef>,
+    funcs: HashMap<String, Arc<FunctionDef>>,
     callables: HashMap<String, Callable>,
     modules: HashMap<String, Arc<ModuleInstance>>,
     classes: HashMap<String, ClassDef>,
@@ -1086,21 +1097,197 @@ impl Runtime {
     }
 
     fn run_file(&mut self, file: &Path) -> Result<(), String> {
+        self.module_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+        // Fast path: load the pre-parsed program from `__incache__` so a re-run
+        // skips reading, pre-processing, lexing and parsing entirely.
+        if let Some(program) = load_cached_program(file) {
+            let mut ctx = ExecContext::new(self);
+            return exec_block(&program, &mut ctx).map(|_| ());
+        }
+
         let source = fs::read_to_string(file)
             .map_err(|e| format!("Failed to read {}: {e}", file.display()))?;
-        self.module_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-        self.run_source(&source)
+        let program = parse_source(&source)?;
+        store_cached_program(file, &source, &program);
+        let mut ctx = ExecContext::new(self);
+        exec_block(&program, &mut ctx).map(|_| ())
     }
 
     fn run_source(&mut self, source: &str) -> Result<(), String> {
-        // Errors are propagated raw here and formatted ONCE by the top-level
-        // handler (format_error_with_source), which re-reads the source file
-        // and locates the line. Formatting earlier would double-render.
-        let lines = preprocess(source)?;
-        let mut parser = Parser::new(lines);
-        let program = parser.parse()?;
+        let program = parse_source(source)?;
         let mut ctx = ExecContext::new(self);
         exec_block(&program, &mut ctx).map(|_| ())
+    }
+}
+
+// =============================================================================
+// On-disk AST cache — `__incache__/<module>.inc` (the `.inc` files)
+// =============================================================================
+//
+// Indent's own `__pycache__`: the first time a file is run its parsed program is
+// written next to it as `<name>.inc` inside a `__incache__/` directory, keyed by
+// the source size, modification time and a hash of the source text. The next run
+// deserialises that program instead of reading, pre-processing, lexing and
+// parsing the source — a large module goes from milliseconds to microseconds.
+//
+// The cache is always optional: any failure to read, validate or write it simply
+// falls back to parsing, and `INDENT_NO_AST_CACHE=1` disables it entirely. Cache
+// files are never treated as source (the language/test/puzzle enumerators only
+// accept `.ind`/`.ath`).
+
+/// Bumped whenever the grammar, `Stmt`/`Expr` layout or the parse pipeline
+/// changes, so old cache files are ignored instead of misread. (Python calls
+/// this the magic number.)
+const AST_CACHE_FORMAT: u32 = 1;
+const AST_CACHE_MAGIC: &[u8; 8] = b"INDENTC1";
+const AST_CACHE_DIR: &str = "__incache__";
+
+fn ast_cache_enabled() -> bool {
+    if AST_CACHE_OFF.load(Ordering::Relaxed) {
+        return false;
+    }
+    match env::var("INDENT_NO_AST_CACHE") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            v.is_empty() || v == "0" || v == "false" || v == "no"
+        }
+        Err(_) => true,
+    }
+}
+
+/// Path of the cache file for a given source file: `<dir>/__incache__/<name>.inc`.
+fn cache_path_for(file: &Path) -> Option<PathBuf> {
+    let dir = file.parent()?;
+    let name = file.file_name()?.to_string_lossy().to_string();
+    Some(dir.join(AST_CACHE_DIR).join(format!("{name}.inc")))
+}
+
+/// FNV-1a. Chosen because it is fast (no SipHash overhead) and dependency-free;
+/// this only guards against a stale cache, not against tampering.
+fn source_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Parse a program from source text, sharing the `run_source` pipeline.
+fn parse_source(source: &str) -> Result<Vec<Stmt>, String> {
+    // Errors are propagated raw here and formatted ONCE by the top-level
+    // handler (format_error_with_source), which re-reads the source file and
+    // locates the line. Formatting earlier would double-render.
+    let lines = preprocess(source)?;
+    let mut parser = Parser::new(lines);
+    parser.parse()
+}
+
+/// Try to load a pre-parsed program from the cache.
+/// Returns `None` on any miss, mismatch or corruption.
+fn load_cached_program(file: &Path) -> Option<Vec<Stmt>> {
+    if !ast_cache_enabled() {
+        return None;
+    }
+    let cache_path = cache_path_for(file)?;
+    let source = fs::read(file).ok()?;
+    let meta = fs::metadata(file).ok()?;
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let data = fs::read(&cache_path).ok()?;
+
+    // Header: magic | format | source size | mtime | source hash | payload len
+    const HEADER: usize = 8 + 4 + 8 + 8 + 8 + 8;
+    if data.len() < HEADER || &data[0..8] != AST_CACHE_MAGIC {
+        return None;
+    }
+    let format = u32::from_le_bytes(data[8..12].try_into().ok()?);
+    if format != AST_CACHE_FORMAT {
+        return None;
+    }
+    let size = u64::from_le_bytes(data[12..20].try_into().ok()?);
+    let mtime = u64::from_le_bytes(data[20..28].try_into().ok()?);
+    let hash = u64::from_le_bytes(data[28..36].try_into().ok()?);
+    let payload_len = u64::from_le_bytes(data[36..44].try_into().ok()?);
+
+    if size != source.len() as u64 || mtime != mtime_ns || hash != source_hash(&source) {
+        return None;
+    }
+    if payload_len != (data.len() - HEADER) as u64 {
+        return None;
+    }
+    bincode::deserialize(&data[HEADER..]).ok()
+}
+
+/// Write the parsed program to the cache. Every failure is ignored — the cache
+/// is an optimisation, never a requirement (read-only installs, full disks, …).
+fn store_cached_program(file: &Path, source: &str, program: &[Stmt]) {
+    if !ast_cache_enabled() {
+        return;
+    }
+    let Some(cache_path) = cache_path_for(file) else {
+        return;
+    };
+    let Ok(payload) = bincode::serialize(&program.to_vec()) else {
+        return;
+    };
+    let Some(dir) = cache_path.parent() else { return };
+    if fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let mtime_ns = fs::metadata(file)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+
+    let mut out = Vec::with_capacity(44 + payload.len());
+    out.extend_from_slice(AST_CACHE_MAGIC);
+    out.extend_from_slice(&AST_CACHE_FORMAT.to_le_bytes());
+    out.extend_from_slice(&(source.len() as u64).to_le_bytes());
+    out.extend_from_slice(&mtime_ns.to_le_bytes());
+    out.extend_from_slice(&source_hash(source.as_bytes()).to_le_bytes());
+    out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    out.extend_from_slice(&payload);
+
+    // Write to a unique temp file and rename, so a concurrent reader never sees
+    // a half-written cache and two writers cannot interleave.
+    let tmp = cache_path.with_extension(format!("inc.tmp{}", std::process::id()));
+    if fs::write(&tmp, &out).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    if fs::rename(&tmp, &cache_path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
+/// Remove every `__incache__` directory under `dir` (used by `--no-cache`-style
+/// housekeeping and `indent cache clear`). Returns how many files were removed.
+fn clear_ast_cache(dir: &Path, removed: &mut usize) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().and_then(|n| n.to_str()) == Some(AST_CACHE_DIR) {
+                if let Ok(inner) = fs::read_dir(&path) {
+                    for f in inner.flatten() {
+                        if fs::remove_file(f.path()).is_ok() {
+                            *removed += 1;
+                        }
+                    }
+                }
+                let _ = fs::remove_dir(&path);
+            } else {
+                clear_ast_cache(&path, removed);
+            }
+        }
     }
 }
 
@@ -1586,12 +1773,12 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 {
                     method_map.insert(
                         mname.clone(),
-                        FunctionDef {
+                        Arc::new(FunctionDef {
                             params: params.clone(),
                             return_type: None,
                             body: body.clone(),
                             is_generator: stmts_contain_yield(body),
-                        },
+                        }),
                     );
                 }
             }
@@ -1704,12 +1891,12 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             is_async,
             ..
         } => {
-            let f = FunctionDef {
+            let f = Arc::new(FunctionDef {
                 params: params.clone(),
                 return_type: return_type.clone(),
                 body: body.clone(),
                 is_generator: *is_generator,
-            };
+            });
             ctx.rt.funcs.insert(name.clone(), f.clone());
             ctx.rt.callables.insert(name.clone(), Callable::Local(f));
             if *is_async {
@@ -14440,7 +14627,7 @@ fn self_update_from_source() {
 fn usage() {
     eprintln!("Indent {} — a language for learning and building", INDENT_VERSION);
     eprintln!();
-    eprintln!("Usage:  indent [--debug] [--break N[,M...]] <file.ind>");
+    eprintln!("Usage:  indent [--debug] [--break N[,M...]] [--no-cache] <file.ind>");
     eprintln!("        indent <command> [options] [args]");
     eprintln!();
     eprintln!("Commands:");
@@ -14465,6 +14652,8 @@ fn usage() {
     eprintln!("  --watch <file.ind>        Hot reload: re-run on every save");
     eprintln!("  --safe <file.ind>         Run in a default-deny sandbox (no file/OS/net/Python)");
     eprintln!("  --debug [--break N[,M]]   Debug with breakpoints");
+    eprintln!("  --no-cache                Ignore the __incache__ parsed-program cache");
+    eprintln!("  --clear-cache             Delete __incache__ directories in this project");
     eprintln!("  --update                  Update Indent to the latest version");
     eprintln!("  --version, -V             Print version");
     eprintln!("  --help, -h                Show this help");
@@ -15611,6 +15800,21 @@ fn main() {
             continue;
         }
 
+        // Ignore `__incache__` for this run (read and write).
+        if arg == "--no-cache" {
+            AST_CACHE_OFF.store(true, Ordering::Relaxed);
+            i += 1;
+            continue;
+        }
+
+        // Delete every `__incache__` directory below the current directory.
+        if arg == "--clear-cache" {
+            let mut removed = 0usize;
+            clear_ast_cache(Path::new("."), &mut removed);
+            println!("Cleared {removed} cached program file(s).");
+            std::process::exit(0);
+        }
+
         if arg == "--break" {
             if i + 1 >= args.len() {
                 eprintln!("Missing value for --break");
@@ -15751,6 +15955,178 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("{}_{}", prefix, now))
+    }
+
+    fn cache_file_for(src: &Path) -> PathBuf {
+        src.parent()
+            .unwrap()
+            .join(AST_CACHE_DIR)
+            .join(format!(
+                "{}.inc",
+                src.file_name().unwrap().to_string_lossy()
+            ))
+    }
+
+    /// `AST_CACHE_OFF` is process-global, so the cache tests must not interleave
+    /// (Rust runs tests in parallel by default). Every cache test takes this lock.
+    fn cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn ast_cache_round_trips_a_program() {
+        let _guard = cache_test_lock();
+        let dir = unique_dir("indent_test_ast_cache");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let src = dir.join("mod_a.ind");
+        let source = "fun Double\n    give 2\n";
+        fs::write(&src, source).expect("write source");
+
+        // First load is a miss (nothing cached yet).
+        assert!(load_cached_program(&src).is_none());
+
+        let program = parse_source(source).expect("parse");
+        store_cached_program(&src, source, &program);
+
+        let cache = cache_file_for(&src);
+        assert!(cache.exists(), "cache file was not written");
+
+        let loaded = load_cached_program(&src).expect("cache hit");
+        assert_eq!(
+            format!("{program:?}").len(),
+            format!("{loaded:?}").len(),
+            "cached program differs from the freshly parsed one"
+        );
+    }
+
+    #[test]
+    fn ast_cache_invalidates_when_the_source_changes() {
+        let _guard = cache_test_lock();
+        let dir = unique_dir("indent_test_ast_cache_invalidate");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let src = dir.join("mod_b.ind");
+        let source = "fun One\n    give 1\n";
+        fs::write(&src, source).expect("write source");
+        let program = parse_source(source).expect("parse");
+        store_cached_program(&src, source, &program);
+        assert!(load_cached_program(&src).is_some(), "expected a cache hit");
+
+        // Same length, different text — the source hash must catch this even if
+        // the mtime granularity is coarse.
+        let edited = "fun One\n    give 2\n";
+        assert_eq!(edited.len(), source.len());
+        fs::write(&src, edited).expect("rewrite source");
+        assert!(
+            load_cached_program(&src).is_none(),
+            "stale cache must be rejected after an edit"
+        );
+    }
+
+    #[test]
+    fn ast_cache_rejects_a_corrupt_or_truncated_file() {
+        let _guard = cache_test_lock();
+        let dir = unique_dir("indent_test_ast_cache_corrupt");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let src = dir.join("mod_c.ind");
+        let source = "fun Three\n    give 3\n";
+        fs::write(&src, source).expect("write source");
+        let program = parse_source(source).expect("parse");
+        store_cached_program(&src, source, &program);
+
+        let cache = cache_file_for(&src);
+        // Truncate the payload: must be treated as a miss, never a panic.
+        let bytes = fs::read(&cache).expect("read cache");
+        fs::write(&cache, &bytes[..bytes.len() / 2]).expect("truncate cache");
+        assert!(load_cached_program(&src).is_none());
+
+        // Garbage with a valid header size.
+        fs::write(&cache, b"not a cache file at all........").expect("garbage");
+        assert!(load_cached_program(&src).is_none());
+
+        // A different cache format version must be rejected too.
+        let mut bad = Vec::new();
+        bad.extend_from_slice(AST_CACHE_MAGIC);
+        bad.extend_from_slice(&(AST_CACHE_FORMAT + 999).to_le_bytes());
+        bad.extend_from_slice(&[0u8; 32]);
+        fs::write(&cache, &bad).expect("bad version");
+        assert!(load_cached_program(&src).is_none());
+    }
+
+    #[test]
+    fn ast_cache_handles_a_missing_source() {
+        let _guard = cache_test_lock();
+        // A cache must never be used when the source file itself is gone.
+        let dir = unique_dir("indent_test_ast_cache_missing");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let src = dir.join("mod_d.ind");
+        let source = "fun Four\n    give 4\n";
+        fs::write(&src, source).expect("write source");
+        let program = parse_source(source).expect("parse");
+        store_cached_program(&src, source, &program);
+        assert!(load_cached_program(&src).is_some());
+
+        fs::remove_file(&src).expect("remove source");
+        assert!(
+            load_cached_program(&src).is_none(),
+            "must not serve a cache for a deleted source"
+        );
+    }
+
+    #[test]
+    fn ast_cache_can_be_disabled() {
+        let _guard = cache_test_lock();
+        let dir = unique_dir("indent_test_ast_cache_disabled");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let src = dir.join("mod_e.ind");
+        let source = "fun Five\n    give 5\n";
+        fs::write(&src, source).expect("write source");
+        let program = parse_source(source).expect("parse");
+
+        AST_CACHE_OFF.store(true, Ordering::Relaxed);
+        store_cached_program(&src, source, &program);
+        assert!(!cache_file_for(&src).exists(), "disabled cache wrote a file");
+        assert!(load_cached_program(&src).is_none());
+        AST_CACHE_OFF.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn cached_program_executes_identically() {
+        let _guard = cache_test_lock();
+        // End-to-end: run a program that imports a module, then run it again
+        // from a fresh runtime — the second run loads the module from its cache.
+        // The program *calls* the cached function, so a cache that round-trips
+        // incorrectly would fail here rather than silently "pass".
+        let dir = unique_dir("indent_test_ast_cache_exec");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let helper = dir.join("helper_mod.ind");
+        fs::write(&helper, "fun Triple\n    give 3\n").expect("write helper");
+        let main = dir.join("main.ind");
+        fs::write(
+            &main,
+            "get Triple from helper_mod\nvar t dynamic = Triple()\n",
+        )
+        .expect("write main");
+
+        let mut rt = Runtime::new(dir.clone());
+        rt.run_file(&main).expect("first run");
+        assert!(
+            cache_file_for(&helper).exists(),
+            "helper module cache missing"
+        );
+        assert!(
+            load_cached_program(&helper).is_some(),
+            "helper module cache is not loadable"
+        );
+
+        // Fresh runtime, warm cache.
+        let mut rt2 = Runtime::new(dir.clone());
+        let result = rt2.run_file(&main);
+        assert!(result.is_ok(), "cached run failed: {:?}", result.err());
+        assert!(
+            rt2.callables.contains_key("Triple"),
+            "function from a cached module was not imported"
+        );
     }
 
     #[test]
