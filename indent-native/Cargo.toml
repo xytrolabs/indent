@@ -1,7 +1,21 @@
 [package]
 name = "indent"
-version = "2.2.2"
+version = "2.3.0"
 edition = "2024"
+
+# Release profile tuned for a tree-walking interpreter: the evaluator is one hot
+# loop spread across many functions, so cross-crate inlining matters a lot.
+# `lto = "fat"` + `codegen-units = 1` let the optimizer inline the evaluator and
+# the std-library helpers into each other; `panic = "abort"` drops the unwinding
+# tables (the runtime never catches panics, so there is nothing to unwind for).
+# Build time goes up noticeably — use `cargo build` for day-to-day work.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+incremental = false
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

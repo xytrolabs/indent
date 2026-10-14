@@ -56,21 +56,23 @@ you know what to expect (and what not to fight).
 - **Single interpreter thread** for a script (the async/task model runs
   functions on background threads, but there is no automatic multi-core
   parallelization of plain code).
-- **`append`/`extend`/`push` copy the list**, because containers are passed by
-  value. Writing `l is append l x` directly in your own script is optimised
-  (the runtime moves the list instead of copying it, so the loop is linear), but
-  the optimisation only applies to that exact shape. Two consequences:
+- **Containers are still passed by value.** The runtime speeds up the common
+  write *shapes*, but a container handed to a function is still a copy, and the
+  optimised shapes only cover direct variable targets:
+  - `l is append l x` and `d[k] is v` / `l[i] is v` where the target is a plain
+    variable are **linear** (the container is moved, not copied).
   - `l is append l x` inside **a function that took `l` as a parameter**, or
     `obj.items is append obj.items x`, still copies each time — O(n²) over a
     loop. Build such lists with a comprehension (`[f x for x in xs]`) or `map`,
     or collect items and `extend` once at the end.
   - `l is l + [x]` in a loop is **always** O(n²) — measured 6.5 s for 20 000
     items. Never build a list that way; see `benchmarks/`.
-- Measured reference numbers (release build; run `benchmarks/` yourself):
-  100 000 function calls ≈ 0.14 s, 50 000 dict writes ≈ 0.024 s,
-  20 000 `append`s ≈ 0.007 s, 20 000-item comprehension ≈ 0.003 s. Loading the
-  whole `discord` + `ai` package stack plus all puzzle modules costs ≈ 48 ms,
-  so **startup is not the bottleneck for a bot — network round-trips are**.
+- Measured reference numbers (release build, Indent 2.3; run `benchmarks/`
+  yourself): a function call ≈ 250 ns for one argument, `i is i + 1` ≈ 160 ns,
+  `if` + comparison ≈ 245 ns, 100 000 calls ≈ 0.05 s, 20 000 `append`s ≈
+  0.007 s, 20 000 index writes ≈ 0.015 s. Loading the whole `discord` + `ai`
+  package stack plus all puzzle modules costs ≈ 48 ms, so **startup is not the
+  bottleneck for a bot — network round-trips are**.
 
 
 ## Ecosystem

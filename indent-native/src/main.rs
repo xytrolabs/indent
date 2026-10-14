@@ -986,6 +986,13 @@ struct Runtime {
     /// (A imports B imports A) and report a clean error instead of recursing
     /// until the stack overflows.
     module_loading: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Parsed-expression cache. Every `Stmt` stores its expressions as *text*
+    /// and `eval_expr` used to lex + parse that text on **every single
+    /// evaluation** — so a loop body re-parsed its own source thousands of
+    /// times a second. Parsing is context-free, so the AST is cached here and
+    /// reused. Shared across module runtimes (like `module_cache`), so a
+    /// std-library expression is parsed once per process.
+    expr_cache: Arc<Mutex<HashMap<String, Arc<Expr>>>>,
     debugger: Option<Debugger>,
     async_funcs: HashSet<String>,
 }
@@ -1007,6 +1014,7 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
+            expr_cache: Arc::new(Mutex::new(HashMap::new())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1022,6 +1030,7 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: cache,
             module_loading: Arc::new(Mutex::new(HashSet::new())),
+            expr_cache: Arc::new(Mutex::new(HashMap::new())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1033,6 +1042,7 @@ impl Runtime {
         module_dir: PathBuf,
         cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
         loading: Arc<Mutex<HashSet<PathBuf>>>,
+        exprs: Arc<Mutex<HashMap<String, Arc<Expr>>>>,
     ) -> Self {
         Self {
             module_dir,
@@ -1043,9 +1053,24 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: cache,
             module_loading: loading,
+            expr_cache: exprs,
             debugger: None,
             async_funcs: HashSet::new(),
         }
+    }
+
+    /// Parse `expr` once and remember the AST. Parsing is context-free, so the
+    /// result is valid for every later evaluation of the same text.
+    fn cached_expr(&self, expr: &str) -> Result<Arc<Expr>, String> {
+        if let Some(hit) = self.expr_cache.lock().unwrap().get(expr) {
+            return Ok(hit.clone());
+        }
+        let parsed = Arc::new(parse_expr_ast(expr)?);
+        self.expr_cache
+            .lock()
+            .unwrap()
+            .insert(expr.to_string(), parsed.clone());
+        Ok(parsed)
     }
 
     fn enable_debugger(&mut self, file: &Path, breakpoints: HashSet<usize>) -> Result<(), String> {
@@ -1232,9 +1257,36 @@ fn arrow_style_empty() -> String {
     "   |".to_string()
 }
 
+/// One call frame: named locals plus the positional arguments of the call that
+/// owns it.
+///
+/// The positional arguments are kept as a plain list and bound *lazily* — a read
+/// of `argument` / `argument2` … resolves against this list instead of the frame
+/// having to materialise a `String` key and a map entry for every parameter of
+/// every call. Most functions never touch the aliases, so this removes several
+/// allocations per call.
+#[derive(Default, Clone)]
+struct Frame {
+    vars: HashMap<String, Value>,
+    args: Vec<Value>,
+}
+
+/// `argument` → 0, `argument2` → 1, `argument3` → 2 … (the aliases the runtime
+/// has always bound). Returns `None` for any other name.
+fn positional_alias_index(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("argument")?;
+    if rest.is_empty() {
+        return Some(0);
+    }
+    match rest.parse::<usize>() {
+        Ok(n) if n >= 2 => Some(n - 1),
+        _ => None,
+    }
+}
+
 struct ExecContext<'a> {
     rt: &'a mut Runtime,
-    frames: Vec<HashMap<String, Value>>,
+    frames: Vec<Frame>,
     collect_yields: bool,
     yielded_values: Vec<Value>,
 }
@@ -1250,7 +1302,7 @@ impl<'a> ExecContext<'a> {
     }
 
     fn push_frame(&mut self) {
-        self.frames.push(HashMap::new());
+        self.frames.push(Frame::default());
     }
 
     fn pop_frame(&mut self) {
@@ -1259,25 +1311,60 @@ impl<'a> ExecContext<'a> {
 
     fn define_local(&mut self, name: &str, value: Value) {
         if let Some(frame) = self.frames.last_mut() {
-            frame.insert(name.to_string(), value);
+            match frame.vars.get_mut(name) {
+                Some(slot) => *slot = value,
+                None => {
+                    frame.vars.insert(name.to_string(), value);
+                }
+            }
         } else {
-            self.rt.vars.insert(name.to_string(), value);
+            match self.rt.vars.get_mut(name) {
+                Some(slot) => *slot = value,
+                None => {
+                    self.rt.vars.insert(name.to_string(), value);
+                }
+            }
         }
     }
 
     fn set_var(&mut self, name: &str, value: Value) {
+        // Update in place when the variable already exists: rebuilding the key
+        // String on every assignment (i.e. on every loop iteration) was pure
+        // overhead — `i is i + 1` allocated a String every time.
         for frame in self.frames.iter_mut().rev() {
-            if frame.contains_key(name) {
-                frame.insert(name.to_string(), value);
+            if let Some(slot) = frame.vars.get_mut(name) {
+                *slot = value;
                 return;
             }
         }
-        self.rt.vars.insert(name.to_string(), value);
+        match self.rt.vars.get_mut(name) {
+            Some(slot) => *slot = value,
+            None => {
+                self.rt.vars.insert(name.to_string(), value);
+            }
+        }
+    }
+
+    /// Does a variable exist without cloning its value?
+    fn has_var(&self, name: &str) -> bool {
+        for frame in self.frames.iter().rev() {
+            if frame.vars.contains_key(name) {
+                return true;
+            }
+        }
+        self.rt.vars.contains_key(name)
     }
 
     fn get_var(&self, name: &str) -> Option<Value> {
+        // Only names that could be positional aliases pay for the extra check.
+        let alias = positional_alias_index(name);
         for frame in self.frames.iter().rev() {
-            if let Some(v) = frame.get(name) {
+            if let Some(idx) = alias {
+                if let Some(v) = frame.args.get(idx) {
+                    return Some(v.clone());
+                }
+            }
+            if let Some(v) = frame.vars.get(name) {
                 return Some(v.clone());
             }
         }
@@ -1288,7 +1375,7 @@ impl<'a> ExecContext<'a> {
     /// copy). Mirrors `set_var`'s scope search: innermost frame first.
     fn take_var(&mut self, name: &str) -> Option<Value> {
         for frame in self.frames.iter_mut().rev() {
-            if let Some(v) = frame.remove(name) {
+            if let Some(v) = frame.vars.remove(name) {
                 return Some(v);
             }
         }
@@ -1544,6 +1631,26 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             value,
         } => {
             let replacement = eval_value_source(value, ctx)?;
+
+            // Fast path: `d["k"] is v` where `d` is a plain variable. Moving the
+            // container out of the variable and back avoids cloning it, which
+            // made repeatedly filling a dict (or list) O(n²) — same class of
+            // problem as the old `append` copy.
+            if is_bare_identifier(name) {
+                if !ctx.has_var(name) {
+                    return Err(format!("Line {}: variable '{}' is not defined", line, name));
+                }
+                let index = eval_expr(index_expr, ctx)?;
+                if let Some(target) = ctx.take_var(name) {
+                    let updated = assign_index_value(target, index, replacement)
+                        .map_err(|e| format!("Line {}: {}", line, e))?;
+                    ctx.set_var(name, updated);
+                    return Ok(Control::None);
+                }
+                // Should be unreachable (checked above); fall through defensively.
+                return Err(format!("Line {}: variable '{}' is not defined", line, name));
+            }
+
             let target = ctx
                 .get_var(name)
                 .ok_or_else(|| format!("Line {}: variable '{}' is not defined", line, name))?;
@@ -2239,6 +2346,7 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
             .to_path_buf(),
         ctx.rt.module_cache.clone(),
         ctx.rt.module_loading.clone(),
+        ctx.rt.expr_cache.clone(),
     );
     let run_result = module_runtime.run_file(&canonical);
 
@@ -3154,12 +3262,22 @@ fn invoke_function(
                 ctx.define_local(&param.name, Value::List(rest));
                 continue;
             }
-            let raw_value = if let Some(v) = named.get(&param.name) {
-                v.clone()
+            let raw_value = if !named.is_empty() {
+                if let Some(v) = named.get(&param.name) {
+                    v.clone()
+                } else if let Some(v) = positional.get(idx) {
+                    v.clone()
+                } else if let Some(default_expr) = &param.default_value {
+                    eval_expr(default_expr, ctx).unwrap_or(Value::Empty)
+                } else {
+                    ctx.pop_frame();
+                    return Err(format!("Missing argument for parameter '{}'", param.name));
+                }
             } else if let Some(v) = positional.get(idx) {
+                // Fast path: the overwhelmingly common case — no named args, so
+                // skip the hash lookup entirely.
                 v.clone()
             } else if let Some(default_expr) = &param.default_value {
-                // Evaluate the default expression
                 eval_expr(default_expr, ctx).unwrap_or(Value::Empty)
             } else {
                 ctx.pop_frame();
@@ -3181,13 +3299,11 @@ fn invoke_function(
         }
     }
 
-    for (idx, value) in positional.iter().enumerate() {
-        let key = match idx {
-            0 => "argument".to_string(),
-            1 => "argument2".to_string(),
-            _ => format!("argument{}", idx + 1),
-        };
-        ctx.define_local(&key, value.clone());
+    // Bind the positional arguments once, as a list. `argument` / `argument2` …
+    // are resolved from this list on demand (see `get_var`), which avoids a
+    // String allocation and a map insert per argument per call.
+    if let Some(frame) = ctx.frames.last_mut() {
+        frame.args = positional.to_vec();
     }
 
     for (k, v) in named {
@@ -8878,7 +8994,7 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                 match &stmt {
                     Stmt::Await { expr, .. } => {
                         // The awaited expression may reference coroutine locals.
-                        ctx.frames.push(c.locals.clone());
+                        ctx.frames.push(Frame { vars: c.locals.clone(), args: vec![] });
                         let fv = eval_expr(expr, ctx);
                         ctx.frames.pop();
                         let fv = fv?;
@@ -8894,7 +9010,7 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                     }
                     Stmt::Wait { expr, .. } => {
                         // wait <future> (int) awaits; wait <seconds> (float) delays.
-                        ctx.frames.push(c.locals.clone());
+                        ctx.frames.push(Frame { vars: c.locals.clone(), args: vec![] });
                         let v = eval_expr(expr, ctx);
                         ctx.frames.pop();
                         let v = v?;
@@ -8919,9 +9035,9 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                     }
                     _ => {
                         // Run the statement with this coroutine's locals on top.
-                        ctx.frames.push(c.locals.clone());
+                        ctx.frames.push(Frame { vars: c.locals.clone(), args: vec![] });
                         let control = exec_stmt(&stmt, ctx);
-                        c.locals = ctx.frames.pop().unwrap();
+                        c.locals = ctx.frames.pop().unwrap().vars;
                         let control = control?;
                         any_progress = true;
                         match control {
@@ -10364,9 +10480,9 @@ fn preprocess_expr_calls(expr: &str) -> String {
     expr.to_string()
 }
 
-fn eval_expr(expr: &str, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
-    // Preprocess: convert space-separated calls like "len text" to "len(text)"
-    // so they work in say, if, is-assign, and other expression contexts.
+/// Preprocess (space-call → parenthesized call) + lex + parse an expression
+/// string into an AST. Pure: the result depends only on the text.
+fn parse_expr_ast(expr: &str) -> Result<Expr, String> {
     let processed = preprocess_expr_calls(expr);
     let mut lexer = Lexer::new(&processed);
     let tokens = lexer.tokenize()?;
@@ -10375,6 +10491,72 @@ fn eval_expr(expr: &str, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     if !parser.is_done() {
         return Err(format!("Unexpected token in expression '{}'", expr));
     }
+    Ok(ast)
+}
+
+/// Cheap classification of the shapes that account for most evaluations, so the
+/// common case never touches the parse cache (or its lock) at all.
+fn fast_literal(expr: &str) -> Option<Value> {
+    let bytes = expr.as_bytes();
+    let first = *bytes.first()?;
+
+    // Bare identifier: `i`, `total`, `user_name` → a plain variable read.
+    if first.is_ascii_alphabetic() || first == b'_' {
+        if bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        {
+            return None; // handled by the caller (needs runtime lookup)
+        }
+    }
+
+    // Integer literal.
+    if first.is_ascii_digit() || (first == b'-' && bytes.len() > 1 && bytes[1].is_ascii_digit()) {
+        if let Ok(n) = expr.parse::<i64>() {
+            return Some(Value::Int(n));
+        }
+    }
+
+    // Double-quoted string with no escapes and no interpolation: the inner text
+    // is already the literal value.
+    if first == b'"' && bytes.len() >= 2 && bytes[bytes.len() - 1] == b'"' {
+        let inner = &expr[1..expr.len() - 1];
+        if !inner.contains('"') && !inner.contains('\\') && !inner.contains('%') {
+            return Some(Value::Str(inner.to_string()));
+        }
+    }
+
+    None
+}
+
+/// True when `expr` is a bare identifier (letters/digits/underscore).
+fn is_bare_identifier(expr: &str) -> bool {
+    let bytes = expr.as_bytes();
+    match bytes.first() {
+        Some(b) if b.is_ascii_alphabetic() || *b == b'_' => {}
+        _ => return false,
+    }
+    bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+}
+
+fn eval_expr(expr: &str, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    // Fast path 1: bare identifier → direct variable read, no parse at all.
+    if is_bare_identifier(expr) {
+        if let Some(v) = ctx.get_var(expr) {
+            return Ok(v);
+        }
+        // Not a variable: fall through so the normal path reports it (or it
+        // resolves as a zero-arg function call).
+    }
+
+    // Fast path 2: plain literals.
+    if let Some(v) = fast_literal(expr) {
+        return Ok(v);
+    }
+
+    // Otherwise use the cached AST. Parsing used to happen here on *every*
+    // evaluation; now it happens once per distinct expression string.
+    let ast = ctx.rt.cached_expr(expr)?;
     eval_ast(&ast, ctx)
 }
 

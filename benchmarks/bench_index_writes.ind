@@ -1,0 +1,29 @@
+#! Filling a container by index used to clone it on every write, making the loop
+#! O(n^2). `d[k] is v` / `l[i] is v` now move the container instead of copying
+#! it, so both are linear. Run:  indent benchmarks/bench_index_writes.ind
+
+fun fillDict n
+    var d dynamic = {}
+    repeat i in range(n)
+        d[string(i)] is i
+    give d
+
+fun fillList n
+    var l dynamic = []
+    repeat i in range(n)
+        l is append l 0
+    repeat i in range(n)
+        l[i] is i
+    give l
+
+repeat n in [5000, 10000, 20000]
+    var t0 float = time_perf_counter
+    var d dynamic = fillDict n
+    var t1 float = time_perf_counter
+    say "dict writes x" + string(n) + ": " + string(t1 - t0) + "s (keys=" + string(len(keys(d))) + ")"
+
+repeat n in [5000, 10000, 20000]
+    var t2 float = time_perf_counter
+    var l dynamic = fillList n
+    var t3 float = time_perf_counter
+    say "list writes x" + string(n) + ": " + string(t3 - t2) + "s (len=" + string(len(l)) + ")"

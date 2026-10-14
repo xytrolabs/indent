@@ -1,0 +1,102 @@
+#! Guard the optimised container-write paths: `d[k] is v` / `l[i] is v` now move
+#! the container out of the variable and back instead of cloning it. Copy
+#! semantics must be unchanged and error behaviour must be identical.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. a snapshot must not see later writes ----
+var d dynamic = {"a": 1}
+var snap dynamic = d
+d["b"] is 2
+var snapLen int = len(keys(snap))
+var liveLen int = len(keys(d))
+var ok1a boolean = snapLen == 1
+var ok1b boolean = liveLen == 2
+assert ok1a "index write does not mutate a snapshot"
+assert ok1b "index write lands in the target"
+
+#! ---- 2. overwriting an existing key ----
+d["a"] is 99
+var aVal dynamic = d["a"]
+var ok2 boolean = aVal == 99
+assert ok2 "index write overwrites an existing key"
+
+#! ---- 3. list element writes ----
+var l dynamic = [1, 2, 3]
+var lsnap dynamic = l
+l[0] is 10
+var first dynamic = l[0]
+var snapFirst dynamic = lsnap[0]
+var ok3a boolean = first == 10
+var ok3b boolean = snapFirst == 1
+assert ok3a "list element write lands"
+assert ok3b "list snapshot is unaffected"
+
+#! ---- 4. the value expression may read the container ----
+var d2 dynamic = {"n": 5}
+d2["n"] is d2["n"] + 1
+var nVal dynamic = d2["n"]
+var ok4 boolean = nVal == 6
+assert ok4 "value expression may read the container"
+
+#! ---- 5. dictionary keys and values stay well formed after many writes ----
+var big dynamic = {}
+repeat i in range(2000)
+    big[string(i)] is i
+var bigLen int = len(keys(big))
+var ok5a boolean = bigLen == 2000
+assert ok5a "2000 index writes produce 2000 keys"
+var last dynamic = big["1999"]
+var ok5b boolean = last == 1999
+assert ok5b "the last written value is correct"
+
+#! ---- 6. writing to a missing index on a dict adds it ----
+var d3 dynamic = {}
+d3["new"] is "v"
+var ok6 boolean = d3["new"] == "v"
+assert ok6 "writing a new key inserts it"
+
+#! ---- 7. non-container targets still raise ----
+var notAdict dynamic = 5
+var caught boolean = false
+do:
+    notAdict["k"] is 1
+catch as err:
+    caught is true
+assert caught "index write on a non-container raises"
+
+#! ---- 8. writing to an undefined variable still raises ----
+var caught2 boolean = false
+do:
+    undefinedThing["k"] is 1
+catch as err:
+    caught2 is true
+assert caught2 "index write on an undefined variable raises"
+
+#! ---- 9. a container passed to a function is still a copy ----
+fun setKey d
+    d["added"] is 1
+    give d
+
+var d4 dynamic = {"x": 1}
+var returned dynamic = setKey d4
+var origLen int = len(keys(d4))
+var retLen int = len(keys(returned))
+var ok9a boolean = origLen == 1
+var ok9b boolean = retLen == 2
+assert ok9a "caller's dict is unchanged by a mutating function"
+assert ok9b "returned dict carries the change"
+
+#! ---- 10. slicing a list still copies ----
+var l2 dynamic = [1, 2, 3, 4]
+var sl dynamic = l2[1:3]
+l2[1] is 99
+var slFirst dynamic = sl[0]
+var ok10 boolean = slFirst == 2
+assert ok10 "slice is an independent copy"
+
+say "index write semantics: ALL PASS"

@@ -1,0 +1,62 @@
+#! Isolate the per-operation cost of the interpreter's hottest constructs.
+#! Run with a release build:  indent benchmarks/bench_calls.ind
+
+fun noop
+    give 0
+
+fun one a
+    give a
+
+fun two a b
+    give a + b
+
+var N int = 200000
+var tA float = time_perf_counter
+repeat N
+    noop
+var tB float = time_perf_counter
+say "noop call:        " + string((tB - tA) * 1000000.0 / float(N)) + " us/op"
+
+var t0 float = time_perf_counter
+repeat N
+    var r dynamic = noop
+var t1 float = time_perf_counter
+say "noop call (is):   " + string((t1 - t0) * 1000000.0 / float(N)) + " us/op"
+
+var t2 float = time_perf_counter
+var acc int = 0
+repeat N
+    acc is one 1
+var t3 float = time_perf_counter
+say "1-arg call:       " + string((t3 - t2) * 1000000.0 / float(N)) + " us/op"
+
+var t4 float = time_perf_counter
+var acc2 int = 0
+repeat N
+    acc2 is two 1 2
+var t5 float = time_perf_counter
+say "2-arg call:       " + string((t5 - t4) * 1000000.0 / float(N)) + " us/op"
+
+var t6 float = time_perf_counter
+var v int = 0
+repeat N
+    v is v + 1
+var t7 float = time_perf_counter
+say "add + assign:     " + string((t7 - t6) * 1000000.0 / float(N)) + " us/op"
+
+var t8 float = time_perf_counter
+var c int = 0
+repeat N
+    if v > 0
+        c is c + 1
+var t9 float = time_perf_counter
+say "if + compare:     " + string((t9 - t8) * 1000000.0 / float(N)) + " us/op"
+
+var tC float = time_perf_counter
+var nm dynamic = "a"
+repeat N
+    var s string = "hi " + nm
+var tD float = time_perf_counter
+say "str concat:       " + string((tD - tC) * 1000000.0 / float(N)) + " us/op"
+
+say "us/op over " + string(N) + " iterations each"

@@ -1,5 +1,95 @@
 # Indent Changelog
 
+## 2.3.0 — 2026-10-14 (performance release) 🚀
+
+> Major optimizations and general improvements coming to Indent in 2.3!
+> To become a real competitive force, Indent development has focused on
+> improving speed in Indent programs through optimizations of Rust code and
+> functions.
+
+### ⚡ Measured results (release build, unchanged workloads)
+
+| Workload | 2.2.2 | 2.3.0 | Gain |
+|---|---|---|---|
+| Interpreter hot-path suite | 1888 ms | **632 ms** | **2.99×** |
+| Startup — hello-world (50 runs) | 50 ms | **42 ms** | 1.19× |
+| Startup — 5 std imports (30 runs) | 210 ms | **175 ms** | 1.20× |
+| 1-argument call | 402 ns | **249 ns** | 1.61× |
+| 2-argument call | 700 ns | **436 ns** | 1.61× |
+| No-op call | 184 ns | **138 ns** | 1.33× |
+| `i is i + 1` | 202 ns | **159 ns** | 1.27× |
+| `if` + comparison | 290 ns | **245 ns** | 1.18× |
+| String concatenation | 270 ns | **221 ns** | 1.22× |
+| 100 000 function calls | 136 ms | **49 ms** | 2.78× |
+| 50 000 `append`s | 75.6 s | **0.01 s** | **over 4000×** |
+
+### 🧠 Expressions are parsed once, not on every evaluation
+The interpreter stored every statement's expressions as **text** and re-lexed +
+re-parsed that text on *every* evaluation, so a loop re-parsed its own source
+hundreds of thousands of times. Parsing is context-free, so the resulting AST is
+now cached:
+- new `expr_cache` on `Runtime`, **shared across module runtimes** (a std-library
+  expression is parsed once per process), keyed by the original text;
+- `parse_expr_ast` separated from evaluation; `eval_expr` consults the cache;
+- allocation-free fast paths first: a bare identifier resolves directly against
+  the variable scopes (exactly what the old parse+evaluate did), an integer
+  literal parses directly, and a double-quoted string with no escapes and no
+  `%` is used as-is.
+
+### 🧩 Container writes move instead of copy (two quadratic traps removed)
+- **`l is append l x`** (also `push`/`extend`): when the assignment target *is*
+  the list being appended to, the list is moved out of the variable, mutated and
+  moved back. Building a 50 000-item list went from **75.6 s to 0.019 s** and
+  scales linearly (5k/10k/20k/40k = 0.002/0.004/0.009/0.016 s).
+- **`d[k] is v` / `l[i] is v`**: index writes used to clone the whole container
+  on every write, so filling a dictionary was O(n²). They now move it too —
+  filling a 20 000-key dict takes 15 ms and scales linearly
+  (5k/10k/20k = 4.2/7.9/15.2 ms).
+- Both are guarded by copy-semantics tests: a snapshot taken before the write
+  still sees the old value, the value expression may still read the container,
+  and non-container / undefined-variable targets raise exactly as before
+  (`tests/append_semantics.ind`, `tests/index_write_semantics.ind`).
+- The slow paths remain for shapes that cannot be moved safely (member targets
+  such as `obj.items is append obj.items x`, and containers passed as parameters).
+
+### 🔤 Zero-allocation variable updates
+`define_local` / `set_var` now update an existing entry in place instead of
+rebuilding the key `String` — assigning to a variable in a loop allocated a new
+`String` every iteration. Also added `has_var` (existence check without cloning)
+and `take_var` (move a variable's value out).
+
+### 📞 Cheaper function calls
+- Positional arguments are stored once as a list on the call frame;
+  `argument` / `argument2` … are resolved from that list **on demand** instead of
+  materialising a `String` key and a map entry per parameter per call. Most
+  functions never touch the aliases.
+- `Frame` struct replaces the bare local map so the argument list travels with
+  the frame (and stays balanced through the existing push/pop discipline).
+- Named-argument lookups are skipped entirely when a call has no named arguments.
+
+### ⚙️ Release build profile
+`[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`,
+`strip = "symbols"`, `incremental = false`. The evaluator is one hot loop spread
+over many functions, so cross-crate inlining matters. (Build time increases —
+use `cargo build` for day-to-day work.)
+
+### 🧪 Reproducible benchmarking
+New `benchmarks/`: `bench_hot_paths`, `bench_calls` (per-operation costs),
+`bench_list_building`, `bench_append_scaling`, `bench_index_writes`, plus
+`measure.sh`, `verify.sh`, `build.sh`, `run_suite.sh` and a README with the
+reference table. `sh benchmarks/verify.sh` runs performance **and** both test
+suites.
+
+### 🐛 Also in 2.3 (see the entries below for detail)
+Circular imports raise a catchable error instead of a stack overflow;
+`launch "sibling.ind"` resolves against the module directory; namespace objects
+work across modules; `call_func_lenient` for arity-tolerant dispatch; the
+`discord` package gains `CommandCtx` and reliable command dispatch; the `ai`
+package regains its `AI.*` namespace.
+
+**Verification:** 51/51 language tests, 21/21 Rust tests, and the Angela Discord
+bot boots, syncs its slash commands and logs in on 2.3.
+
 ## Unreleased — language & package parity
 
 ### ✨ Language (all additive — nothing removed)

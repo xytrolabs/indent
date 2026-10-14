@@ -1,0 +1,10 @@
+get Loads from json
+get Dumps from json
+get Pretty from json
+get ReadOr from fs
+get Lines from strings
+get Upper from strings
+get CtxSend from discord
+get AI from ai
+
+say "imports ok"

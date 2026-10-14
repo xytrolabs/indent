@@ -13,26 +13,46 @@ cargo build --release --manifest-path indent-native/Cargo.toml
 | Benchmark | What it measures |
 |---|---|
 | `bench_hot_paths.ind` | Call overhead, string concat, list append, dict writes, JSON round-trips, dynamic dispatch |
+| `bench_calls.ind` | Per-operation cost in ns of the individual constructs (call, assign, compare, concat) |
 | `bench_append_scaling.ind` | Whether `l is append l x` grows linearly or quadratically |
 | `bench_list_building.ind` | Fastest way to build a large list (append vs comprehension vs whole-list concat) |
+| `bench_index_writes.ind` | Whether `d[k] is v` / `l[i] is v` grow linearly or quadratically |
+
+Helper scripts:
+
+| Script | Purpose |
+|---|---|
+| `sh benchmarks/verify.sh` | Performance **and** both test suites, in one go |
+| `sh benchmarks/measure.sh [binary] [outfile]` | Startup + hot-path timings |
+| `sh benchmarks/run_suite.sh` | Run the `.ind` test suite (avoids shell autocorrect of `test`) |
+| `sh benchmarks/build.sh` | Release build, printing only compile errors |
 
 ## Reference results
 
-Machine: Linux, `--release`, Indent 2.2.2.
+Machine: Linux, `--release` (fat LTO), Indent 2.3.0.
 
-| Case | Time |
-|---|---|
-| 100 000 function calls | ~0.15 s |
-| 10 000 string concatenations | ~0.009 s |
-| 50 000 dict writes | ~0.025 s |
-| 5 000 JSON round-trips | ~0.008 s |
-| 50 000 `call_func` | ~0.075 s |
-| 50 000 `call_func_lenient` | ~0.086 s |
-| 20 000 `l is append l x` | ~0.007 s (was ~9.7 s before the in-place fast path) |
-| 20 000 item comprehension | ~0.003 s |
-| 20 000 `l is l + [x]` | ~6.5 s — avoid in loops |
+### Per-operation cost
 
-Careful: the last row is the "obvious" alternative and it is **quadratic**. Build
+| Case | 2.2.2 | 2.3.0 |
+|---|---|---|
+| No-op call | 184 ns | **138 ns** |
+| 1-argument call | 402 ns | **249 ns** |
+| 2-argument call | 700 ns | **436 ns** |
+| `i is i + 1` | 202 ns | **159 ns** |
+| `if` + comparison | 290 ns | **245 ns** |
+| String concatenation | 270 ns | **221 ns** |
+
+### Whole-program
+
+| Case | 2.2.2 | 2.3.0 |
+|---|---|---|
+| Startup, hello-world (per run) | 1.0 ms | **0.8 ms** |
+| Startup, 5 std imports (per run) | 7.0 ms | **5.8 ms** |
+| Interpreter hot-path suite (per run) | 377 ms | **126 ms** |
+| 50 000 appends | 75.6 s | **0.01 s** |
+| 100 000 calls | 0.136 s | **0.049 s** |
+
+Careful: `l is l + [x]` in a loop is **quadratic** (20 000 items ≈ 6.5 s). Build
 lists with `append` in a loop, or with a comprehension / `map`.
 
 A full Angela-bot local startup (discord + ai + all puzzle modules, no network)

@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.2.2
+# Indent Language (.ind) v2.3.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,6 +7,66 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ## 🚀 Indent 2.3 — the performance release
+>
+> **Major optimizations and general improvements coming to Indent in 2.3!**
+> To become a real competitive force, Indent development has focused on
+> improving speed in Indent programs through optimizations of Rust code and
+> functions.
+>
+> ### Measured results (release build, same machine)
+>
+> | Workload | 2.2.2 | **2.3** | Gain |
+> |---|---|---|---|
+> | Interpreter hot-path suite | 1888 ms | **632 ms** | **≈3.0× faster** |
+> | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
+> | Startup — 5 std imports (`json`, `fs`, `strings`, `discord`, `ai`) | 7.0 ms | **5.8 ms** | 1.2× |
+> | 1-argument function call | 402 ns | **249 ns** | 1.6× |
+> | 2-argument function call | 700 ns | **436 ns** | 1.6× |
+> | Variable update in a loop (`i is i + 1`) | 202 ns | **159 ns** | 1.3× |
+> | String concatenation | 270 ns | **221 ns** | 1.2× |
+> | 100 000 function calls | 136 ms | **49 ms** | 2.8× |
+> | Build a list with 50 000 `append`s | 75.6 s | **0.01 s** | **over 4000×** |
+>
+> ### What made it faster
+> - 🧠 **Expressions are parsed once instead of on every evaluation.** Every
+>   statement stored its expressions as *text*, and the interpreter re-lexed and
+>   re-parsed that text inside every loop iteration. Parsed expressions are now
+>   cached (and shared by all modules), with allocation-free fast paths for bare
+>   variables and literals. This is the single biggest win.
+> - 🧩 **Containers are moved, not copied, on the common write patterns.**
+>   `l is append l x`, `l[i] is v` and `d[k] is v` used to duplicate the whole
+>   container on every step — quadratic loops (75 seconds to build a 50 000-item
+>   list). They now mutate in place, so those loops are **linear**.
+> - 🔤 **Variables update in place.** Assigning to an existing variable no longer
+>   rebuilds its name `String` on every iteration.
+> - 📞 **Cheaper calls.** Positional arguments are bound lazily as a list instead
+>   of allocating a map key per parameter per call, and named-argument lookups are
+>   skipped when there are none.
+> - ⚙️ **Release profile tuned for an interpreter** — fat LTO, one codegen unit,
+>   no unwind tables, stripped binary.
+>
+> ### Reproduce it yourself
+> ```sh
+> cargo build --release --manifest-path indent-native/Cargo.toml
+> sh benchmarks/verify.sh        # perf + full test suite
+> ```
+> `benchmarks/` ships the hot-path, call-cost, list-building and index-write
+> benchmarks, plus a README with reference numbers.
+>
+> ### Bonus fixes in 2.3
+> - **Circular imports** now raise a catchable `import_error` instead of crashing
+>   with a stack overflow.
+> - **`launch "sibling.ind"`** resolves relative to the module's own directory.
+> - **Namespace objects** (`var API = {}` + `API["Fn"] is Fn`) work across modules.
+> - **`call_func_lenient`** — dispatch that adapts to a handler's argument count.
+> - **`discord` package** — `CommandCtx`, working ctx dispatch, arity-tolerant
+>   handlers, DM-safe `Ctx`; the `ai` package regains its `AI.*` namespace.
+>
+> All of it is additive: 51/51 language tests and 21/21 Rust tests pass, and the
+> copy-semantics of the optimised write paths are pinned by
+> `tests/append_semantics.ind` and `tests/index_write_semantics.ind`.
+>
 > ### 🎉 What's New in 2.2.2
 > - 🐛 **Module functions can use their own imports** — a function exported by a
 >   module can now call modules *it* imported, when invoked from another file
