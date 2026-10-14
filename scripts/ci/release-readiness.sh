@@ -24,7 +24,7 @@ echo "[5/7] Running Indent test suite"
 ./indent-native/target/release/indent test tests
 
 echo "[6/7] Running demo script"
-./indent-native/target/release/indent examples/demo.ind
+./indent-native/target/release/indent examples/game_simulation.ind
 
 echo "[7/7] Verifying package tooling index access"
 CLEAN_HOME="$(mktemp -d)"
