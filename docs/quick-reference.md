@@ -109,6 +109,12 @@ var double = fn(x): x * 2
 say double(5)               #! → 10
 ```
 
+> **Keyword-named functions.** A function whose name differs from a keyword only
+> by capitalisation (`Get`, `Ask`, `Set`, …) can be called with space-separated
+> arguments — e.g. `Get url token` — as long as the keyword itself is lowercase.
+> Lowercase structural keywords (`get`, `set`, `say`, `if`, …) stay reserved, so
+> `get X from Y` is always an import.
+
 ## Classes
 ```indent
 class Person

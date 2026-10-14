@@ -92,6 +92,22 @@
 - **Exponential reconnect backoff** with reset after a healthy session.
 - **Quote-aware command parsing** (`_SplitArgs`) — `!say "hello world"  x` works.
 - `Delete` now accepts an optional JSON body (audit-log reasons are sent again).
+- **Connection errors are retried** like `5xx` (capped backoff);
+  `SetRestMaxAttempts(n)` and `SetApiBase(url)` added.
+
+### 🐛 Fixes found while verifying
+- **`time_sleep _RestBackoff attempt`** was parsed as a **two-argument** call
+  (Indent has no inline nested-call argument form), so the Discord retry path
+  would have thrown instead of sleeping. Precomputed the value; covered by a new
+  REST regression test that exercises the connection-failure/backoff path.
+- **Keyword-named functions were uncallable with space arguments.** `Get`,
+  `Ask` and `Set` are listed as keywords case-insensitively, so `Get url token`
+  failed to parse — silently breaking ~20 `discord` helpers
+  (`Get`, `GetUser`, `GetGuild`, `GetChannel`, …). Expression call detection now
+  uses a lowercase-only *structural* keyword set, so capitalised names work as
+  calls while lowercase keywords (`get`, `set`, `say`, `if`, …) stay reserved.
+  The import parser also only treats `get …`/`Get …` as an import when a module
+  identifier follows.
 
 ## 2.2.2 — 2026-09-11
 

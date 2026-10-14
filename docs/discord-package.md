@@ -64,6 +64,11 @@ Real-bot hardening, mirroring what `discord.py` does:
   so long-running bots no longer leak memory.
 - **Backoff with reset.** Reconnects use exponential backoff + jitter, and the
   counter resets after a healthy session.
+- **Connection-error retries.** Transient connection failures are retried like
+  `5xx` (capped backoff), not surfaced as hard failures.
+- **Tunable REST layer.** `SetRestMaxAttempts(n)` caps retries per request
+  (default 4; 1 disables), and `SetApiBase(url)` overrides the API base — handy
+  for proxies, self-hosting, and tests.
 - **Quoted command arguments.** `!say "hello world"  foo` now yields
   `["say", "hello world", "foo"]` — whitespace-collapsed, quote-aware.
 

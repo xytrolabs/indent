@@ -1,0 +1,53 @@
+#! Regression tests: a user function whose name matches a keyword only by
+#! capitalisation must be callable with space-separated args, and so must a
+#! keyword-named function reached through `give`/`var`/bare-call paths.
+#! (This previously broke discord's Get/GetUser helpers.)
+
+fun Get a b
+    give a + b
+
+fun Ask a
+    give a * 2
+
+fun Set a b
+    give a - b
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+#! assignment-value path
+var g = Get 2 3
+assert_eq(g, 5)
+
+#! give path
+fun useGive
+    give Get 10 20
+var gg = useGive()
+assert_eq(gg, 30)
+
+#! bare-call statement path (result discarded; must not error)
+Get 1 2
+
+#! single-arg keyword-named function
+var a = Ask 4
+assert_eq(a, 8)
+
+#! another capitalised keyword name
+var s = Set 10 4
+assert_eq(s, 6)
+
+#! sanity: lowercase keywords are still keywords
+var parts = [1, 2, 3]
+var total = 0
+repeat p in parts
+    total is total + p
+assert_eq(total, 6)
+
+say "keyword-named function calls: ALL PASS"

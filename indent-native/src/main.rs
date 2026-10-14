@@ -10096,7 +10096,7 @@ fn preprocess_expr_calls(expr: &str) -> String {
     // Check if it looks like a simple space-separated call: callee arg1 arg2 ...
     if let Some((callee, args_text)) = expr.split_once(' ') {
         if looks_like_callee(callee)
-            && !is_keyword(callee)
+            && !is_structural_keyword(callee)
             && !args_text.is_empty()
             && !contains_expr_operators(args_text)
         {
@@ -12635,8 +12635,11 @@ impl Parser {
             return Ok(Stmt::Reset { line: line.line_no });
         }
 
-        // Indent-2: get/import keyword for imports
-        if text.starts_with("get ") || text.starts_with("Get ") || text.starts_with("get:") || text.starts_with("Get:") {
+        // Indent-2: get/import keyword for imports.
+        // Only treat as an import when a module identifier follows — so a
+        // user function named `Get` called as `Get a b` falls through to call
+        // dispatch instead of erroring with "cannot import module 'a b'".
+        if starts_like_import(text) {
             return parse_import(&line);
         }
         // import alias for get
@@ -12748,7 +12751,7 @@ impl Parser {
 
         // Indent-2: inline space-separated calls like `greet "World"` or `math.pow 2 8`
         if let Some((callee, args_text)) = text.split_once(' ') {
-            if looks_like_callee(callee) && !args_text.is_empty() && !is_keyword(callee)
+            if looks_like_callee(callee) && !args_text.is_empty() && !is_structural_keyword(callee)
                 && !contains_expr_operators(args_text)
             {
                 // Parse space-separated arguments
@@ -13300,6 +13303,46 @@ fn is_keyword(s: &str) -> bool {
             | "ask"
             | "and" | "not" | "in"
     )
+}
+
+/// Keywords that must never be treated as a call target when an *expression*
+/// is preprocessed into space-separated-call form (lowercase structural forms
+/// only). Capitalized identifiers such as `Get`, `Ask`, or `Set` are NOT
+/// structural, so a user function named `Get` can be called as `Get a b` —
+/// fixing packages like `discord` whose `Get`/`GetUser` helpers were
+/// unreachable without parentheses.
+fn is_structural_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "say" | "give" | "return" | "var" | "fun" | "if" | "or" | "otherwise"
+            | "repeat" | "for" | "while" | "until" | "stop" | "break" | "next"
+            | "continue" | "get" | "import" | "reset" | "restart" | "match"
+            | "case" | "do" | "catch" | "lastly" | "maketype" | "set" | "flag"
+            | "yield" | "open" | "is" | "ask" | "and" | "not" | "in" | "else"
+            | "from" | "as" | "launch" | "wait" | "async" | "await" | "class"
+            | "with"
+    )
+}
+
+/// True when a statement is an import (`get X from Y`, `get X`, `import X`, …)
+/// rather than a call to a user function named `Get`. An import must be
+/// followed by a valid module identifier.
+fn starts_like_import(text: &str) -> bool {
+    let rest = if let Some(r) = text.strip_prefix("get ") {
+        r
+    } else if let Some(r) = text.strip_prefix("Get ") {
+        r
+    } else if let Some(r) = text.strip_prefix("get:") {
+        r
+    } else if let Some(r) = text.strip_prefix("Get:") {
+        r
+    } else {
+        return false;
+    };
+    match rest.trim().split_whitespace().next() {
+        Some(first) => is_identifier(first),
+        None => false,
+    }
 }
 
 fn parse_inline_args(args_text: &str) -> Vec<ArgItem> {

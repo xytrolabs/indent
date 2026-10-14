@@ -8,6 +8,9 @@ get _RestRetryAfter from discord
 get _RestBackoff from discord
 get QuickBot from discord
 get AddCommand from discord
+get SetApiBase from discord
+get SetRestMaxAttempts from discord
+get Get from discord
 
 fun assert cond
     if not cond
@@ -77,5 +80,15 @@ var cmds dynamic = bot.commands
 var hasPing = has_key cmds "ping"
 assert(hasPing)
 assert_eq(bot.prefix, "!")
+
+say "=== REST layer (rate-limit path) ==="
+#! A connection failure goes through the SAME backoff code path as a 5xx
+#! (_RestBackoff + time_sleep). Max attempts = 1 keeps the test fast.
+SetRestMaxAttempts 1
+SetApiBase "http://127.0.0.1:1"
+var r = Get "/x" "tok"
+assert_eq(type_of(r), "dict")
+var rst = r["status"]
+assert_eq(rst, 0)
 
 say "discord helpers: ALL PASS"

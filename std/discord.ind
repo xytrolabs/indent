@@ -56,7 +56,22 @@ var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 #! discord package version
-var DiscordVersion string = "6.6.0"
+var DiscordVersion string = "6.7.0"
+
+#! REST layer configuration. The base is overridable for testing, self-hosting
+#! or going through a proxy; the retry cap mirrors discord.py's max_retries.
+var _API_BASE string = API
+var _REST_MAX_ATTEMPTS int = 4
+
+fun SetApiBase url
+    _API_BASE is url
+
+fun GetApiBase
+    give _API_BASE
+
+#! Max attempts per REST request (default 4). Set 1 to disable retries.
+fun SetRestMaxAttempts n
+    _REST_MAX_ATTEMPTS is n
 
 #! Current source/context for the clean block API (module-level, shared).
 #! The native runtime passes args by value, so we stash the "current source"
@@ -231,10 +246,10 @@ fun _RestBackoff attempt
     give base + jitter
 
 fun _RestRequest method path token body headers
-    var url string = API + path
+    var url string = _API_BASE + path
     var attempt int = 0
     var resp dynamic = {"ok": false, "status": 0, "body": ""}
-    repeat while attempt < 4
+    repeat while attempt < _REST_MAX_ATTEMPTS
         attempt is attempt + 1
         do:
             resp is _RestSend method url token body headers
@@ -253,9 +268,10 @@ fun _RestRequest method path token body headers
                 w is 1.0
             time_sleep w
             next
-        #! transient server error — exponential backoff with jitter
-        if status >= 500
-            time_sleep _RestBackoff attempt
+        #! transient failure (connection error or 5xx) — exponential backoff
+        if status == 0 or status >= 500
+            var bk float = _RestBackoff attempt
+            time_sleep bk
             next
         #! other errors are not retryable — hand them back to the caller
         give resp
