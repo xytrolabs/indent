@@ -443,7 +443,26 @@ set_difference(a, b)        #! → {1, 2}
 
 ## HTTP Client
 
-All HTTP functions return a dict with `status` (int), `body` (string), and `ok` (boolean).
+All HTTP functions return a dict with `status` (int), `body` (string),
+`ok` (boolean), and `headers` (dict of lowercased header name → value):
+
+```indent
+var r = http_get("https://example.com")
+say r.status                       #! 200
+say r.headers["content-type"]      #! "text/html; charset=utf-8"
+say r.headers["x-request-id"]      #! provider request id, when present
+```
+
+Requests share one keep-alive connection pool (no re-handshake per call) and a
+30-second timeout by default. Change it with `http_set_timeout(seconds)`.
+
+`http_request` is the general form, and the only one that can send **custom
+headers** — useful for audit-log reasons, idempotency keys, and content types:
+
+```indent
+var r = http_request("DELETE", "https://api.example.com/items/1", empty, "Bearer sk-…", {"X-Reason": "cleanup"})
+var post = http_request("POST", url, {"name": "Ada"}, "Bot " + token, {"X-Audit-Log-Reason": "spam"})
+```
 
 | Function | Description |
 |---|---|
@@ -455,6 +474,9 @@ All HTTP functions return a dict with `status` (int), `body` (string), and `ok` 
 | `http_patch_json(url, payload)` | PATCH JSON body |
 | `http_delete(url)` | DELETE request |
 | `http_delete(url, auth)` | DELETE with Authorization |
+| `http_request(method, url, [payload], [auth], [headers])` | Any method; optional JSON body, Authorization, and extra headers |
+| `http_set_timeout(seconds)` | Set the per-request timeout (0 = default 30s) |
+| `http_timeout()` | Current timeout in seconds |
 | `http_serve_dir(path, port)` | Start static file server (blocking) |
 | `http_serve(handler, port)` | Start a **dynamic** server that calls `handler(request)` per request (blocking) |
 | `gui_show_html(html, title, width, height)` | Open HTML in native desktop window |

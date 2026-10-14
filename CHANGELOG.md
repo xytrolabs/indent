@@ -55,6 +55,44 @@
   `datetime_pkg`, `datetime_format_builtins`, `ai_pkg_features`); the full suite
   now reports **45/45 passing** (was 41, with 3 pre-existing failures).
 
+### ⚡ HTTP performance & capabilities
+- **One shared, pooled HTTP client** for all `http_*` builtins (was: a brand-new
+  `reqwest::Client` per request, i.e. a fresh TCP + TLS handshake every call).
+  This is the main fix for "sluggish" bots/AI clients.
+- Per-request **timeouts** (default 30s) via `http_set_timeout(seconds)` /
+  `http_timeout()`, applied to every request.
+- Responses now expose **`headers`** (lowercased name → value) alongside
+  `ok`/`status`/`body` — enables rate-limit and request-id handling.
+- New **`http_request(method, url, [payload], [auth], [headers])`** builtin: any
+  method, optional JSON body, auth, and **custom headers**.
+
+### 🤖 `ai` package — OpenAI-SDK-grade error handling (v1.4)
+- **Typed, structured errors.** `LastError()` now returns a dict with `type`,
+  `status`, `code`, `message`, `param`, `request_id`, `body`, `provider`;
+  `GetLastError()`/`GetLastStatus()`/`WasError()` kept for compatibility.
+- **Typed checkers**: `IsAuthError`, `IsPermissionError`, `IsBadRequest`,
+  `IsNotFound`, `IsRateLimit`, `IsServerError`, `IsConnectionError`, `IsTimeout`,
+  `ErrorType()`, plus pure `ErrorTypeFor(status)` / `IsRetryable(status)`.
+- **Smart retries** matching the OpenAI SDK: only connection errors, 408/409/429
+  and 5xx are retried; `Retry-After` is honoured; exponential backoff + jitter,
+  capped. 4xx client errors return immediately (no pointless retries).
+- **Request-id capture** (`GetRequestId()` from `x-request-id`) for support.
+- **Timeouts** (`SetTimeout`) and `SetMaxRetries`; `ChatFull` (full choice dict),
+  `LastUsage()`, `LastFinishReason()`.
+
+### 🎮 `discord` package — real-bot hardening (v6.7)
+- **Rate-limit-aware REST**: unified `_RestRequest` retries 429 (honouring
+  `retry_after` / `Retry-After`) and 5xx with capped backoff; all verbs return
+  the standard response dict instead of dropping failures.
+- **Gateway `RESUME`** (op 6) with stored `session_id` + sequence — reconnects
+  replay missed events instead of re-`IDENTIFY`-ing (avoids identify limits).
+- **Heartbeat ACK watchdog** (op 11): zombie sockets are detected and recycled.
+- **Fatal close-code handling** (`4004`, `4010`–`4014`) stops cleanly.
+- **Bounded message cache** (250, FIFO) — no more unbounded memory growth.
+- **Exponential reconnect backoff** with reset after a healthy session.
+- **Quote-aware command parsing** (`_SplitArgs`) — `!say "hello world"  x` works.
+- `Delete` now accepts an optional JSON body (audit-log reasons are sent again).
+
 ## 2.2.2 — 2026-09-11
 
 

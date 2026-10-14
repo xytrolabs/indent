@@ -3169,7 +3169,7 @@ const INDENT_BUILTINS: &[&str] = &[
     "gzip_compress", "gzip_decompress", "hash_sha256", "has_key", "http_delete",
     "http_delete_async", "http_get", "http_get_async", "http_patch_json",
     "http_post_json", "http_post_json_async", "http_put_json", "http_put_json_async",
-    "http_serve_dir", "http_serve", "http_set_timeout", "http_timeout", "inc", "index", "insert", "int", "int_or", "interpolate",
+    "http_serve_dir", "http_serve", "http_request", "http_set_timeout", "http_timeout", "inc", "index", "insert", "int", "int_or", "interpolate",
     "is_err", "is_even", "is_finite", "is_missing", "is_nan", "is_odd", "is_ok", "items", "join",
     "json_dumps", "json_loads", "json_parse", "json_stringify",
     "keys", "len", "log", "lower", "lstrip", "map", "chain", "flatten", "chunk",
@@ -5457,6 +5457,21 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 8080
             };
             Some(http_serve_dir_builtin(&dir, port))
+        }
+        "http_request" => {
+            // http_request(method, url, [payload], [authorization], [headers])
+            if positional.len() < 2 || positional.len() > 5 {
+                return Some(Err(
+                    "http_request expects 2-5 arguments: http_request(method, url, [payload], [authorization], [headers])"
+                        .to_string(),
+                ));
+            }
+            let method = positional[0].to_string();
+            let url = positional[1].to_string();
+            let payload = positional.get(2).cloned().unwrap_or(Value::Empty);
+            let auth = positional.get(3).map(|v| v.to_string()).unwrap_or_default();
+            let headers = positional.get(4).cloned().unwrap_or(Value::Empty);
+            Some(http_request_builtin(&method, &url, &payload, &auth, &headers))
         }
         // ── Async I/O — run an HTTP builtin on a background thread, return a future id ──
         "http_set_timeout" => {
@@ -9431,6 +9446,46 @@ fn http_delete_builtin(url: &str, authorization: &str) -> Result<Value, String> 
     let body = resp
         .text()
         .map_err(|e| format!("http_delete failed to read response body: {e}"))?;
+    Ok(http_response_value(status, body, headers))
+}
+
+/// Generic request: any HTTP method, optional JSON body, optional auth header,
+/// and optional extra headers. Powers rate-limited/audited API clients.
+fn http_request_builtin(
+    method: &str,
+    url: &str,
+    payload: &Value,
+    authorization: &str,
+    extra_headers: &Value,
+) -> Result<Value, String> {
+    let m = method.trim().to_ascii_uppercase();
+    let reqwest_method = reqwest::Method::from_bytes(m.as_bytes())
+        .map_err(|_| format!("http_request: invalid method '{method}'"))?;
+    let mut req = HTTP_CLIENT.request(reqwest_method, url).timeout(http_timeout());
+
+    if !authorization.trim().is_empty() {
+        req = req.header(reqwest::header::AUTHORIZATION, authorization.trim());
+    }
+
+    if let Value::Dict(map) = extra_headers {
+        for (k, v) in map {
+            req = req.header(k.as_str(), v.to_string());
+        }
+    }
+
+    if !matches!(payload, Value::Empty) {
+        let json_payload = value_to_json(payload);
+        req = req.header(reqwest::header::CONTENT_TYPE, "application/json").json(&json_payload);
+    }
+
+    let resp = req
+        .send()
+        .map_err(|e| format!("http_request request failed: {e}"))?;
+    let status = resp.status().as_u16() as i64;
+    let headers = http_headers_map(&resp);
+    let body = resp
+        .text()
+        .map_err(|e| format!("http_request failed to read response body: {e}"))?;
     Ok(http_response_value(status, body, headers))
 }
 

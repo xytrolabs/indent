@@ -66,15 +66,35 @@ var _CTX dynamic = {}
 #! Current gateway socket id (module-level, shared) — used by presence helpers.
 var _SOCKET int = 0
 
+#! Gateway session state — used to RESUME instead of re-Identifying on reconnect.
+#! Re-identifying on every drop hits Discord's identify rate limit (and can get
+#! the bot disconnected); RESUME replays missed events instead.
+var _SESSION_ID string = ""
+var _RESUME_URL string = ""
+var _SEQ int = 0
+var _LAST_ACK float = 0.0
+
 #! Lightweight in-memory message cache (keyed by message id) so MESSAGE_DELETE
 #! / MESSAGE_UPDATE handlers can see the last-known message content.
+#! Bounded to _MSG_CACHE_MAX entries (FIFO eviction) so long-running bots don't
+#! leak memory — the previous version grew without limit.
 var _MSG_CACHE dynamic = {}
+var _MSG_ORDER dynamic = []
+var _MSG_CACHE_MAX int = 250
 
 fun CacheMessage
     msg
-    if has_key msg "id"
-        var mid string = msg.id
-        _MSG_CACHE[mid] is msg
+    if not has_key msg "id"
+        give empty
+    var mid string = msg.id
+    if not has_key _MSG_CACHE mid
+        _MSG_ORDER is append _MSG_ORDER mid
+    _MSG_CACHE[mid] is msg
+    repeat while len(_MSG_ORDER) > _MSG_CACHE_MAX
+        var oldest string = _MSG_ORDER[0]
+        _MSG_ORDER is _MSG_ORDER[1:]
+        if has_key _MSG_CACHE oldest
+            _MSG_CACHE is dict_remove _MSG_CACHE oldest
 
 fun LookupMessage
     mid
@@ -84,6 +104,7 @@ fun LookupMessage
 
 fun ClearMessageCache
     _MSG_CACHE is {}
+    _MSG_ORDER is []
 
 #! ==============================
 #! 🔌  REST API (low level)
@@ -92,9 +113,7 @@ fun ClearMessageCache
 fun Get
     path
     token
-    var url string = API + path
-    var auth string = "Bot " + token
-    give http_get url auth
+    give _RestRequest "GET" path token empty {}
 
 #! ==============================
 #! ⚡  ASYNC REST (6.6) — non-blocking HTTP on background threads
@@ -164,36 +183,112 @@ fun ParallelFetch
         futs is futs + [f]
     give gather futs
 
+#! ---- REST with Discord rate-limit awareness (mirrors discord.py's HTTPClient) ----
+#! Every request goes through _RestRequest, which retries 429 (honouring the
+#! provider's retry_after) and 5xx (exponential backoff + jitter, capped).
+#! Returns the standard {ok, status, body, headers} dict so callers can inspect
+#! failures — a 429 no longer means a silently dropped message.
+
+fun _RestSend method url token body headers
+    var auth string = "Bot " + token
+    give http_request method url body auth headers
+
+#! Seconds Discord wants us to wait (from retry_after body or Retry-After header).
+fun _RestRetryAfter resp
+    var delayS float = 0.0
+    if type_of(resp) == "dict"
+        if has_key resp "body"
+            var b string = resp.body
+            if len(b) > 0
+                var p = empty
+                do:
+                    p is json_loads b
+                catch as e:
+                    p is empty
+                if type_of(p) == "dict"
+                    if has_key p "retry_after"
+                        delayS is float(p.retry_after)
+        if has_key resp "headers"
+            var h dynamic = resp.headers
+            if type_of(h) == "dict"
+                if has_key h "retry-after"
+                    var ra float = float(h["retry-after"])
+                    if ra > delayS
+                        delayS is ra
+    if delayS < 0.0
+        delayS is 0.0
+    if delayS > 30.0
+        delayS is 30.0
+    give delayS
+
+fun _RestBackoff attempt
+    var base float = 0.4
+    var i int = 1
+    repeat while i < attempt
+        base is base * 2.0
+        i is i + 1
+    var jitter float = random_float() * 0.3
+    give base + jitter
+
+fun _RestRequest method path token body headers
+    var url string = API + path
+    var attempt int = 0
+    var resp dynamic = {"ok": false, "status": 0, "body": ""}
+    repeat while attempt < 4
+        attempt is attempt + 1
+        do:
+            resp is _RestSend method url token body headers
+        catch as e:
+            resp is {"ok": false, "status": 0, "body": string(e)}
+        var status int = 0
+        if type_of(resp) == "dict"
+            if has_key resp "status"
+                status is resp.status
+        if status >= 200 and status < 300
+            give resp
+        #! rate limited — sleep exactly what Discord asks, then retry
+        if status == 429
+            var w float = _RestRetryAfter resp
+            if w <= 0.0
+                w is 1.0
+            time_sleep w
+            next
+        #! transient server error — exponential backoff with jitter
+        if status >= 500
+            time_sleep _RestBackoff attempt
+            next
+        #! other errors are not retryable — hand them back to the caller
+        give resp
+    give resp
+
+#! GET with optional extra headers (e.g. audit-log reason).
+fun GetWith path token headers
+    give _RestRequest "GET" path token empty headers
+
 fun Post
     path
     token
     body
-    var url string = API + path
-    var auth string = "Bot " + token
-    give http_post_json url body auth
+    give _RestRequest "POST" path token body {}
 
 fun Put
     path
     token
     body
-    var url string = API + path
-    var auth string = "Bot " + token
-    give http_put_json url body auth
+    give _RestRequest "PUT" path token body {}
 
 fun Patch
     path
     token
     body
-    var url string = API + path
-    var auth string = "Bot " + token
-    give http_patch_json url body auth
+    give _RestRequest "PATCH" path token body {}
 
+#! DELETE, with an optional JSON body (Discord reads the audit-log reason from it).
 fun Delete
     path
     token
-    var url string = API + path
-    var auth string = "Bot " + token
-    give http_delete url auth
+    body = empty
+    give _RestRequest "DELETE" path token body {}
 
 #! ==============================
 #! 📎  FILE ATTACHMENTS (5.0)
@@ -605,6 +700,36 @@ fun HandleDispatch
     or t == "GUILD_MEMBER_REMOVE"
         CallEvent bot "member_leave" d
 
+#! Split a command string into arguments: collapses runs of whitespace and
+#! honours single/double quotes so `!say "hello world"` yields ["say","hello world"].
+fun _SplitArgs rest
+    var out dynamic = []
+    var cur string = ""
+    var inQ int = 0
+    var qc string = ""
+    var i int = 0
+    var n int = len(rest)
+    repeat while i < n
+        var ch string = char_at rest i
+        if inQ == 1
+            if ch == qc
+                inQ is 0
+            otherwise
+                cur is cur + ch
+        or ch == "\"" or ch == "'"
+            inQ is 1
+            qc is ch
+        or ch == " " or ch == "\t" or ch == "\n"
+            if len(cur) > 0
+                out is append out cur
+                cur is ""
+        otherwise
+            cur is cur + ch
+        i is i + 1
+    if len(cur) > 0
+        out is append out cur
+    give out
+
 fun HandleMessage
     bot
     token
@@ -632,11 +757,14 @@ fun HandleMessage
         if len(content) >= len(prefix)
             if content[:len(prefix)] == prefix
                 var rest string = content[len(prefix):]
-                var parts dynamic = split rest " "
+                var parts dynamic = _SplitArgs rest
+                var nparts int = len(parts)
+                if nparts == 0
+                    give empty
                 var cmd string = parts[0]
                 #! args are passed as a list (parts[1:])
                 var args dynamic = []
-                if len(parts) > 1
+                if nparts > 1
                     args is parts[1:]
                 do:
                     RunCommand bot token msg cmd args
@@ -2130,9 +2258,43 @@ fun GroupCommand
     give bot
 
 #! One full connect + event-loop cycle. Returns "reconnect" or "fatal".
+#! Send IDENTIFY (op 2) — starts a brand-new gateway session.
+fun _SendIdentify bot socketId
+    var intents int = DEFAULT_INTENTS
+    if has_key bot "intents"
+        intents is bot.intents
+    var d dynamic = {"token": bot.token, "intents": intents, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}
+    var payload dynamic = {"op": 2, "d": d}
+    var s string = json_dumps payload
+    WsSend socketId s
+
+#! Send RESUME (op 6) — replays missed events on the existing session.
+fun _SendResume bot socketId
+    var d dynamic = {"token": bot.token, "session_id": _SESSION_ID, "seq": _SEQ}
+    var payload dynamic = {"op": 6, "d": d}
+    var s string = json_dumps payload
+    WsSend socketId s
+
+#! Fatal gateway close codes — reconnecting cannot help, so stop cleanly.
+fun _FatalCloseCode code
+    if code == 4004
+        give true
+    if code == 4010 or code == 4011 or code == 4012 or code == 4013 or code == 4014
+        give true
+    give false
+
 fun connectOnce
     bot
-    var conn dynamic = ws_connect GatewayURL
+    #! Resume the previous session if we have one — this avoids an Identify and
+    #! replays any events missed while disconnected.
+    var gwUrl string = GatewayURL
+    var canResume int = 0
+    if len(_SESSION_ID) > 0
+        if len(_RESUME_URL) > 0
+            canResume is 1
+            gwUrl is _RESUME_URL
+
+    var conn dynamic = ws_connect gwUrl
     var socketId int = conn.socket_id
     var infoResp dynamic = WsRecvTimeout socketId 10
     if infoResp.ok != true
@@ -2142,43 +2304,43 @@ fun connectOnce
     bot._socketId is socketId
     _SOCKET is socketId
 
-    var heartbeatInterval float = 0
+    var heartbeatInterval float = 41.25
     if has_key info "d"
         var hbDyn dynamic = info.d
-        var knownHb int = 0
         if has_key hbDyn "heartbeat_interval"
             heartbeatInterval is hbDyn.heartbeat_interval / 1000.0
-            knownHb is 1
-    #! Fallback: if the hello parse failed, use Discord's typical 41.25s interval.
-    if knownHb == 0
-        heartbeatInterval is 41.25
 
-    #! identify — broad non-privileged intents, overridable via bot.intents
-    var intents int = DEFAULT_INTENTS
-    if has_key bot "intents"
-        intents is bot.intents
-    var identify dynamic = {"op": 2, "d": {"token": bot.token, "intents": intents, "properties": {"os": "linux", "browser": "indent", "device": "indent"}}}
-    var identifyStr string = json_dumps identify
-    WsSend socketId identifyStr
+    if canResume
+        _SendResume bot socketId
+        say "🔁 Resuming gateway session..."
+    otherwise
+        _SendIdentify bot socketId
 
-    #! Send an initial heartbeat immediately after Identify so Discord doesn't
-    #! close the socket while we wait for READY (standard gateway practice).
-    var initHb dynamic = {"op": 1, "d": 0}
+    #! Send an initial heartbeat immediately so Discord doesn't close the socket
+    #! while we wait for READY (standard gateway practice).
+    var initSeq int = _SEQ
+    var initHb dynamic = {"op": 1, "d": initSeq}
     var initHbStr string = json_dumps initHb
     WsSend socketId initHbStr
 
     var lastHb float = time_now
-    var seq int = 0
+    _LAST_ACK is time_now
+    var seq int = _SEQ
 
     say "🤖 Bot running — press Ctrl+C to stop"
     repeat
         #! short receive timeout so we can check heartbeat timing frequently
-        var resp dynamic = WsRecvTimeout socketId 5
+        var resp dynamic = WsRecvTimeout socketId 3
 
-        #! send heartbeat if due (checked after every wakeup)
+        #! heartbeat + zombie detection (no HEARTBEAT_ACK → dead socket → reconnect)
         if heartbeatInterval > 0
             var now float = time_now
             if now - lastHb >= heartbeatInterval
+                var ackDeadline float = heartbeatInterval * 2.0 + 5.0
+                if now - _LAST_ACK > ackDeadline
+                    say "💀 Gateway heartbeat ACK missed — reconnecting"
+                    WsClose socketId
+                    give "reconnect"
                 var hb dynamic = {"op": 1, "d": seq}
                 var hbStr string = json_dumps hb
                 WsSend socketId hbStr
@@ -2194,6 +2356,8 @@ fun connectOnce
                 reason is resp.reason
             say "📡 Gateway closed connection (code: " + string(code) + " reason: " + reason + ")"
             WsClose socketId
+            if _FatalCloseCode code
+                give "fatal"
             give "reconnect"
 
         #! timeout — heartbeat check above already handled timing
@@ -2213,6 +2377,7 @@ fun connectOnce
             var sVal dynamic = event.s
             if sVal != empty
                 seq is sVal
+                _SEQ is sVal
 
         if op == 0
             do:
@@ -2221,8 +2386,18 @@ fun connectOnce
 
                 if t == "READY"
                     bot.user is d.user
+                    if has_key d "session_id"
+                        _SESSION_ID is d.session_id
+                    if has_key d "resume_gateway_url"
+                        _RESUME_URL is d.resume_gateway_url
+                    _LAST_ACK is time_now
                     say "✅ Logged in: " + d.user.username
                     CallEvent bot "ready" d
+
+                or t == "RESUMED"
+                    _LAST_ACK is time_now
+                    say "🔁 Gateway session resumed"
+                    CallEvent bot "resumed" d
 
                 or t == "MESSAGE_CREATE"
                     CacheMessage d
@@ -2309,16 +2484,19 @@ fun connectOnce
             give "reconnect"
 
         or op == 9
-            #! d=true: session invalid but resumable; d=false: fatal (bad token)
+            #! d=true: session resumable → reconnect and RESUME.
+            #! d=false: session is gone → clear it and re-Identify.
             var resumable int = 0
             if has_key event "d"
                 if event.d == true
                     resumable is 1
             if not resumable
-                say "❌ Invalid session — check DISCORD_TOKEN"
-                WsClose socketId
-                give "fatal"
-            say "🔄 Reconnecting session..."
+                _SESSION_ID is ""
+                _RESUME_URL is ""
+                _SEQ is 0
+                say "🔄 Session expired — re-identifying"
+            otherwise
+                say "🔄 Reconnecting session..."
             WsClose socketId
             give "reconnect"
 
@@ -2332,6 +2510,10 @@ fun connectOnce
             WsSend socketId initHbStr
             lastHb is time_now
 
+        or op == 11
+            #! heartbeat ACK — the socket is healthy
+            _LAST_ACK is time_now
+
 #! Start the bot — connects, and reconnects automatically if dropped
 fun Run
     bot
@@ -2339,6 +2521,7 @@ fun Run
     var attempts int = 0
     repeat
         attempts is attempts + 1
+        var started float = time_now
         var status string = "reconnect"
         do:
             status is connectOnce bot
@@ -2348,8 +2531,15 @@ fun Run
         if status == "fatal"
             say "❌ Fatal error — stopping. Fix DISCORD_TOKEN and re-run."
             stop
-        say "🔄 Reconnecting in 5s... (attempt " + string(attempts) + ")"
-        time_sleep 5
+        #! reset the backoff counter if the session stayed healthy for a while
+        var lasted float = time_now - started
+        if lasted > 60.0
+            attempts is 1
+        var delayS float = _RestBackoff attempts
+        if delayS > 15.0
+            delayS is 15.0
+        say "🔄 Reconnecting in " + string(delayS) + "s (attempt " + string(attempts) + ")"
+        time_sleep delayS
 
 #! ==============================
 #! 🧩  PUZZLE SYSTEM (cog-like command groups)

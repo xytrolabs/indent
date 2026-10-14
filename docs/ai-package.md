@@ -5,13 +5,14 @@ works with **real OpenAI** *and* a **local Ollama** server (which exposes the
 same OpenAI API at `/v1`). Chat completions, embeddings, model listing, cosine
 similarity, and semantic search — all in pure Indent, no Python needed.
 
-> **🛡️ Robust (v1.3)**: never crashes on transient server errors. Every call
-> checks the HTTP response, parses JSON defensively, guards indexing, retries
-> with backoff, and returns `empty`/`[]` gracefully on failure instead of
-> throwing. Failed API responses preserve the provider's message, such as
-> `Invalid API key`, `model not found`, or a rate-limit explanation. Inspect
-> failures with `GetLastError()` / `GetLastStatus()` / `WasError()`, or
-> configure retries with `SetRetries(n)`.
+> **🛡️ Robust (v1.4)**: never crashes, and reports errors the way the OpenAI
+> Python SDK does. Every call classifies the failure into a *typed* error
+> (`authentication_error`, `rate_limit_error`, `connection_error`, …), keeps the
+> provider's message/code/param, captures the `x-request-id` header, and retries
+> **only retryable** failures (connection errors, 408/409/429, 5xx) with
+> exponential backoff + jitter — honouring `Retry-After`. Callers still get
+> `empty`/`[]` so nothing crashes, but the full reason is available via
+> `LastError()` / `ErrorType()` / `IsRateLimit()` / `GetRequestId()`.
 
 > Install: `air install ai` — import with `get ai as AI` (namespace, `AI.Chat`)
 > or per-function: `get Chat from ai`.
@@ -41,16 +42,47 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 | `SetDefaultModel` | `name` | Default chat model (default `qwen2.5:0.5b`). |
 | `SetDefaultEmbedModel` | `name` | Default embedding model (default `nomic-embed-text`). |
 | `GetBase` | — | Return the current base URL. |
-| `SetRetries(n)` | `int` | Retry a failed request up to `n` times with backoff (default 2; 0 disables). |
-| `GetLastError()` | — | Last error message (`""` = success). |
+| `SetRetries(n)` / `SetMaxRetries(n)` | `int` | Max retries for *retryable* failures (default 2; 0 disables). |
+| `SetTimeout(seconds)` / `GetTimeout()` | `number` | Per-request timeout (default 30s). |
+| `GetLastError()` | — | Last error **message** (`""` = success). |
 | `GetLastStatus()` | — | Last HTTP status (0 = no response). |
+| `GetRequestId()` | — | `x-request-id` of the last call (support tickets). |
 | `WasError()` | — | True if the most recent call failed. |
+| `LastError()` | dict | Full structured error object (see below). |
+| `ErrorType()` | string | Category word, e.g. `rate_limit_error`. |
+| `IsAuthError()` / `IsPermissionError()` / `IsBadRequest()` / `IsNotFound()` | boolean | Typed checks |
+| `IsRateLimit()` / `IsServerError()` / `IsConnectionError()` / `IsTimeout()` | boolean | Typed checks |
+| `ErrorTypeFor(status)` / `IsRetryable(status)` | — | Pure helpers (no state) for classification |
+| `LastUsage()` / `LastFinishReason()` | dict / string | Token usage & finish reason of the last chat call |
 
-When an OpenAI-compatible server returns an error response such as
-`{"error":{"message":"Invalid API key"}}`, `GetLastError()` returns
-`Invalid API key` and `GetLastStatus()` returns `401`. The result value remains
-`empty` for `Chat`/`Ask` or `[]` for list/vector APIs so existing programs do
-not crash, but the reason is no longer discarded.
+### Typed errors (like `openai.AuthenticationError`, `openai.RateLimitError`, …)
+
+`LastError()` returns a dict:
+
+```indent
+{"ok": false, "type": "authentication_error", "status": 401,
+ "code": "invalid_api_key", "message": "Invalid API key", "param": "",
+ "request_id": "req_abc123", "body": "…", "provider": "openai"}
+```
+
+Branch on the failure instead of string-matching:
+
+```indent
+var reply = AI.Chat(model, msgs)
+if AI.WasError()
+    if AI.IsRateLimit()
+        say "slow down"
+    or AI.IsAuthError()
+        say "bad key: " + AI.GetLastError()
+    or AI.IsConnectionError()
+        say "network down"
+    otherwise
+        say AI.ErrorType() + ": " + AI.GetLastError() + " (" + AI.GetRequestId() + ")"
+```
+
+The retry policy matches the OpenAI SDK: **connection errors, 408, 409, 429, and
+5xx** are retried (with `Retry-After` respected and exponential backoff + jitter);
+4xx client errors are returned immediately.
 
 ---
 
@@ -58,7 +90,10 @@ not crash, but the reason is no longer discarded.
 
 | Function | OpenAI SDK equivalent | Description |
 |---|---|---|
-| `Chat(model, messages)` | `client.chat.completions.create()` | Chat completion; `messages` = list of `{"role","content"}`; returns assistant reply text. |
+| `Chat(model, messages)` | `client.chat.completions.create()` | Chat completion; returns assistant reply text |
+| `ChatFull(model, messages)` | `client.chat.completions.create()` | Returns the full **choice** dict (`message`, `finish_reason`, …) |
+| `ChatWithSystem(model, system, user)` | — | System + user prompt in one call |
+| `ChatWithOptions(model, messages, options)` | — | Any kwargs: `temperature`, `max_tokens`, `top_p`, `seed`, `json`, `tools`, … |
 | `ChatWithSystem(model, systemPrompt, userPrompt)` | — | Chat with system instruction and user prompt directly in one call. |
 | `ChatWithOptions(model, messages, options)` | — | Chat with custom parameters (`temperature`, `max_tokens`, `top_p`, `json`, `seed`). |
 | `Ask(model, prompt)` | `client.chat.completions.create()` | Single-prompt completion; returns generated text. |
@@ -177,15 +212,17 @@ repeat pair in ranked
   Model names like `gpt-4o-mini`, `text-embedding-3-small`.
 - **Errors never crash the program.** `Chat`/`Ask` return `empty`, `Embed`/
   `EmbedMany`/`Models`/`Search` return `[]`, and `Similarity` returns `0` when a
-  request fails. Check `WasError()` / `GetLastError()` to see what happened, or
-  rely on the automatic retry (`SetRetries n`) to ride out transient blips
-  (rate limits, model reloads, connection resets).
+  request fails. Check `WasError()` and read the typed error (`LastError()`,
+  `ErrorType()`, `GetRequestId()`) — and let the automatic retry (`SetRetries n`)
+  ride out transient blips (rate limits, model reloads, connection resets).
 
 ```indent
 get ai as AI
 var reply = AI.Chat("xael-nano", [{"role":"user","content":"hi"}])
 if AI.WasError()
-    say "AI call failed: " + AI.GetLastError() + " (status " + string(AI.GetLastStatus()) + ")"
+    say "AI call failed [" + AI.ErrorType() + "]: " + AI.GetLastError()
+    if AI.GetRequestId() != ""
+        say "  request id: " + AI.GetRequestId()
 otherwise
     say reply
 ```

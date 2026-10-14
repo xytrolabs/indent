@@ -1,0 +1,58 @@
+#! Self-contained tests for ai.ind error handling (no network required).
+get SetBase from ai
+get SetRetries from ai
+get Chat from ai
+get WasError from ai
+get ErrorType from ai
+get GetLastStatus from ai
+get LastError from ai
+get IsConnectionError from ai
+get ErrorTypeFor from ai
+get IsRetryable from ai
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+say "=== status classification (pure) ==="
+assert_eq(ErrorTypeFor(400), "bad_request_error")
+assert_eq(ErrorTypeFor(401), "authentication_error")
+assert_eq(ErrorTypeFor(403), "permission_error")
+assert_eq(ErrorTypeFor(404), "not_found_error")
+assert_eq(ErrorTypeFor(429), "rate_limit_error")
+assert_eq(ErrorTypeFor(500), "internal_server_error")
+assert_eq(ErrorTypeFor(503), "internal_server_error")
+assert_eq(ErrorTypeFor(0), "connection_error")
+
+say "=== retry policy (pure) ==="
+assert_eq(IsRetryable(429), true)
+assert_eq(IsRetryable(500), true)
+assert_eq(IsRetryable(0), true)
+assert_eq(IsRetryable(401), false)
+assert_eq(IsRetryable(400), false)
+assert_eq(IsRetryable(404), false)
+
+say "=== connection error round-trip ==="
+SetRetries 0
+SetBase "http://127.0.0.1:1/v1"
+var reply = Chat("m", [{"role": "user", "content": "hi"}])
+var wase = WasError()
+assert(wase)
+var ce = IsConnectionError()
+assert(ce)
+var et = ErrorType()
+assert_eq(et, "connection_error")
+var e = LastError()
+var hasMsg = has_key e "message"
+assert(hasMsg)
+var hasProv = has_key e "provider"
+assert(hasProv)
+
+say "ai error handling: ALL PASS"
+

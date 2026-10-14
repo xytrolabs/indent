@@ -1,0 +1,81 @@
+#! Tests for discord.ind internals: arg parsing, bounded cache, rate-limit
+#! helpers, fatal close codes. Also verifies the whole module parses.
+get _SplitArgs from discord
+get CacheMessage from discord
+get LookupMessage from discord
+get _FatalCloseCode from discord
+get _RestRetryAfter from discord
+get _RestBackoff from discord
+get QuickBot from discord
+get AddCommand from discord
+
+fun assert cond
+    if not cond
+        say "FAIL: assertion failed"
+        process_exit 1
+
+fun assert_eq a b
+    if not (a == b)
+        say "FAIL: expected " + string(b) + " got " + string(a)
+        process_exit 1
+
+say "=== argument parsing ==="
+var a1 = _SplitArgs 'say "hello world"  foo'
+assert_eq(len(a1), 3)
+assert_eq(a1[0], "say")
+assert_eq(a1[1], "hello world")
+assert_eq(a1[2], "foo")
+
+var a2 = _SplitArgs "ping"
+assert_eq(len(a2), 1)
+assert_eq(a2[0], "ping")
+
+var a3 = _SplitArgs "  a   b   c  "
+assert_eq(len(a3), 3)
+
+var a4 = _SplitArgs "kick @user 'bad behavior'"
+assert_eq(len(a4), 3)
+assert_eq(a4[2], "bad behavior")
+
+say "=== bounded message cache ==="
+var i int = 0
+repeat while i < 260
+    var mid string = string(i)
+    CacheMessage {"id": mid, "content": mid}
+    i is i + 1
+var first = LookupMessage "0"
+assert_eq(first, empty)
+var last = LookupMessage "259"
+assert(last != empty)
+
+say "=== rate-limit helpers ==="
+var fakeBody = "{\"retry_after\": 2.5}"
+var fake = {"body": fakeBody, "headers": {}}
+var wait = _RestRetryAfter fake
+assert_eq(wait, 2.5)
+
+var headerFake = {"body": "", "headers": {"retry-after": "3"}}
+var wait2 = _RestRetryAfter headerFake
+assert_eq(wait2, 3.0)
+
+var capped = _RestRetryAfter {"body": "", "headers": {"retry-after": "999"}}
+assert_eq(capped, 30.0)
+
+var b1 = _RestBackoff 1
+assert(b1 >= 0.4)
+
+say "=== fatal close codes ==="
+assert_eq(_FatalCloseCode(4004), true)
+assert_eq(_FatalCloseCode(4013), true)
+assert_eq(_FatalCloseCode(1000), false)
+assert_eq(_FatalCloseCode(4000), false)
+
+say "=== bot construction ==="
+var bot dynamic = QuickBot "TOKEN" "!"
+bot is AddCommand bot "ping" "latency" empty
+var cmds dynamic = bot.commands
+var hasPing = has_key cmds "ping"
+assert(hasPing)
+assert_eq(bot.prefix, "!")
+
+say "discord helpers: ALL PASS"

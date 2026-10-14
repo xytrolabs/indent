@@ -41,6 +41,34 @@ start bot
 
 ---
 
+## �️ Reliability & performance (v6.7)
+
+Real-bot hardening, mirroring what `discord.py` does:
+
+- **Rate-limit aware REST.** Every request goes through one path that retries
+  `429` (honouring the provider's `retry_after` / `Retry-After`) and `5xx`
+  (exponential backoff + jitter, capped). A rate limit no longer means a
+  silently dropped message. All `Get`/`Post`/`Put`/`Patch`/`Delete` calls return
+  the standard `{ok, status, body, headers}` dict, so you can inspect failures.
+- **Connection reuse.** The runtime now keeps one pooled HTTP client, so REST
+  calls skip a fresh TCP + TLS handshake each time — the main source of the old
+  "sluggish" feel.
+- **Gateway RESUME.** On a reconnect the bot now sends `RESUME` (op 6) with the
+  stored `session_id` + last sequence, replaying missed events instead of
+  re-`IDENTIFY`-ing. That avoids Discord's identify rate limit and event loss.
+- **Heartbeat ACK watchdog.** The bot tracks `HEARTBEAT_ACK` (op 11); if ACKs
+  stop, the (zombie) socket is dropped and reconnected automatically.
+- **Proper close-code handling.** Fatal codes (`4004`, `4010`–`4014`) stop with a
+  clear message instead of reconnect-looping forever.
+- **Bounded message cache.** `_MSG_CACHE` is capped (default 250 entries, FIFO)
+  so long-running bots no longer leak memory.
+- **Backoff with reset.** Reconnects use exponential backoff + jitter, and the
+  counter resets after a healthy session.
+- **Quoted command arguments.** `!say "hello world"  foo` now yields
+  `["say", "hello world", "foo"]` — whitespace-collapsed, quote-aware.
+
+---
+
 ## 🚀 v6.0 Bot API — the recommended way (minimal boilerplate)
 
 Discord 6.0 adds a production-grade Bot API: built-in `ping`/`help`, error

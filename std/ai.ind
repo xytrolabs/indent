@@ -41,9 +41,14 @@ var _base = "http://localhost:11434/v1"
 var _apiKey = ""
 var _defaultModel = "qwen2.5:0.5b"
 var _defaultEmbedModel = "nomic-embed-text"
-var _retries = 2
-var _lastError = ""
+var _maxRetries = 2
+var _timeout = 30.0
+var _errObj = {}
+var _errText = ""
 var _lastStatus = 0
+var _lastRequestId = ""
+var _lastUsage = {}
+var _lastFinish = ""
 
 #! --- client config (like openai.OpenAI(base_url=..., api_key=...)) ---
 fun SetBase url
@@ -61,23 +66,82 @@ fun SetDefaultEmbedModel name
 fun GetBase
     give _base
 
-#! How many times to retry a failed request (default 2). Set 0 to disable.
+#! How many times to retry a retryable failure (default 2). Set 0 to disable.
 fun SetRetries n
-    _retries is n
+    _maxRetries is n
+
+#! Alias — matches the OpenAI SDK's kwargs.max_retries.
+fun SetMaxRetries n
+    _maxRetries is n
+
+#! Request timeout in seconds (default 30). Applied to every HTTP call.
+fun SetTimeout seconds
+    _timeout is float(seconds)
+    http_set_timeout _timeout
+
+fun GetTimeout
+    give _timeout
 
 #! Last error message from the most recent failed call ("" = success).
 fun GetLastError
-    give _lastError
+    give _errText
 
 #! Last HTTP status code from the most recent call (0 = no response).
 fun GetLastStatus
     give _lastStatus
 
+#! Request id of the most recent call (from the x-request-id header), if any.
+fun GetRequestId
+    give _lastRequestId
+
+#! Token usage of the most recent chat call ({prompt_tokens, completion_tokens, total_tokens}).
+fun LastUsage
+    give _lastUsage
+
+#! Finish reason of the most recent chat call (e.g. "stop", "length", "tool_calls").
+fun LastFinishReason
+    give _lastFinish
+
+#! The full structured error object of the most recent failed call ({} = success).
+#! Fields: ok(false), type, status, code, message, param, request_id, body, provider.
+fun LastError
+    give _errObj
+
 #! Was the most recent call an error?
 fun WasError
-    if len(_lastError) == 0
-        give false
-    give true
+    give has_key _errObj "ok"
+
+#! Error category word (e.g. "authentication_error", "rate_limit_error").
+fun ErrorType
+    if has_key _errObj "type"
+        give _errObj.type
+    give ""
+
+#! Pure helper: classify an HTTP status into an error category (no state).
+fun ErrorTypeFor status
+    give _ErrorType status
+
+#! Pure helper: would a given HTTP status be retried? (0 = connection error)
+fun IsRetryable status
+    give _Retryable status
+
+#! ---- OpenAI-SDK-style typed error checkers ----
+fun IsAuthError
+    give ErrorType() == "authentication_error"
+fun IsPermissionError
+    give ErrorType() == "permission_error"
+fun IsBadRequest
+    give ErrorType() == "bad_request_error"
+fun IsNotFound
+    give ErrorType() == "not_found_error"
+fun IsRateLimit
+    give ErrorType() == "rate_limit_error"
+fun IsServerError
+    give ErrorType() == "internal_server_error"
+fun IsConnectionError
+    give ErrorType() == "connection_error"
+fun IsTimeout
+    give ErrorType() == "timeout_error"
 
 #! Authorization header: empty when no key (local Ollama), else "Bearer <key>"
 fun AuthHeader
@@ -85,174 +149,276 @@ fun AuthHeader
         give ""
     give "Bearer " + _apiKey
 
-#! Extract a useful provider error from an HTTP response body.
-#! OpenAI-compatible APIs usually return {"error":{"message":"..."}}, but
-#! local servers also commonly return a top-level message or detail field.
-fun _ResponseError status body
-    var fallback is "request failed (status " + string(status) + ")"
-    if len(body) == 0
-        give fallback
+#! Provider label derived from the base URL (for error reporting).
+fun _Provider
+    if contains(_base, "openai.com")
+        give "openai"
+    if contains(_base, "localhost")
+        give "local"
+    if contains(_base, "127.0.0.1")
+        give "local"
+    give "openai-compatible"
 
-    var parsed = empty
-    do:
-        parsed is json_loads(body)
-    catch as e:
-        var raw is trim(body)
-        give fallback + ": " + raw
+#! Map an HTTP status to an OpenAI-SDK-style error category.
+fun _ErrorType status
+    if status == 400
+        give "bad_request_error"
+    if status == 401
+        give "authentication_error"
+    if status == 403
+        give "permission_error"
+    if status == 404
+        give "not_found_error"
+    if status == 409
+        give "conflict_error"
+    if status == 422
+        give "unprocessable_error"
+    if status == 429
+        give "rate_limit_error"
+    if status == 408
+        give "timeout_error"
+    if status >= 500 and status < 600
+        give "internal_server_error"
+    if status == 0
+        give "connection_error"
+    give "api_error"
 
-    if type_of(parsed) == "dict"
-        if has_key parsed "error"
-            var api_error is parsed["error"]
-            if type_of(api_error) == "dict"
-                if has_key api_error "message"
-                    give string(api_error["message"])
-                if has_key api_error "code"
-                    give string(api_error["code"])
-            give string(api_error)
-        if has_key parsed "message"
-            give string(parsed["message"])
-        if has_key parsed "detail"
-            give string(parsed["detail"])
+#! Should we retry this status? (mirrors the OpenAI SDK: connection, 408/409/429, 5xx)
+fun _Retryable status
+    if status == 0
+        give true
+    if status == 408 or status == 409 or status == 429
+        give true
+    if status >= 500 and status < 600
+        give true
+    give false
 
-    var raw_body is trim(body)
-    give fallback + ": " + raw_body
+#! Exponential backoff with jitter, capped (seconds).
+fun _Backoff attempt
+    var base float = 0.5
+    var i int = 1
+    repeat while i < attempt
+        base is base * 2.0
+        i is i + 1
+    var jitter float = random_float() * 0.25
+    var total float = base + jitter
+    if total > 20.0
+        give 20.0
+    give total
 
-#! --- internal: safe POST JSON with retry + error capture ---
-#! Returns {"ok", "status", "data"} where data is the parsed body (or empty).
-#! Never throws. On failure sets _lastError / _lastStatus.
+#! Record a structured error on the module (also sets the flat text).
+fun _SetError etype status code message param requestId body
+    var prov = _Provider()
+    var obj dynamic = {"ok": false, "type": etype, "status": status, "code": code, "message": message, "param": param, "request_id": requestId, "body": body, "provider": prov}
+    _errObj is obj
+    _errText is message
+    give obj
+
+#! Extract and store the x-request-id header from a response (for support tickets).
+fun _CaptureRequestId resp
+    if type_of(resp) != "dict"
+        return empty
+    if not has_key resp "headers"
+        return empty
+    var h dynamic = resp.headers
+    if type_of(h) != "dict"
+        return empty
+    if has_key h "x-request-id"
+        _lastRequestId is string(h["x-request-id"])
+
+#! Retry-After delay from a response body/header (seconds, capped at 30).
+fun _RetryAfterObj resp
+    var delayS float = 0.0
+    if type_of(resp) == "dict"
+        if has_key resp "body"
+            var body string = resp.body
+            if len(body) > 0
+                var parsed = empty
+                do:
+                    parsed is json_loads body
+                catch as e:
+                    parsed is empty
+                if type_of(parsed) == "dict"
+                    if has_key parsed "retry_after"
+                        delayS is float(parsed.retry_after)
+        if has_key resp "headers"
+            var h dynamic = resp.headers
+            if type_of(h) == "dict"
+                if has_key h "retry-after"
+                    var ra float = float(h["retry-after"])
+                    if ra > delayS
+                        delayS is ra
+    if delayS < 0.0
+        delayS is 0.0
+    if delayS > 30.0
+        delayS is 30.0
+    give delayS
+
+#! Parse a provider error body into a structured error (type/status/code/message/param).
+fun _ErrorFromResponse status resp
+    var body string = ""
+    if has_key resp "body"
+        body is resp.body
+    var msg string = ""
+    var code string = ""
+    var param string = ""
+    if len(body) > 0
+        var parsed = empty
+        do:
+            parsed is json_loads body
+        catch as e:
+            parsed is empty
+        if type_of(parsed) == "dict"
+            if has_key parsed "error"
+                var er dynamic = parsed.error
+                if type_of(er) == "dict"
+                    if has_key er "message"
+                        msg is string(er.message)
+                    if has_key er "code"
+                        code is string(er.code)
+                    if has_key er "param"
+                        param is string(er.param)
+                    if has_key er "type"
+                        if len(code) == 0
+                            code is string(er.type)
+                otherwise
+                    msg is string(er)
+            if len(msg) == 0
+                if has_key parsed "message"
+                    msg is string(parsed.message)
+            if len(msg) == 0
+                if has_key parsed "detail"
+                    msg is string(parsed.detail)
+    if len(msg) == 0
+        if status == 0
+            msg is "connection failed"
+        otherwise
+            msg is _ErrorType status + " (HTTP " + string(status) + ")"
+    var et string = _ErrorType status
+    _SetError et status code msg param _lastRequestId body
+
+#! --- internal: the one true request path (retry + structured errors) ---
+#! Returns {"ok": bool, "status": int, "data": <parsed body|empty>, "error": <errObj|{}>}.
+#! Never throws. Retries connection errors, 408/409/429 and 5xx with backoff,
+#! honouring Retry-After. Captures the x-request-id header for support tickets.
+fun _ApiRequest method path payload
+    _errObj is {}
+    _errText is ""
+    _lastStatus is 0
+    _lastRequestId is ""
+    var url string = _base + path
+    var auth string = AuthHeader()
+    var attempt int = 0
+    var resp dynamic = {"ok": false, "status": 0, "body": ""}
+    repeat while attempt <= _maxRetries
+        attempt is attempt + 1
+        do:
+            resp is http_request method url payload auth {}
+        catch as e:
+            _lastStatus is 0
+            var et0 string = "connection_error"
+            _SetError et0 0 "" string(e) "" "" ""
+            resp is {"ok": false, "status": 0, "body": ""}
+        var status int = 0
+        if type_of(resp) == "dict"
+            if has_key resp "status"
+                status is resp.status
+        _lastStatus is status
+        _CaptureRequestId resp
+
+        #! success path
+        if status >= 200 and status < 300
+            var body string = ""
+            if has_key resp "body"
+                body is resp.body
+            if len(body) == 0
+                give {"ok": true, "status": status, "data": empty, "error": {}}
+            var parsed = empty
+            var parseOk int = 1
+            do:
+                parsed is json_loads body
+            catch as e:
+                parseOk is 0
+            if not parseOk
+                var ei string = "invalid_response_error"
+                _SetError ei status "" ("invalid JSON: " + string(e)) "" _lastRequestId body
+                give {"ok": false, "status": status, "data": empty, "error": _errObj}
+            give {"ok": true, "status": status, "data": parsed, "error": {}}
+
+        #! failure — record structured error, maybe retry
+        _ErrorFromResponse status resp
+        var canRetry boolean = _Retryable status
+        if canRetry and attempt <= _maxRetries
+            var delayS float = _RetryAfterObj resp
+            if delayS <= 0.0
+                delayS is _Backoff attempt
+            time_sleep delayS
+            next
+        give {"ok": false, "status": status, "data": empty, "error": _errObj}
+    give {"ok": false, "status": _lastStatus, "data": empty, "error": _errObj}
+
+#! --- backwards-compatible internal wrappers ---
 fun _PostJson path payload
-    var attempt = 0
-    var ok = false
-    var status = 0
-    var body = ""
-    var data = empty
-    repeat while attempt <= _retries and not ok
-        attempt is attempt + 1
-        var resp = empty
-        do:
-            resp is http_post_json(_base + path, payload, AuthHeader())
-        catch as e:
-            _lastError is string(e)
-            resp is empty
-        if type_of(resp) == "dict"
-            if has_key resp "ok"
-                ok is resp["ok"]
-            if has_key resp "status"
-                status is resp["status"]
-            if has_key resp "body"
-                body is resp["body"]
-        if not ok
-            _lastError is _ResponseError status body
-        if ok
-            if len(body) == 0
-                ok is false
-                _lastError is "empty response body"
-            otherwise
-                var parsed = empty
-                do:
-                    parsed is json_loads(body)
-                catch as e:
-                    parsed is empty
-                    _lastError is "invalid JSON: " + string(e)
-                if type_of(parsed) == "dict"
-                    data is parsed
-                or type_of(parsed) == "list"
-                    data is parsed
-                otherwise
-                    ok is false
-        if not ok and attempt <= _retries
-            time_sleep(0.3 * attempt)
-    if not ok
-        if len(_lastError) == 0
-            _lastError is "request failed (status " + string(status) + ")"
-        _lastStatus is status
-        give {"ok": false, "status": status, "data": empty}
-    _lastError is ""
-    _lastStatus is status
-    give {"ok": true, "status": status, "data": data}
+    give _ApiRequest "POST" path payload
 
-#! --- internal: safe GET JSON with retry + error capture ---
-#! Same contract as _PostJson (never throws).
 fun _GetJson path
-    var attempt = 0
-    var ok = false
-    var status = 0
-    var body = ""
-    var data = empty
-    repeat while attempt <= _retries and not ok
-        attempt is attempt + 1
-        var resp = empty
-        do:
-            resp is http_get(_base + path, AuthHeader())
-        catch as e:
-            _lastError is string(e)
-            resp is empty
-        if type_of(resp) == "dict"
-            if has_key resp "ok"
-                ok is resp["ok"]
-            if has_key resp "status"
-                status is resp["status"]
-            if has_key resp "body"
-                body is resp["body"]
-        if not ok
-            _lastError is _ResponseError status body
-        if ok
-            if len(body) == 0
-                ok is false
-                _lastError is "empty response body"
-            otherwise
-                var parsed = empty
-                do:
-                    parsed is json_loads(body)
-                catch as e:
-                    parsed is empty
-                    _lastError is "invalid JSON: " + string(e)
-                if type_of(parsed) == "dict"
-                    data is parsed
-                or type_of(parsed) == "list"
-                    data is parsed
-                otherwise
-                    ok is false
-        if not ok and attempt <= _retries
-            time_sleep(0.3 * attempt)
-    if not ok
-        if len(_lastError) == 0
-            _lastError is "request failed (status " + string(status) + ")"
-        _lastStatus is status
-        give {"ok": false, "status": status, "data": empty}
-    _lastError is ""
-    _lastStatus is status
-    give {"ok": true, "status": status, "data": data}
+    give _ApiRequest "GET" path empty
 
 #! --- openai client.models.list() ---
 fun Models
-    var r = _GetJson("/models")
+    var r = _ApiRequest "GET" "/models" empty
     if r["ok"] == true
         var data = r["data"]
-        if has_key data "data"
-            var out dynamic = []
-            repeat m in data["data"]
-                if has_key m "id"
-                    out is out + [m["id"]]
-            give out
+        if type_of(data) == "dict"
+            if has_key data "data"
+                var out dynamic = []
+                repeat m in data["data"]
+                    if has_key m "id"
+                        out is append out m["id"]
+                give out
     give []
 
 #! --- openai client.chat.completions.create(model, messages) ---
 #! messages = list of {"role":"user|assistant|system","content":"..."}
-#! Returns the assistant reply text, or empty on error (see GetLastError).
+#! Returns the assistant reply text, or empty on error (see GetLastError / LastError).
 fun Chat model messages
-    var payload = {"model": model, "messages": messages}
-    var r = _PostJson("/chat/completions", payload)
+    var ch = _ChatCompletion model messages {}
+    if ch == empty
+        give empty
+    if has_key ch "message"
+        var m = ch.message
+        if has_key m "content"
+            var c dynamic = m.content
+            if c == empty
+                give ""
+            give string(c)
+    give empty
+
+#! Full chat entry (mirrors client.chat.completions.create → the first choice dict).
+#! Returns the choice object {index, message, finish_reason, logprobs} or empty.
+fun ChatFull model messages
+    give _ChatCompletion model messages {}
+
+fun _ChatCompletion model messages options
+    var payload dynamic = {"model": model, "messages": messages}
+    repeat k in keys options
+        payload[k] is options[k]
+    if has_key options "json"
+        if options["json"] == true
+            payload["response_format"] is {"type": "json_object"}
+    var r = _ApiRequest "POST" "/chat/completions" payload
     if r["ok"] == true
         var data = r["data"]
-        if has_key data "choices"
-            var choices = data["choices"]
-            if len(choices) > 0
-                var first = choices[0]
-                if has_key first "message"
-                    var msg = first["message"]
-                    if has_key msg "content"
-                        give msg["content"]
+        if type_of(data) == "dict"
+            if has_key data "usage"
+                _lastUsage is data.usage
+            if has_key data "choices"
+                var choices = data["choices"]
+                if len(choices) > 0
+                    var first = choices[0]
+                    if has_key first "finish_reason"
+                        _lastFinish is string(first.finish_reason)
+                    give first
     give empty
 
 #! --- single-prompt chat completion ---
@@ -264,7 +430,7 @@ fun Ask model prompt
 #! Single text → embedding vector (list of floats), or [] on error.
 fun Embed model text
     var payload = {"model": model, "input": text}
-    var r = _PostJson("/embeddings", payload)
+    var r = _ApiRequest "POST" "/embeddings" payload
     if r["ok"] == true
         var data = r["data"]
         if has_key data "data"
@@ -334,30 +500,19 @@ fun ChatWithSystem model systemPrompt userPrompt
     give Chat(model, msgs)
 
 #! --- Chat with options: temperature, max_tokens, json mode, etc. ---
+#! options may include: temperature, max_tokens, top_p, seed, json (bool),
+#! presence_penalty, frequency_penalty, stop, tools, tool_choice, ...
 fun ChatWithOptions model messages options
-    var payload = {"model": model, "messages": messages}
-    if has_key options "temperature"
-        payload["temperature"] is options["temperature"]
-    if has_key options "max_tokens"
-        payload["max_tokens"] is options["max_tokens"]
-    if has_key options "top_p"
-        payload["top_p"] is options["top_p"]
-    if has_key options "seed"
-        payload["seed"] is options["seed"]
-    if has_key options "json"
-        if options["json"] == true
-            payload["response_format"] is {"type": "json_object"}
-    var r = _PostJson("/chat/completions", payload)
-    if r["ok"] == true
-        var data = r["data"]
-        if has_key data "choices"
-            var choices = data["choices"]
-            if len(choices) > 0
-                var first = choices[0]
-                if has_key first "message"
-                    var msg = first["message"]
-                    if has_key msg "content"
-                        give msg["content"]
+    var ch = _ChatCompletion model messages options
+    if ch == empty
+        give empty
+    if has_key ch "message"
+        var m = ch.message
+        if has_key m "content"
+            var c dynamic = m.content
+            if c == empty
+                give ""
+            give string(c)
     give empty
 
 #! --- Ask for structured JSON output ---
@@ -368,10 +523,15 @@ fun AskJson model prompt
     if len(reply) == 0
         give empty
     var parsed = empty
+    var parseOk int = 1
     do:
-        parsed is json_loads(reply)
+        parsed is json_loads reply
     catch as e:
-        _lastError is "JSON parse failed: " + string(e)
+        parseOk is 0
+        _errText is "JSON parse failed: " + string(e)
+        var et string = "invalid_response_error"
+        _SetError et 0 "" _errText "" _lastRequestId reply
+    if not parseOk
         give empty
     give parsed
 
