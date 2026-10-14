@@ -1,0 +1,100 @@
+#! Verify that the optimised `x is append x v` path keeps copy semantics:
+#! assigning a list to another variable must still snapshot it, the appended
+#! expression may itself read the list, and non-list targets must still error.
+#!
+#! NOTE: conditions are always precomputed into a boolean variable first —
+#! a comparison cannot be written inline as a space-call argument.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. aliasing must NOT see later appends (copy semantics) ----
+var l dynamic = [1, 2]
+var snapshot dynamic = l
+l is append l 3
+var snapLen int = len(snapshot)
+var liveLen int = len(l)
+var ok1a boolean = snapLen == 2
+var ok1b boolean = liveLen == 3
+assert ok1a "append does not mutate a snapshot"
+assert ok1b "append grows the target"
+
+#! ---- 2. an appended expression may read the target list ----
+var l2 dynamic = [1]
+l2 is append l2 len(l2)
+var l2Len int = len(l2)
+var ok2a boolean = l2Len == 2
+assert ok2a "appended value read the pre-append length"
+var second dynamic = l2[1]
+var ok2b boolean = second == 1
+assert ok2b "appended value is correct"
+
+#! ---- 3. works inside a function on a local list ----
+fun build n
+    var out dynamic = []
+    repeat n
+        out is append out 7
+    give out
+
+var built dynamic = build 500
+var builtLen int = len(built)
+var ok3a boolean = builtLen == 500
+assert ok3a "loop-built list has the right length"
+var firstOut dynamic = built[0]
+var ok3b boolean = firstOut == 7
+assert ok3b "loop-built list has the right values"
+
+#! ---- 4. a returned list is a snapshot, not shared ----
+var copy dynamic = built
+built is append built 8
+var copyLen int = len(copy)
+var builtLen2 int = len(built)
+var ok4a boolean = copyLen == 500
+var ok4b boolean = builtLen2 == 501
+assert ok4a "previously-returned list is still independent"
+assert ok4b "the live list grew"
+
+#! ---- 5. extend ----
+var e dynamic = [1]
+e is extend e [2, 3]
+var eLen int = len(e)
+var ok5 boolean = eLen == 3
+assert ok5 "extend appends a whole list"
+
+#! ---- 6. computed targets still work (fall back to the normal path) ----
+var holder dynamic = {"items": [1]}
+holder["items"] is append holder["items"] 2
+var holderItems dynamic = holder["items"]
+var holderLen int = len(holderItems)
+var ok6 boolean = holderLen == 2
+assert ok6 "index target still appends"
+
+#! ---- 7. a non-list target still raises ----
+var notAList dynamic = 5
+var caught boolean = false
+do:
+    notAList is append notAList 1
+catch as err:
+    caught is true
+assert caught "appending to a non-list raises"
+
+#! ---- 8. appending a list keeps it as a single element ----
+var nested dynamic = []
+nested is append nested [1, 2]
+var nestedLen int = len(nested)
+var ok8 boolean = nestedLen == 1
+assert ok8 "append adds one element (a list); extend flattens"
+
+#! ---- 9. extend with a non-list argument still raises ----
+var e2 dynamic = [1]
+var caught2 boolean = false
+do:
+    e2 is extend e2 5
+catch as err:
+    caught2 is true
+assert caught2 "extending with a non-list raises"
+
+say "append semantics: ALL PASS"

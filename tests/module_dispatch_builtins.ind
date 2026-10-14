@@ -1,0 +1,82 @@
+#! Test the module-system and dispatch improvements:
+#!   - namespace objects (`var AI = {"Fn": Fn}`) resolve back to their module
+#!   - call_func_lenient adapts to the callee's declared arity
+#!   - discord ctx-handler commands adapt to the handler's declared arity
+#!   - Ctx tolerates events without guild_id (DM messages)
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- call_func_lenient: trims surplus args, pads missing ones ----
+fun two a b
+    give a + b
+
+fun three a b c
+    give string(a) + string(b) + string(c)
+
+fun withDefault a b = 7
+    give string(a) + "/" + string(b)
+
+var r1 dynamic = call_func_lenient "two" 1 2 99
+var c1 boolean = r1 == 3
+assert c1 "lenient trims surplus args"
+
+var r2 dynamic = call_func_lenient "three" 1
+var c2 boolean = r2 == "1emptyempty"
+assert c2 "lenient pads missing args with empty"
+
+var r3 dynamic = call_func_lenient "withDefault" 5
+var c3 boolean = r3 == "5/7"
+assert c3 "lenient keeps declared defaults"
+
+#! ---- namespace object defined in another module resolves back to it ----
+get AI from ai
+var aiIsDict boolean = type_of(AI) == "dict"
+assert aiIsDict "AI namespace imports as a dict"
+
+var baseValue string = AI.GetBase
+var baseOk boolean = baseValue != empty
+assert baseOk "AI.GetBase resolves and runs"
+
+#! ---- discord compat surface: ctx-handler dispatch adapts to handler arity ----
+get Bot from discord
+get CommandCtx from discord
+get AddSlash from discord
+get RunCommand from discord
+
+var _seen string = ""
+
+fun twoArgHandler ctx args
+    _seen is ctx.cmd
+
+fun oneArgHandler ctx
+    _seen is ctx.cmd
+
+var bot dynamic = Bot "faketoken" "!"
+bot is CommandCtx bot "two" "Two-arg handler" twoArgHandler
+bot is CommandCtx bot "one" "One-arg handler" oneArgHandler
+bot is AddSlash bot "named" "Handler by name" "twoArgHandler" []
+
+var cmds dynamic = keys bot.commands
+var cmdsOk boolean = len(cmds) >= 4
+assert cmdsOk "commands registered on the bot"
+
+#! DM-style message: no guild_id key, channel_id present
+var msg dynamic = {"content": "!two", "author": {"id": "1"}, "channel_id": "42"}
+
+RunCommand bot "faketoken" msg "two" []
+var seenTwo boolean = _seen == "two"
+assert seenTwo "two-arg ctx handler dispatched"
+
+RunCommand bot "faketoken" msg "one" []
+var seenOne boolean = _seen == "one"
+assert seenOne "one-arg ctx handler dispatched (arity adapted)"
+
+RunCommand bot "faketoken" msg "named" []
+var seenNamed boolean = _seen == "named"
+assert seenNamed "AddSlash handler dispatched directly when no command event listener"
+
+say "module/dispatch improvements: ALL PASS"

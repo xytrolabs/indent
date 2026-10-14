@@ -866,7 +866,7 @@ fun HandleAutocomplete
         var ac dynamic = bot._autocomplete
         if has_key ac autoKey
             var handler string = ac[autoKey]
-            call_func handler bot interaction
+            call_func_lenient handler bot interaction
     give empty
 
 fun RegisterAutocomplete
@@ -1038,7 +1038,7 @@ fun RunCommand
     if has_key bot "_globalChecks"
         repeat checkFn in bot._globalChecks
             do:
-                var checkErr string = call_func checkFn bot source cmd args
+                var checkErr string = call_func_lenient checkFn bot source cmd args
                 if checkErr != empty and checkErr != ""
                     ReplyTo token source checkErr
                     give empty
@@ -1052,7 +1052,7 @@ fun RunCommand
         if has_key chkStore cmd
             var chkFn string = chkStore[cmd]
             do:
-                var chkErr string = call_func chkFn bot source cmd args
+                var chkErr string = call_func_lenient chkFn bot source cmd args
                 if chkErr != empty and chkErr != ""
                     ReplyTo token source chkErr
                     give empty
@@ -1071,6 +1071,14 @@ fun RunCommand
         var reply dynamic = command.reply
         if reply != empty
             ReplyTo token source reply
+            give empty
+
+    #! 2) ctx-handler command — the friendliest API: handler receives (ctx, args)
+    if has_key command "ctx_handler"
+        var ctxHandler dynamic = command.ctx_handler
+        if ctxHandler != empty
+            var c dynamic = Ctx bot token source cmd args
+            call_func_lenient ctxHandler c args
             give empty
 
     #! 2) handler_name command (ctx API / BotHandler) — dispatch via "command" event
@@ -1092,6 +1100,17 @@ fun RunCommand
                         catch as err:
                             say "   (defer skipped: " + string(err) + ")"
                 spawn handlerName {"cmd": cmd, "token": token, "source": source, "args": args, "handler_name": handlerName}
+                give empty
+            #! No dispatcher listening on the "command" event? Call the handler
+            #! directly with a ctx so `AddSlash`/`BotHandler` commands work on
+            #! their own (mirrors the ctx_handler path).
+            var hasListener int = 0
+            if has_key bot "handlers"
+                if has_key bot.handlers "command"
+                    hasListener is 1
+            if not hasListener
+                var c2 dynamic = Ctx bot token source cmd args
+                call_func_lenient handlerName c2 args
                 give empty
             CallEvent bot "command" {"cmd": cmd, "token": token, "source": source, "args": args, "handler_name": handlerName}
             give empty
@@ -1122,7 +1141,7 @@ fun RunCommand
 
         #! ----- 4.0: custom error handler -----
         do:
-            call_func handlerFunc dictArgs
+            call_func_lenient handlerFunc dictArgs
         catch as err:
             var handled int = 0
             if has_key bot "_errorHandler"
@@ -1131,7 +1150,7 @@ fun RunCommand
                     var src2 dynamic = source
                     var cmdErrMsg string = "❌ Command error: " + err
                     src2["error"] is cmdErrMsg
-                    call_func errH bot src2 cmd
+                    call_func_lenient errH bot src2 cmd
                     handled is 1
             if handled == 0
                 var cmdErrMsg string = "❌ Command error: " + err
@@ -1162,7 +1181,7 @@ fun CallEvent
         if k == event
             found is handlers[k]
     if found != empty and found != ""
-        call_func found bot args ""
+        call_func_lenient found bot args ""
 
 #! ==============================
 #! ⏳  WAIT_FOR (4.0) — wait for the next occurrence of an event
@@ -1347,6 +1366,25 @@ fun Command
     handlerName
     bot is BotHandler bot name desc handlerName
     bot is AddSlash bot name desc handlerName empty
+    give bot
+
+#! Register a prefix+slash command whose handler receives `(ctx, args)`.
+#! This is the simplest command API in the package — no event plumbing:
+#!   CommandCtx bot "greet" "Greet someone" "onGreet"
+#!   fun onGreet ctx args
+#!       CtxReply ctx "Hello " + CtxUserName ctx
+#! `handlerName` may be a name string or a function reference. `options` is the
+#! slash-command option list (defaults to an empty list).
+#! NOTE: the signature is written on one line on purpose — a default value
+#! (`options = empty`) on its own continuation line is currently parsed as a
+#! body statement, not as a parameter, so the block form would drop it.
+fun CommandCtx bot name desc handlerName options = empty
+    var opts dynamic = options
+    if opts == empty or opts == {}
+        opts is []
+    var cmds dynamic = bot.commands
+    cmds[name] is {"description": desc, "ctx_handler": handlerName, "slash": 1, "options": opts}
+    bot.commands is cmds
     give bot
 
 #! Register a READY event handler. Handler receives (bot).
@@ -2252,7 +2290,7 @@ fun RunTasks
         if interval > 0 and handler != empty
             if now - last >= interval
                 do:
-                    call_func handler bot
+                    call_func_lenient handler bot
                 catch as err:
                     say "   ⚠️ Task error (" + handler + "): " + err
                 t["lastRun"] is now
@@ -2841,16 +2879,23 @@ fun Ctx
     var author dynamic = {}
     var channelId string = ""
     var guildId string = ""
+    #! Guard every field: DM messages have no guild_id and interactions carry
+    #! their channel under different keys, so a plain `source.guild_id` would
+    #! throw "Dictionary has no key 'guild_id'" for perfectly valid events.
     if has_key source "author"
         if source.author != empty
             author is source.author
-            channelId is source.channel_id
-            guildId is source.guild_id
+            if has_key source "channel_id"
+                channelId is source.channel_id
+            if has_key source "guild_id"
+                guildId is source.guild_id
     if author == empty or author == {}
         if has_key source "member"
             author is source.member.user
-            channelId is source.channel_id
-            guildId is source.guild_id
+            if has_key source "channel_id"
+                channelId is source.channel_id
+            if has_key source "guild_id"
+                guildId is source.guild_id
     if author == empty or author == {}
         author is {"id": "", "username": "unknown"}
     give {"bot": bot, "token": token, "source": source, "cmd": cmd, "args": args, "author": author, "channel_id": channelId, "guild_id": guildId}
@@ -2861,10 +2906,16 @@ fun CtxSend
     content
     give Send ctx.token ctx.channel_id content
 
-#! Reply to the context's source (message reply or interaction reply)
+#! Reply to the context's source (message reply or interaction reply).
+#! A ctx built by hand with only `token`/`channel_id` (no `source`) falls back
+#! to sending in the channel, so simple contexts always work.
 fun CtxReply
     ctx
     content
+    if not has_key ctx "source"
+        give Send ctx.token ctx.channel_id content
+    if ctx.source == empty
+        give Send ctx.token ctx.channel_id content
     give ReplyTo ctx.token ctx.source content
 
 #! Send an embed to the context's channel
@@ -2877,6 +2928,10 @@ fun CtxEmbed
 fun CtxEphemeral
     ctx
     content
+    if not has_key ctx "source"
+        give Send ctx.token ctx.channel_id content
+    if ctx.source == empty
+        give Send ctx.token ctx.channel_id content
     give InteractionEphemeral ctx.token ctx.source content
 
 #! Edit the original interaction response
@@ -3199,7 +3254,16 @@ fun AddSlash
     handlerName
     options
     var cmds dynamic = bot.commands
-    cmds[name] is {"description": description, "handler_name": handlerName, "slash": 1, "options": options}
+    #! Merge into an existing entry instead of replacing it, so a command first
+    #! registered with `CommandCtx` keeps its (ctx, args) handler.
+    var entry dynamic = {}
+    if has_key cmds name
+        entry is cmds[name]
+    entry["description"] is description
+    entry["handler_name"] is handlerName
+    entry["slash"] is 1
+    entry["options"] is options
+    cmds[name] is entry
     bot.commands is cmds
     give bot
 

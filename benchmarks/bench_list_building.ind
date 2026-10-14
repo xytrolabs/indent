@@ -1,0 +1,38 @@
+#! Which list-building idiom is fastest in Indent?
+#!
+#! `append`/`extend`/`push` are *functional* builtins — they return a new list.
+#! Writing `l is append l x` inside a loop used to copy the whole list on every
+#! iteration (O(n^2): 20 000 appends took ~10 s). The runtime now recognises that
+#! exact shape and mutates in place, so the idiom is linear.
+#!
+#! Assigning a whole new list (`l is l + [x]`) is still O(n) per step — prefer
+#! `append`, or build the list in one shot with a comprehension.
+#!
+#! Run:  indent benchmarks/bench_list_building.ind
+
+var N int = 20000
+
+#! (a) repeated append — fast path, linear
+var t0 float = time_perf_counter
+var a dynamic = []
+repeat N
+    a is append a 1
+var t1 float = time_perf_counter
+say "repeat + append (" + string(N) + "): " + string(t1 - t0) + "s"
+
+#! (b) list comprehension — single pass, linear
+var t2 float = time_perf_counter
+var b dynamic = [1 for i in range(N)]
+var t3 float = time_perf_counter
+say "comprehension (" + string(N) + "): " + string(t3 - t2) + "s"
+
+#! (c) whole-list concatenation — O(n) per step, so O(n^2) overall
+var M int = 5000
+var t4 float = time_perf_counter
+var c dynamic = []
+repeat M
+    c is c + [1]
+var t5 float = time_perf_counter
+say "whole-list concat (" + string(M) + "): " + string(t5 - t4) + "s"
+
+say "lengths: a=" + string(len(a)) + " b=" + string(len(b)) + " c=" + string(len(c))

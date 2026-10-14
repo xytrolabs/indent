@@ -109,6 +109,85 @@
   The import parser also only treats `get …`/`Get …` as an import when a module
   identifier follows.
 
+### 🔄 Module system hardening
+- **Circular imports now fail cleanly.** `a.ind` importing `b.ind` which imports
+  `a.ind` (or a file importing itself) used to recurse until the process died
+  with `fatal runtime error: stack overflow`. It now raises a normal, catchable
+  `import_error`: *"Circular import detected: 'x.ind' imports itself (directly or
+  through another module)."* The in-progress marker is always cleared, even on
+  failure, so a later import can still succeed.
+- **`launch "sibling.ind"` resolves relative to the launching module's own
+  directory** (then through the normal module search path) instead of the process
+  working directory — so packages work regardless of where they are invoked from.
+- **`get X from mod` also binds the module under its own name**, so `mod.Fn ...`
+  stays available next to the imported symbol.
+- **Namespace objects work across modules.** A module can expose
+  `var API dynamic = {}` / `API["Fn"] is Fn` and callers using `API.Fn arg`
+  resolve back to the defining module. Unqualified names that no local/imported
+  symbol provides are now looked up in imported modules (deterministic, sorted
+  order) before reporting `Undefined function`.
+
+### 🧰 Dispatch helpers
+- **`call_func_lenient(name, args…)`** (alias `dispatch`) — like `call_func`, but
+  adapts to the callee's declared arity: surplus positional arguments are
+  dropped and missing ones are filled with `empty` (parameters that declare a
+  default keep it). Lets one dispatcher call handlers written with 1, 2 or 3
+  parameters. `call_func` stays strict.
+
+### 🤖 `discord` package — command registration & dispatch
+- **New `CommandCtx`** — the simplest command API in the package:
+  `CommandCtx bot "greet" "Greet someone" "onGreet"` registers both a prefix and
+  a slash command whose handler receives a real `(ctx, args)` pair.
+- **`ctx_handler` dispatch path** added to `RunCommand`, checked before the
+  event-based `handler_name` path.
+- **`AddSlash` merges into an existing entry** instead of replacing it, so a
+  command first created with `CommandCtx` keeps its handler.
+- **`handler_name` commands whose handler nobody dispatches are now called
+  directly** with a ctx (previously they silently did nothing unless the user
+  registered a `"command"` event listener).
+- **All event/command dispatch goes through `call_func_lenient`**, so handlers
+  may be declared with fewer parameters than they are called with.
+- **`Ctx` no longer throws on events without `guild_id`** (DM messages) — every
+  field is `has_key`-guarded.
+- **`CtxReply`/`CtxEphemeral` accept a hand-built ctx** containing only
+  `token`/`channel_id` (no `source`) and fall back to sending in the channel.
+
+### 🤖 `ai` package — `AI` namespace object (v1.5)
+- `get AI from ai` now exposes the whole public API as a namespace, so the
+  long-standing `AI.SetBase url` / `AI.Chat model messages` calling convention
+  works again (the namespace is a dict of function references — one
+  implementation, two calling styles). `AI.GetLastError` returns the
+  human-readable error **string**; `AI.LastError`/`LastErrorText` give the
+  structured and text forms.
+- `LastErrorText` added (text form of the structured error, `""` when clear).
+
+### ⚡ Performance — the list-building idiom is no longer O(n²)
+- **`l is append l x` (also `push`/`extend`) is now an in-place fast path.** The
+  documented way to build a list copies the whole list on every call, so a loop
+  was quadratic and dominated every real workload — measured **9.7 s for 20 000
+  appends, 75.6 s for 50 000**. When the assignment target is exactly the list
+  being appended to, the runtime now *moves* the list out of the variable,
+  pushes, and moves it back — the same result, but O(1) amortised:
+  **20 000 appends ≈ 0.007 s (≈1 300× faster), 50 000 ≈ 0.019 s (≈4 000×
+  faster)**, with linear scaling (5k/10k/20k/40k = 0.002/0.004/0.009/0.016 s).
+  Copy semantics are unchanged: a snapshot taken before the append still sees the
+  old list, an appended expression may still read the target, and non-list
+  targets still raise — all covered by `tests/append_semantics.ind`.
+- Added `benchmarks/` (`bench_hot_paths`, `bench_append_scaling`,
+  `bench_list_building`) with a README and reference numbers, so interpreter
+  performance is measurable instead of anecdotal.
+- Measured local startup for a full Discord bot (discord + ai packages, all
+  puzzle modules, no network): **48 ms** — interpreter boot is not what makes a
+  bot feel slow.
+
+### 🐛 Gotcha documented, not silently fixed
+- **Default parameters are only parsed on a single-line signature.** In the
+  block form (`fun f` + one parameter per line), a continuation line like
+  `b = 7` is parsed as a **body statement**, not a parameter — the function ends
+  up with one parameter fewer. Use `fun f a b = 7` on one line. Documented in
+  `docs/known-limitations.md`; changing it would silently reinterpret existing
+  function bodies.
+
 ## 2.2.2 — 2026-09-11
 
 

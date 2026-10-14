@@ -55,6 +55,30 @@ Under the hood it uses Indent's native `http_post_json` / `http_get` builtins.
 | `ErrorTypeFor(status)` / `IsRetryable(status)` | — | Pure helpers (no state) for classification |
 | `LastUsage()` / `LastFinishReason()` | dict / string | Token usage & finish reason of the last chat call |
 
+### Namespace calling style — `AI.<Fn> …`
+
+Everything above can also be reached through an `AI` namespace object, which is
+the long-standing convention in older code (and in the Angela bot):
+
+```indent
+get AI from ai
+
+AI.SetBase "https://ai.xytro.site/v1"
+AI.SetApiKey key
+AI.SetDefaultModel "xael-turbo"
+
+var reply string = AI.Chat model messages
+if reply == ""
+    var why string = AI.GetLastError      #! human-readable text
+    say "AI failed: " + why
+```
+
+`AI` is a plain dict of function references — there is **one** implementation,
+two calling styles. `AI.GetLastError` returns the error **string** (that is what
+legacy code expects); use `AI.LastError` for the structured dict and
+`AI.LastErrorText` for the text form explicitly.
+
+
 ### Typed errors (like `openai.AuthenticationError`, `openai.RateLimitError`, …)
 
 `LastError()` returns a dict:

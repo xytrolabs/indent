@@ -109,7 +109,8 @@ Start bot
 | Function | Params | Description |
 |---|---|---|
 | `Bot` | `token, prefix` | Create the bot: `QuickBot` + built-in `ping`/`help` + error handler + health timers. |
-| `Command` | `bot, name, desc, handlerName` | Register a **prefix + slash** command with a ctx handler. |
+| `CommandCtx` | `bot, name, desc, handler, [options]` | Register a **prefix + slash** command whose handler receives `(ctx, args)`. The simplest command API. |
+| `Command` | `bot, name, desc, handlerName` | Register a **prefix + slash** command that fires the `"command"` event (see note below). |
 | `Ready` | `bot, handlerName` | Register a READY handler. |
 | `Message` | `bot, handlerName` | Register a message handler. |
 | `Interaction` | `bot, handlerName` | Register an interaction (buttons/menus) handler. |
@@ -117,6 +118,39 @@ Start bot
 | `MemberLeave` | `bot, handlerName` | Register a member-leave handler. |
 | `Audit` | `bot, channelId` | Enable the audit log (alias for `SetupAudit`). |
 | `Start` | `bot` | Sync slash commands then connect and run (blocking). |
+
+> **Register commands before `Start`.** `Start` pushes slash commands to
+> Discord, so the command table must already be populated — register at the top
+> level of your script, not from inside an event handler.
+>
+> **Always reassign.** Indent passes containers **by value**, so every
+> registration helper returns the modified bot:
+>
+> ```indent
+> bot is CommandCtx bot "greet" "Greet someone" onGreet
+> bot is Ready bot "onReady"
+> Start bot
+> ```
+>
+> A bare `CommandCtx bot "greet" …` (no `bot is …`) silently discards the
+> registration. If a helper is called from inside your own function, that
+> function must also `give bot` and the caller must reassign.
+
+### Choosing a command API
+
+| API | Handler receives | Notes |
+|---|---|---|
+| `CommandCtx bot name desc handler [options]` | `(ctx, args)` | Simplest. Dispatched directly; no event plumbing. |
+| `AddSlash bot name desc handlerName options` | `(ctx, args)` | Slash-only. Dispatched directly when no `"command"` listener exists. |
+| `Command bot name desc handlerName` | `(ctx, args)` | Fires the `"command"` event; if no listener is registered the handler is called directly with a ctx. |
+| `BotHandler bot name desc handlerName` | `(ctx, args)` | Low-level variant of `Command`. |
+
+Handlers may declare **fewer parameters** than they are called with — the
+package dispatches through `call_func_lenient`, so `fun onPing ctx`,
+`fun onPing ctx args` and `fun onPing ctx args extra` all work.
+
+`AddSlash` **merges** into an existing command entry, so combining `CommandCtx`
+and `AddSlash` for the same name keeps the `(ctx, args)` handler.
 
 ### v6.0 handler signatures
 
@@ -134,7 +168,7 @@ Start bot
 | Function | Params | Description |
 |---|---|---|
 | `CtxSend` | `ctx, content` | Send to the ctx channel. |
-| `CtxReply` | `ctx, content` | Reply to the source (message or interaction). |
+| `CtxReply` | `ctx, content` | Reply to the source (message or interaction). A hand-built ctx with only `token`/`channel_id` falls back to sending in the channel. |
 | `CtxEmbed` | `ctx, embed` | Send an embed to the channel. |
 | `CtxEphemeral` | `ctx, content` | Ephemeral interaction reply. |
 | `CtxEdit` | `ctx, content` | Edit the original interaction response. |

@@ -18,13 +18,26 @@ you know what to expect (and what not to fight).
 - **A few expression quirks** to be aware of:
   - Space-separated calls without parentheses inside list literals should be parenthesized: `[(f 1 2)]`.
   - String `+` concatenation inside space-separated function arguments should be parenthesized: `foo ("a" + b)`.
+- **Default parameters must be on a single-line signature.** `fun f a b = 7` works,
+  but in the block form (one parameter per line) a continuation line like `b = 7`
+  is read as a **body statement**, so the function ends up with one parameter
+  fewer and calls fail with *"Too many positional arguments"*. Keep the whole
+  signature on one line when you use defaults.
+- **Multi-line dict literals are not supported.** Write
+  `var d dynamic = {}` then assign keys (`d["k"] is v`), or keep the literal on
+  one line.
 
 ## Runtime
 
 - **Pass-by-value.** Dicts and lists are cloned when passed to a function, so a
   function that mutates a container must **return** it and the caller must
   reassign (`x is f x ...`). Module-level variables *are* shared across
-  functions.
+  functions. This applies to library calls too: `bot is Command bot "ping" …`,
+  not a bare `Command bot "ping" …`.
+- **Imports are cycle-safe but not cycle-tolerant.** A module that imports
+  itself, directly or through another module, raises a catchable
+  *"Circular import detected"* `import_error` instead of crashing. Move the
+  shared code into a third module to break the cycle.
 - **Missing dict keys throw** (both `d["k"]` and `d.k`): `Dictionary has no key
   'k'`. Guard with `has_key` before accessing optional keys.
 - **Number base literals**: `0x...` (hex), `0b...` (binary), and `0o...` (octal)
@@ -43,6 +56,22 @@ you know what to expect (and what not to fight).
 - **Single interpreter thread** for a script (the async/task model runs
   functions on background threads, but there is no automatic multi-core
   parallelization of plain code).
+- **`append`/`extend`/`push` copy the list**, because containers are passed by
+  value. Writing `l is append l x` directly in your own script is optimised
+  (the runtime moves the list instead of copying it, so the loop is linear), but
+  the optimisation only applies to that exact shape. Two consequences:
+  - `l is append l x` inside **a function that took `l` as a parameter**, or
+    `obj.items is append obj.items x`, still copies each time — O(n²) over a
+    loop. Build such lists with a comprehension (`[f x for x in xs]`) or `map`,
+    or collect items and `extend` once at the end.
+  - `l is l + [x]` in a loop is **always** O(n²) — measured 6.5 s for 20 000
+    items. Never build a list that way; see `benchmarks/`.
+- Measured reference numbers (release build; run `benchmarks/` yourself):
+  100 000 function calls ≈ 0.14 s, 50 000 dict writes ≈ 0.024 s,
+  20 000 `append`s ≈ 0.007 s, 20 000-item comprehension ≈ 0.003 s. Loading the
+  whole `discord` + `ai` package stack plus all puzzle modules costs ≈ 48 ms,
+  so **startup is not the bottleneck for a bot — network round-trips are**.
+
 
 ## Ecosystem
 

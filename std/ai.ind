@@ -1,5 +1,5 @@
 #! =============================================================================
-#! ai.ind 1.4 — OpenAI-native AI assistant package for Indent
+#! ai.ind 1.5 — OpenAI-native AI assistant package for Indent
 #! =============================================================================
 #!
 #! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
@@ -643,3 +643,97 @@ fun RagAnswer store question topK = 3
     var user = "Context:\n" + context + "\nQuestion: " + question
     give ChatWithSystem(_defaultModel, sys, user)
 
+#! =============================================================================
+#! NAMESPACE OBJECT — `AI.<Fn> ...`
+#! =============================================================================
+#! Some code (including older versions of this package and the Angela bot)
+#! calls the API through an `AI` namespace:
+#!
+#!   get AI from ai
+#!   AI.SetBase "https://ai.example/v1"
+#!   AI.SetApiKey key
+#!   AI.SetDefaultModel "xael-turbo"
+#!   var reply string = AI.Chat model messages
+#!
+#! That style keeps working here: `AI` is a plain dict of function references,
+#! and `AI.Chat model messages` resolves back to this module. Everything below
+#! is the same public API documented at the top of this file — the namespace is
+#! just an alternative calling convention, not a second implementation.
+
+#! Human-readable text for the most recent error ("" when there is none).
+#! The dict form remains available as `LastError`.
+fun LastErrorText
+    var e dynamic = LastError
+    if e == empty or e == {}
+        give ""
+    var msg string = ""
+    var kind string = ""
+    if has_key e "message"
+        msg is e.message
+    if has_key e "type"
+        kind is e.type
+    if msg == "" and kind == ""
+        give string(e)
+    if kind == ""
+        give msg
+    if msg == ""
+        give kind
+    give kind + ": " + msg
+
+
+#! ---- namespace object: AI.<Fn> ... (alternative calling convention) ----
+#! `AI` is a dict of function references; `AI.Chat model messages` resolves
+#! back to this module, so older code and the Angela bot keep working.
+#! Built incrementally because multi-line dict literals are not supported.
+var AI dynamic = {}
+AI["SetBase"] is SetBase
+AI["SetApiKey"] is SetApiKey
+AI["SetDefaultModel"] is SetDefaultModel
+AI["SetDefaultEmbedModel"] is SetDefaultEmbedModel
+AI["GetBase"] is GetBase
+AI["SetRetries"] is SetRetries
+AI["SetMaxRetries"] is SetMaxRetries
+AI["SetTimeout"] is SetTimeout
+AI["GetTimeout"] is GetTimeout
+AI["GetLastError"] is LastErrorText
+AI["LastError"] is LastError
+AI["LastErrorText"] is LastErrorText
+AI["GetLastStatus"] is GetLastStatus
+AI["GetRequestId"] is GetRequestId
+AI["LastUsage"] is LastUsage
+AI["LastFinishReason"] is LastFinishReason
+AI["WasError"] is WasError
+AI["ErrorType"] is ErrorType
+AI["ErrorTypeFor"] is ErrorTypeFor
+AI["IsRetryable"] is IsRetryable
+AI["IsAuthError"] is IsAuthError
+AI["IsPermissionError"] is IsPermissionError
+AI["IsBadRequest"] is IsBadRequest
+AI["IsNotFound"] is IsNotFound
+AI["IsRateLimit"] is IsRateLimit
+AI["IsServerError"] is IsServerError
+AI["IsConnectionError"] is IsConnectionError
+AI["IsTimeout"] is IsTimeout
+AI["Models"] is Models
+AI["Chat"] is Chat
+AI["ChatFull"] is ChatFull
+AI["Ask"] is Ask
+AI["Embed"] is Embed
+AI["EmbedMany"] is EmbedMany
+AI["Similarity"] is Similarity
+AI["Search"] is Search
+AI["ChatWithSystem"] is ChatWithSystem
+AI["ChatWithOptions"] is ChatWithOptions
+AI["AskJson"] is AskJson
+AI["ChatDefault"] is ChatDefault
+AI["AskDefault"] is AskDefault
+AI["Summarize"] is Summarize
+AI["Translate"] is Translate
+AI["Classify"] is Classify
+AI["Extract"] is Extract
+AI["NewConversation"] is NewConversation
+AI["Converse"] is Converse
+AI["NewVectorStore"] is NewVectorStore
+AI["VectorStoreAdd"] is VectorStoreAdd
+AI["VectorStoreSearch"] is VectorStoreSearch
+AI["RagAnswer"] is RagAnswer

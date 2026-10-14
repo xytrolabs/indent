@@ -982,6 +982,10 @@ struct Runtime {
     modules: HashMap<String, Arc<ModuleInstance>>,
     classes: HashMap<String, ClassDef>,
     module_cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
+    /// Canonical paths currently being loaded — used to detect circular imports
+    /// (A imports B imports A) and report a clean error instead of recursing
+    /// until the stack overflows.
+    module_loading: Arc<Mutex<HashSet<PathBuf>>>,
     debugger: Option<Debugger>,
     async_funcs: HashSet<String>,
 }
@@ -1002,6 +1006,7 @@ impl Runtime {
             modules: HashMap::new(),
             classes: HashMap::new(),
             module_cache: Arc::new(Mutex::new(HashMap::new())),
+            module_loading: Arc::new(Mutex::new(HashSet::new())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1016,6 +1021,28 @@ impl Runtime {
             modules: HashMap::new(),
             classes: HashMap::new(),
             module_cache: cache,
+            module_loading: Arc::new(Mutex::new(HashSet::new())),
+            debugger: None,
+            async_funcs: HashSet::new(),
+        }
+    }
+
+    /// Like `with_cache`, but also shares the in-progress import set so that
+    /// circular imports spanning more than one hop are detected.
+    fn with_cache_and_loading(
+        module_dir: PathBuf,
+        cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
+        loading: Arc<Mutex<HashSet<PathBuf>>>,
+    ) -> Self {
+        Self {
+            module_dir,
+            vars: default_color_vars(),
+            funcs: HashMap::new(),
+            callables: HashMap::new(),
+            modules: HashMap::new(),
+            classes: HashMap::new(),
+            module_cache: cache,
+            module_loading: loading,
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1257,6 +1284,17 @@ impl<'a> ExecContext<'a> {
         self.rt.vars.get(name).cloned()
     }
 
+    /// Remove and return a variable's value (allowing a move instead of a
+    /// copy). Mirrors `set_var`'s scope search: innermost frame first.
+    fn take_var(&mut self, name: &str) -> Option<Value> {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(v) = frame.remove(name) {
+                return Some(v);
+            }
+        }
+        self.rt.vars.remove(name)
+    }
+
     fn get_module(&self, name: &str) -> Option<Arc<ModuleInstance>> {
         if let Some(m) = self.rt.modules.get(name) {
             return Some(m.clone());
@@ -1302,6 +1340,87 @@ fn exec_block(body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, Strin
         }
     }
     Ok(Control::None)
+}
+
+/// Peephole optimisation for the documented list-building idiom:
+///
+/// ```indent
+/// var l dynamic = []
+/// repeat 1000
+///     l is append l item      #! also `push`, and `l is extend l more`
+/// ```
+///
+/// `append`/`extend`/`push` are *functional* builtins — they clone the list and
+/// return a new one — which makes this loop copy the whole list on every
+/// iteration, i.e. **O(n²)**. Measured: 20 000 appends took ~10 s.
+///
+/// When the assignment target is exactly the list being appended to, the list
+/// can be *moved* out of the variable, mutated, and moved back. That computes
+/// the same result as the copying path — arguments are passed by value, so no
+/// other variable can be sharing this value — but costs O(1) instead of O(n).
+///
+/// Returns `None` when the statement is not that shape, in which case the
+/// caller falls back to the normal evaluation path.
+fn try_inplace_list_append(
+    name: &str,
+    value: &ValueSource,
+    ctx: &mut ExecContext<'_>,
+) -> Option<Result<Control, String>> {
+    let (callee, args) = match value {
+        ValueSource::Call { callee, args } => (callee.as_str(), args),
+        _ => return None,
+    };
+    if !matches!(callee, "append" | "push" | "extend") {
+        return None;
+    }
+    if args.len() != 2 {
+        return None;
+    }
+    // Only a plain variable target can be moved out of the scope chain.
+    if name.is_empty() || name.contains('.') || name.contains('[') {
+        return None;
+    }
+    let first = match &args[0] {
+        ArgItem::Positional(expr) => expr.trim(),
+        _ => return None,
+    };
+    if first != name {
+        return None;
+    }
+    let second = match &args[1] {
+        ArgItem::Positional(expr) => expr,
+        _ => return None,
+    };
+
+    // Evaluate the appended value FIRST: it may read `name` itself.
+    let item = match eval_expr(second, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+
+    match ctx.take_var(name) {
+        Some(Value::List(mut list)) => {
+            match item {
+                Value::List(extra) if callee == "extend" => list.extend(extra),
+                other if callee == "extend" => {
+                    return Some(Err(format!(
+                        "extend expects a list, got {}",
+                        other.type_name()
+                    )))
+                }
+                other => list.push(other),
+            }
+            ctx.set_var(name, Value::List(list));
+            Some(Ok(Control::None))
+        }
+        // Not a list (or not a variable): reproduce the builtin's own error.
+        Some(other) => Some(Err(format!(
+            "{callee} expects a list, got {}",
+            other.type_name()
+        ))),
+        // Undefined variable: let the normal path produce the usual error.
+        None => None,
+    }
 }
 
 fn eval_value_source(value: &ValueSource, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
@@ -1402,6 +1521,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             Ok(Control::None)
         }
         Stmt::Assign { name, value, .. } => {
+            if let Some(result) = try_inplace_list_append(name, value, ctx) {
+                return result;
+            }
             let v = eval_value_source(value, ctx)?;
             assign_var_chain(name, v, ctx);
             Ok(Control::None)
@@ -1642,8 +1764,30 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
         Stmt::Launch { expr, line } => {
             // launch <path> — run another Indent file in this runtime.
             let path_val = eval_expr(expr, ctx)?;
-            let path = PathBuf::from(path_val.to_string());
-            ctx.rt.run_file(&path).map_err(|e| format!("Line {line}: launch: {e}"))?;
+            let raw = path_val.to_string();
+            let mut path = PathBuf::from(&raw);
+            // A relative launch path is resolved against the *module's* own
+            // directory first (so a package can launch a sibling file), then
+            // through the regular module search path. This makes packages
+            // self-contained instead of depending on the process cwd.
+            let module_dir = ctx.rt.module_dir.clone();
+            if !path.is_absolute() && !path.exists() {
+                let sibling = module_dir.join(&path);
+                if sibling.exists() {
+                    path = sibling;
+                } else {
+                    let as_module = raw
+                        .trim_end_matches(".ind")
+                        .trim_end_matches(".glo")
+                        .replace('/', ".");
+                    if let Some(found) = find_module_file(&module_dir, &as_module) {
+                        path = found;
+                    }
+                }
+            }
+            ctx.rt
+                .run_file(&path)
+                .map_err(|e| format!("Line {line}: launch: {e}"))?;
             Ok(Control::None)
         }
         Stmt::AsyncWith { expr, binding, body, .. } => {
@@ -2031,6 +2175,15 @@ fn import_stmt(
         }
         Some(symbol) => {
             let bind = alias.unwrap_or(symbol).to_string();
+            // Also expose the module under its own name, so a qualified call
+            // (`mod.Fn ...`) keeps working next to the imported symbol, and so
+            // namespace objects holding `Value::Func` members can resolve back
+            // to the module that defined them.
+            if !ctx.rt.modules.contains_key(module_name) {
+                ctx.rt
+                    .modules
+                    .insert(module_name.to_string(), module.clone());
+            }
             if let Some(f) = module.funcs.get(symbol) {
                 let callable = Callable::External {
                     module: module.clone(),
@@ -2062,14 +2215,38 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
         return Ok(m.clone());
     }
 
-    let mut module_runtime = Runtime::with_cache(
+    // Circular-import guard: if this exact file is already being loaded further
+    // up the stack, report a clean error instead of recursing until the stack
+    // overflows (Python raises ImportError for this).
+    {
+        let mut loading = ctx.rt.module_loading.lock().unwrap();
+        if loading.contains(&canonical) {
+            let name = canonical
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| module_name.to_string());
+            return Err(format!(
+                "Circular import detected: '{name}' imports itself (directly or through another module). Break the cycle by moving the shared code into a third module."
+            ));
+        }
+        loading.insert(canonical.clone());
+    }
+
+    let mut module_runtime = Runtime::with_cache_and_loading(
         canonical
             .parent()
             .unwrap_or(Path::new("."))
             .to_path_buf(),
         ctx.rt.module_cache.clone(),
+        ctx.rt.module_loading.clone(),
     );
-    module_runtime.run_file(&canonical)?;
+    let run_result = module_runtime.run_file(&canonical);
+
+    // Always clear the in-progress marker, even on failure, so a later import
+    // can retry rather than being permanently blocked.
+    ctx.rt.module_loading.lock().unwrap().remove(&canonical);
+    run_result?;
+
     let module = Arc::new(ModuleInstance {
         vars: module_runtime.vars,
         funcs: module_runtime.funcs,
@@ -2259,6 +2436,55 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         }
 
         let callable = resolve_callable(&func_name, ctx)?;
+        return match callable {
+            Callable::Local(f) => invoke_function(&f, &func_args, &named, ctx),
+            Callable::External { module, name } => {
+                invoke_external_function(module, &name, &func_args, &named, ctx)
+            }
+            Callable::Builtin(name) => invoke_builtin_callable(&name, &func_args, &named),
+        };
+    }
+
+    // Lenient dispatcher — like call_func, but tolerant of the callee's arity.
+    // Surplus positional args are dropped and missing ones are filled with
+    // `empty` (params that declare a default keep their default). Generic event
+    // dispatchers use this so a handler may be written with 1, 2 or 3 params.
+    if callee == "call_func_lenient" || callee == "dispatch" {
+        if positional.is_empty() {
+            return Err("call_func_lenient expects at least 1 argument".to_string());
+        }
+        let func_name = positional[0].to_string();
+        let mut func_args: Vec<Value> = positional[1..].to_vec();
+
+        if named.is_empty() {
+            if let Some(result) = invoke_builtin(&func_name, &func_args) {
+                return result;
+            }
+        }
+
+        let callable = resolve_callable(&func_name, ctx)?;
+        // Declared positional parameters of the target, when knowable.
+        let params: Option<Vec<FunctionParam>> = match &callable {
+            Callable::Local(f) => Some(f.params.clone()),
+            Callable::External { module, name } => module.funcs.get(name).map(|f| f.params.clone()),
+            Callable::Builtin(_) => None,
+        };
+        if let Some(params) = params {
+            let is_varargs = params.iter().any(|p| p.is_varargs);
+            if !is_varargs {
+                if func_args.len() > params.len() {
+                    func_args.truncate(params.len());
+                } else if func_args.len() < params.len() {
+                    // Pad only up to the first param that has a default — that
+                    // param (and everything after it) can supply its own value.
+                    let mut i = func_args.len();
+                    while i < params.len() && params[i].default_value.is_none() {
+                        func_args.push(Value::Empty);
+                        i += 1;
+                    }
+                }
+            }
+        }
         return match callable {
             Callable::Local(f) => invoke_function(&f, &func_args, &named, ctx),
             Callable::External { module, name } => {
@@ -2643,6 +2869,8 @@ fn invoke_method_on_value(
             temp_rt.classes = ctx.rt.classes.clone();
             temp_rt.funcs = ctx.rt.funcs.clone();
             temp_rt.callables = ctx.rt.callables.clone();
+            temp_rt.modules = ctx.rt.modules.clone();
+            temp_rt.module_dir = ctx.rt.module_dir.clone();
             let mut temp_ctx = ExecContext::new(&mut temp_rt);
             return invoke_callable_expr(fn_name, &exprs, &mut temp_ctx);
         }
@@ -2667,6 +2895,8 @@ fn invoke_method_on_value(
             temp_rt.classes = ctx.rt.classes.clone();
             temp_rt.funcs = ctx.rt.funcs.clone();
             temp_rt.callables = ctx.rt.callables.clone();
+            temp_rt.modules = ctx.rt.modules.clone();
+            temp_rt.module_dir = ctx.rt.module_dir.clone();
             let mut temp_ctx = ExecContext::new(&mut temp_rt);
             return invoke_callable_expr(fn_name, &exprs, &mut temp_ctx);
         }
@@ -2680,6 +2910,8 @@ fn invoke_method_on_value(
             temp_rt.classes = ctx.rt.classes.clone();
             temp_rt.funcs = ctx.rt.funcs.clone();
             temp_rt.callables = ctx.rt.callables.clone();
+            temp_rt.modules = ctx.rt.modules.clone();
+            temp_rt.module_dir = ctx.rt.module_dir.clone();
             let mut temp_ctx = ExecContext::new(&mut temp_rt);
             return invoke_function(func_def, args, &HashMap::new(), &mut temp_ctx);
         }
@@ -2801,11 +3033,29 @@ fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, Str
         return Err(format!("Module '{}' has no function '{}'", left, right));
     }
 
-    ctx.rt
-        .callables
-        .get(callee)
-        .cloned()
-        .ok_or_else(|| format!("Undefined function '{}'", callee))
+    if let Some(callable) = ctx.rt.callables.get(callee) {
+        return Ok(callable.clone());
+    }
+
+    // Fallback: a plain name that no local/imported symbol provides may still be
+    // exported by an imported module. This is what makes namespace objects
+    // work — e.g. `get AI from ai` where `ai.ind` exposes
+    // `var AI dynamic = {"SetBase": SetBase, ...}` and the caller writes
+    // `AI.SetBase url`. Module order is sorted so resolution is deterministic.
+    let mut module_names: Vec<&String> = ctx.rt.modules.keys().collect();
+    module_names.sort();
+    for name in module_names {
+        if let Some(module) = ctx.rt.modules.get(name) {
+            if module.funcs.contains_key(callee) {
+                return Ok(Callable::External {
+                    module: module.clone(),
+                    name: callee.to_string(),
+                });
+            }
+        }
+    }
+
+    Err(format!("Undefined function '{}'", callee))
 }
 
 fn invoke_external_function(
@@ -15442,6 +15692,84 @@ var converted string = string(UInput)
             err.contains("has no function"),
             "expected a missing-function error, got: {err}"
         );
+    }
+
+    #[test]
+    fn circular_import_reports_clean_error() {
+        // Regression: a module importing itself (directly or through another
+        // module) used to recurse until the process aborted with a stack
+        // overflow. It must now surface a normal, catchable import error.
+        let dir = unique_dir("indent_test_circular_import");
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        fs::write(
+            dir.join("ping_mod.ind"),
+            "get Pong from pong_mod\n\nfun Ping\n    give Pong()\n",
+        )
+        .expect("write ping_mod");
+        fs::write(
+            dir.join("pong_mod.ind"),
+            "get Ping from ping_mod\n\nfun Pong\n    give Ping()\n",
+        )
+        .expect("write pong_mod");
+        fs::write(dir.join("main.ind"), "get Ping from ping_mod\n").expect("write main");
+
+        let mut rt = Runtime::new(dir.clone());
+        let err = rt
+            .run_file(&dir.join("main.ind"))
+            .expect_err("expected an import error");
+        assert!(
+            err.contains("Circular import"),
+            "expected a circular-import error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn self_import_reports_clean_error() {
+        let dir = unique_dir("indent_test_self_import");
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        fs::write(
+            dir.join("loop.ind"),
+            "get Hello from loop\n\nfun Hello\n    give 1\n",
+        )
+        .expect("write loop");
+        fs::write(dir.join("main.ind"), "get Hello from loop\n").expect("write main");
+
+        let mut rt = Runtime::new(dir.clone());
+        let err = rt
+            .run_file(&dir.join("main.ind"))
+            .expect_err("expected an import error");
+        assert!(
+            err.contains("Circular import"),
+            "expected a circular-import error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn launch_resolves_relative_to_the_module_directory() {
+        // A package must be able to `launch` a sibling file regardless of the
+        // process working directory.
+        let dir = unique_dir("indent_test_launch_sibling");
+        let pkg = dir.join("pkg");
+        fs::create_dir_all(&pkg).expect("create pkg dir");
+
+        fs::write(
+            pkg.join("part_two.ind"),
+            "fun Extra\n    give 41\n",
+        )
+        .expect("write part_two");
+        fs::write(
+            pkg.join("entry.ind"),
+            "launch \"part_two.ind\"\n\nfun Total\n    give Extra() + 1\n",
+        )
+        .expect("write entry");
+        fs::write(dir.join("main.ind"), "get Total from pkg.entry\nsay Total()\n")
+            .expect("write main");
+
+        let mut rt = Runtime::new(dir.clone());
+        let result = rt.run_file(&dir.join("main.ind"));
+        assert!(result.is_ok(), "runtime failed: {:?}", result.err());
     }
 
     #[test]

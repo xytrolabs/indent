@@ -1175,6 +1175,29 @@ var op = "double"        #! name is dynamic
 call_func op 21          #! → 42
 ```
 
+### Arity-tolerant dispatch — `call_func_lenient`
+
+`call_func` is strict: too many or too few positional arguments is an error.
+`call_func_lenient` (alias `dispatch`) adapts to the callee's declared
+parameters — **surplus arguments are dropped** and **missing ones are filled
+with `empty`**, except that a parameter declaring a default keeps its default.
+That lets a single generic dispatcher call handlers written with 1, 2 or 3
+parameters, which is how the event/command layers of the `discord` package
+invoke user handlers.
+
+| Function | Returns | Description |
+|---|---|---|
+| `call_func_lenient(name, ...args)` | any | Call `name`, adapting `args` to its declared arity |
+| `dispatch(name, ...args)` | any | Alias of `call_func_lenient` |
+
+```indent
+fun handler ctx
+    CtxReply ctx "pong"
+
+#! handler declares 1 parameter; the dispatcher supplies 2 → the extra is dropped
+call_func_lenient "handler" ctx args
+```
+
 ---
 
 ## Result value helpers

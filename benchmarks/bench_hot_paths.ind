@@ -1,0 +1,62 @@
+#! Micro-benchmark for the interpreter hot paths.
+#! Run:  indent benchmarks/bench_hot_paths.ind   (use a --release build!)
+#! Prints wall-clock timing for each section so regressions are visible.
+
+#! ---- 1. call overhead (100k calls) ----
+fun add a b
+    give a + b
+
+var t0 float = time_perf_counter
+var acc int = 0
+repeat 100000
+    acc is add acc 1
+var t1 float = time_perf_counter
+say "100k function calls: " + string(t1 - t0) + "s"
+
+#! ---- 2. string concatenation (10k) ----
+var t2 float = time_perf_counter
+var s string = ""
+repeat 10000
+    s is s + "x"
+var t3 float = time_perf_counter
+say "10k string concat: " + string(t3 - t2) + "s"
+
+#! ---- 3. list append (50k) ----
+var t4 float = time_perf_counter
+var lst dynamic = []
+repeat 50000
+    lst is append lst 1
+var t5 float = time_perf_counter
+say "50k list append: " + string(t5 - t4) + "s (len=" + string(len(lst)) + ")"
+
+#! ---- 4. dict writes (50k) ----
+var t6 float = time_perf_counter
+var d dynamic = {}
+repeat 50000
+    d["k"] is 1
+var t7 float = time_perf_counter
+say "50k dict writes: " + string(t7 - t6) + "s"
+
+#! ---- 5. json round-trip (5k) ----
+var t8 float = time_perf_counter
+var payload dynamic = {"a": 1, "b": "two", "c": [1, 2, 3]}
+repeat 5000
+    var enc string = json_dumps payload
+    var dec dynamic = json_loads enc
+var t9 float = time_perf_counter
+say "5k json round-trips: " + string(t9 - t8) + "s"
+
+#! ---- 6. dynamic dispatch (50k) ----
+var t10 float = time_perf_counter
+repeat 50000
+    call_func "add" 1 2
+var t11 float = time_perf_counter
+say "50k call_func: " + string(t11 - t10) + "s"
+
+var t12 float = time_perf_counter
+repeat 50000
+    call_func_lenient "add" 1 2 3
+var t13 float = time_perf_counter
+say "50k call_func_lenient: " + string(t13 - t12) + "s"
+
+say "bench: DONE"
