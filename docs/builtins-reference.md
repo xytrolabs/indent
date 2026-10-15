@@ -540,11 +540,34 @@ See also: `agame` package for a cleaner `show(html, title, w, h)` wrapper.
 
 ## WebSocket
 
+These return a **result dict** rather than raising, so a dropped connection or a
+read timeout is a flag you can branch on:
+
 | Function | Returns | Description |
 |---|---|---|
-| `ws_connect(url)` | int | Connect to WebSocket, returns connection ID |
-| `ws_send_text(id, text)` | — | Send text message |
-| `ws_recv_text(id)` | string | Receive next text message |
+| `ws_connect(url)` | `{ok, socket_id}` | Connect to WebSocket |
+| `ws_send_text(id, text)` | `{ok, socket_id}` | Send text message |
+| `ws_recv_text(id)` | `{ok, socket_id, text}` | Receive next text message |
+| | `{ok:false, socket_id, closed:true, code?, reason?}` | the peer closed |
+| `ws_recv_text_timeout(id, seconds)` | `{ok, socket_id, text}` | Received in time |
+| | `{ok:false, socket_id, timeout:true}` | Nothing arrived; the socket is still usable |
+| `ws_close(id)` | `{ok}` | Close the socket |
+
+`id` is either the dict `ws_connect` returns or its `socket_id`, so both of these
+work — they are the same socket:
+
+```indent
+var sock dynamic = ws_connect "wss://example.com/ws"
+ws_send_text sock "hi"              #! the dict returned by ws_connect
+ws_send_text sock["socket_id"] "hi" #! or its id (what std/discord.ind uses)
+
+var reply dynamic = ws_recv_text sock
+if reply["ok"]
+    say reply["text"]
+    otherwise
+    if reply["closed"]
+        say "the peer hung up"
+```
 
 ---
 

@@ -1,0 +1,120 @@
+#! WebSocket tests against the local fixture's echo endpoint (`/ws`).
+#!
+#! The `ws_*` builtins are a **result-dict** API, not a raising one:
+#!   ws_connect(url)                -> {ok, socket_id}
+#!   ws_send_text(id, text)         -> {ok, socket_id}
+#!   ws_recv_text(id)               -> {ok, socket_id, text}
+#!                                   | {ok:false, socket_id, closed:true, code?, reason?}
+#!   ws_recv_text_timeout(id, secs) -> {ok, socket_id, text}
+#!                                   | {ok:false, socket_id, timeout:true}
+#!                                   | {ok:false, socket_id, closed:true}
+#! `id` may be the dict from ws_connect or its socket_id.
+#!
+#! Skipped (not failed) when the fixture is not running.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+var base string = os_getenv "NET_FIXTURE_URL" "http://127.0.0.1:8799"
+var healthUrl string = base + "/health"
+var fixtureUp boolean = false
+do:
+    var health dynamic = http_get healthUrl
+    fixtureUp is health["status"] == 200
+catch as errHealth:
+    fixtureUp is false
+if not fixtureUp
+    say "SKIP: no fixture server at " + base
+    say "      start it with: python3 tools/mock_fixture_server.py 8799"
+    process_exit 0
+
+var wsUrl string = "ws://127.0.0.1:8799/ws"
+
+#! ---- connect -------------------------------------------------------------
+var sock dynamic = ws_connect wsUrl
+var ok1a boolean = sock["ok"] == true
+var ok1b boolean = sock["socket_id"] > 0
+var sockId int = sock["socket_id"]
+assert ok1a "ws_connect reports ok"
+assert ok1b "ws_connect returns a socket_id"
+
+#! ---- receive handshake ---------------------------------------------------
+var greeting dynamic = ws_recv_text sock
+var ok2a boolean = greeting["ok"] == true
+var ok2b boolean = greeting["text"] == "hello"
+var ok2c boolean = greeting["socket_id"] == sockId
+assert ok2a "ws_recv_text reports ok"
+assert ok2b "the server's first frame arrives"
+assert ok2c "the reply carries the same socket_id"
+
+#! ---- send / receive, via the dict handle --------------------------------
+ws_send_text sock "ping"
+var echoed dynamic = ws_recv_text sock
+var ok3 boolean = echoed["text"] == "echo:ping"
+assert ok3 "a text frame round-trips (dict handle)"
+
+#! ---- the same socket addressed by its raw id ----------------------------
+ws_send_text sockId "by-id"
+var echoedById dynamic = ws_recv_text_timeout sockId 5.0
+var ok4 boolean = echoedById["text"] == "echo:by-id"
+assert ok4 "the socket works through its raw socket_id too"
+
+#! ---- payload integrity ---------------------------------------------------
+var payload string = "héllo ünïcode"
+ws_send_text sock payload
+var echoed3 dynamic = ws_recv_text sock
+var ok5 boolean = echoed3["text"] == "echo:" + payload
+assert ok5 "unicode round-trips intact"
+
+#! A JSON frame must survive byte-for-byte. The fixture prefixes replies with
+#! "echo:", so compare the framed text and parse the JSON that was sent.
+var jsonPayload string = json_dumps {"a": [1, 2, 3], "b": "x y"}
+ws_send_text sock jsonPayload
+var echoed4 dynamic = ws_recv_text sock
+var ok6a boolean = echoed4["text"] == "echo:" + jsonPayload
+var reparsed dynamic = json_loads jsonPayload
+var ok6b boolean = reparsed["a"][2] == 3
+var ok6c boolean = reparsed["b"] == "x y"
+assert ok6a "a JSON frame round-trips byte-for-byte"
+assert ok6b "the JSON frame parses back to the same structure"
+assert ok6c "string values inside the frame survive"
+
+#! ---- read timeout on a silent socket ------------------------------------
+ws_send_text sock "silence"
+var silent dynamic = ws_recv_text_timeout sock 1.0
+var ok7a boolean = silent["ok"] == false
+var ok7b boolean = silent["timeout"] == true
+assert ok7a "a read timeout reports ok=false"
+assert ok7b "a read timeout sets the timeout flag instead of raising"
+
+#! The socket must still be usable after a read timeout.
+ws_send_text sock "after-timeout"
+var echoed5 dynamic = ws_recv_text sock
+var ok8 boolean = echoed5["text"] == "echo:after-timeout"
+assert ok8 "the socket still works after a read timeout"
+
+#! ---- server-side close ---------------------------------------------------
+ws_send_text sock "close"
+var afterClose dynamic = ws_recv_text sock
+var ok9a boolean = afterClose["ok"] == false
+var ok9b boolean = afterClose["closed"] == true
+assert ok9a "a closed socket reports ok=false"
+assert ok9b "a closed socket sets the closed flag instead of raising"
+
+ws_close sock
+say "  ok: ws_close returns without error"
+assert true "ws_close completes"
+
+#! ---- connecting to nothing fails loudly, without hanging -----------------
+var badConn boolean = false
+do:
+    var bad dynamic = ws_connect "ws://127.0.0.1:9/nope"
+    badConn is bad["ok"] == false
+catch as errConn:
+    badConn is true
+assert badConn "connecting to a dead port fails (raises or reports not-ok)"
+
+say "ws parity: all assertions passed"

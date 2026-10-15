@@ -18,7 +18,12 @@ strip = "symbols"
 incremental = false
 
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# `gzip`/`deflate`/`charset` are what Python's `requests` does out of the box:
+# advertise `Accept-Encoding: gzip, deflate` and decode the response, and honour
+# the charset in `Content-Type`. Without them a gzipped JSON API (or any CDN that
+# compresses) returned raw compressed bytes that failed to parse, and a Latin-1
+# body came back as mojibake. Both reuse `flate2`, already a dependency.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "gzip", "deflate", "charset"] }
 serde_json = "1"
 # Used for the on-disk AST cache (`__incache__/*.inc`): the parsed program is
 # serialised with bincode so a re-run can skip lexing and parsing entirely.

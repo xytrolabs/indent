@@ -172,6 +172,39 @@ with its own verification rather than a rushed change.
 
 ## Unreleased — language & package parity
 
+### 🌐 Networking, WebSocket, AI and parser fixes
+Found by a new offline parity suite (`tests/run_net_tests.sh` against
+`tools/mock_fixture_server.py`, which serves HTTP, WebSocket and an
+OpenAI-compatible mock): **103 assertions** across `net_http_parity`,
+`net_ws_parity` and `ai_mock_parity`.
+
+- **gzip/deflate response bodies were not decoded.** `reqwest` was built without
+  its compression features, so any API or CDN that serves compressed JSON handed
+  back raw gzip bytes that failed to parse — 404-ing `json_parse`, silently, at the
+  protocol level. Also `charset`, so a Latin-1 body came back as mojibake. The
+  client now advertises and decodes exactly what Python's `requests` does out of the
+  box (`gzip`, `deflate`, `charset`), reusing the `flate2` already in the tree.
+- **`ws_connect` returned a handle its own siblings rejected.** Every other `ws_*`
+  builtin demanded a bare int, so the documented `ws_send_text(sock, "hi")` failed
+  with "socket_id must be an int"; only code that happened to know to index
+  `["socket_id"]` worked. Both forms are now accepted, and the result-dict contract
+  (`{ok, text}` / `{ok:false, timeout:true}` / `{ok:false, closed:true}`) is
+  documented in `docs/builtins-reference.md` instead of the wrong `int`/`string`
+  return types that were there.
+- **The AI package kept reporting a stale error after a successful retry.**
+  `_ApiRequest` reset its error state on entry but not between attempts or on
+  success, so `WasError()` stayed true for a call that had actually recovered —
+  the opposite of the documented "`{}` = success" and of openai-python, where a
+  success simply has no error. Now cleared per attempt and on success.
+- **One-line `fun` defaults were parsed as a single whitespace token**, so
+  `fun NotFound msg = "Not Found"` declared a parameter literally named `Found"`
+  and threw *"Missing argument for parameter 'Found\"'"* at every call. That broke
+  `web.NotFound`, `web.BadRequest` and `web.ServerError` for every user. A default
+  may now be any expression (`= "Not Found"`, `= [1, 2]`) while
+  `fun f a = 1 b = 2` still declares two parameters, and a trailing `as type` still
+  parses. `AST_CACHE_FORMAT` bumped to 3, because a cached AST from the old parser
+  is not merely stale but wrong.
+
 ### ✨ Language (all additive — nothing removed)
 - **Native `%name%` interpolation now works in every string**, not just inside
   `say`. `var msg = "Hello %name%"` produces a real interpolated string usable

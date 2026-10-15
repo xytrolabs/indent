@@ -1165,7 +1165,12 @@ impl Runtime {
 /// Bumped whenever the grammar, `Stmt`/`Expr` layout or the parse pipeline
 /// changes, so old cache files are ignored instead of misread. (Python calls
 /// this the magic number.)
-const AST_CACHE_FORMAT: u32 = 2;
+///
+/// 3: one-line `fun f p = <default>` signatures — a default is no longer read as a
+///    single whitespace token, so `= "Not Found"` parses as one default instead
+///    of producing a parameter named `Found"`. An AST cached by format 2 is not
+///    merely stale, it is wrong, so it must not be reused even within a version.
+const AST_CACHE_FORMAT: u32 = 3;
 const AST_CACHE_MAGIC: &[u8; 8] = b"INDENTC2";
 const AST_CACHE_DIR: &str = "__incache__";
 
@@ -9707,7 +9712,19 @@ fn parse_socket_id(value: &Value) -> Result<i64, String> {
             .trim()
             .parse::<i64>()
             .map_err(|_| "socket_id must be an int".to_string()),
-        _ => Err("socket_id must be an int".to_string()),
+        // `ws_connect` returns {"ok": true, "socket_id": N}, so accept that dict
+        // directly: `ws_send_text (ws_connect url) "hi"` is the form the guide
+        // documents, and requiring every caller to pull out ["socket_id"] first is
+        // the sort of thing nobody discovers from the source.
+        Value::Dict(map) => match map.get("socket_id") {
+            Some(Value::Int(v)) => Ok(*v),
+            Some(Value::Str(s)) => s
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| "socket_id must be an int".to_string()),
+            _ => Err("socket_id must be an int, or the dict returned by ws_connect".to_string()),
+        },
+        _ => Err("socket_id must be an int, or the dict returned by ws_connect".to_string()),
     }
 }
 
@@ -13139,20 +13156,11 @@ impl Parser {
             }
             let parts: Vec<&str> = rest.split_whitespace().collect();
             let name = parts[0].to_string();
-            let mut tail: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
-
-            // Collapse `=` default values: "param", "=", "value" → param with default
-            let mut i = 0;
-            while i + 1 < tail.len() {
-                if tail[i + 1] == "=" {
-                    // Next token after = is the default value
-                    let param_name = tail[i].clone();
-                    let default_val = if i + 2 < tail.len() { tail[i + 2].clone() } else { "empty".to_string() };
-                    tail[i] = format!("{}={}", param_name, default_val);
-                    tail.remove(i + 1); // remove =
-                    if i + 1 < tail.len() { tail.remove(i + 1); } // remove value
-                }
-                i += 1;
+            // Each spec is either `param` or `param=<default expression>`, where the
+            // default may contain spaces (`= "Not Found"`, `= [1, 2]`).
+            let mut tail: Vec<String> = split_inline_param_specs(rest);
+            if !tail.is_empty() {
+                tail.remove(0); // the name itself
             }
 
             // Detect "as type" suffix for return type
@@ -14670,6 +14678,115 @@ fn split_top_level(text: &str, delimiter: char) -> Vec<String> {
 
     out.push(current);
     out
+}
+
+/// Split a one-line `fun` signature tail into parameter specs, keeping
+/// `name = default` groups intact even when the default contains spaces.
+///
+/// The default runs up to the next `name =` group, a trailing `as <type>`, or the
+/// end of the signature. So `fun NotFound msg = "Not Found"` gives **one**
+/// parameter with the default `"Not Found"`, while `fun f a = 1 b = 2` still gives
+/// two. (Taking a single whitespace-delimited token as the default — the previous
+/// behaviour — turned `= "Not Found"` into a parameter literally named `Found"`,
+/// which then failed at every call with "Missing argument for parameter".)
+fn split_inline_param_specs(rest: &str) -> Vec<String> {
+    let bytes = rest.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let name_start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'=' {
+            i += 1;
+        }
+        let name_end = i;
+        let name = rest[name_start..name_end].to_string();
+
+        // Optional `= default`.
+        let mut j = name_end;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        // `==` is an operator, not a default marker.
+        let is_default = j < bytes.len() && bytes[j] == b'=' && bytes.get(j + 1) != Some(&b'=');
+        if is_default {
+            j += 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let end = scan_default_end(rest, j);
+            out.push(format!("{}={}", name, rest[j..end].trim_end()));
+            i = end;
+        } else {
+            out.push(name);
+            i = name_end;
+        }
+    }
+    out
+}
+
+/// End offset of a default value starting at `start`: the position of the next
+/// `name =` group, a trailing `as` clause, or the end of the string. Quoted text
+/// is skipped, so spaces and even `=` inside a string literal are preserved.
+fn scan_default_end(rest: &str, start: usize) -> usize {
+    let bytes = rest.as_bytes();
+    let mut i = start;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' || c == b'\'' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_whitespace() {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j >= bytes.len() {
+                return i;
+            }
+            // A trailing `as <type>` belongs to the signature, not the value.
+            if rest[j..] == *"as" || rest[j..].starts_with("as ") {
+                return i;
+            }
+            // `ident [`ws`] =` starts the next defaulted parameter.
+            let ident_start = j;
+            while j < bytes.len() && !bytes[j].is_ascii_whitespace() && bytes[j] != b'=' {
+                j += 1;
+            }
+            if j > ident_start {
+                let mut k = j;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                if k < bytes.len() && bytes[k] == b'=' && bytes.get(k + 1) != Some(&b'=') {
+                    return i;
+                }
+            }
+            i = j.max(i + 1);
+            continue;
+        }
+        i += 1;
+    }
+    bytes.len()
 }
 
 fn parse_function_signature(raw: &str) -> Result<(String, Vec<FunctionParam>), String> {

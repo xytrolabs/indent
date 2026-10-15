@@ -1,0 +1,50 @@
+#! Timing side of the Python comparison. Prints machine-readable RESULT lines so
+#! benchmarks/net_ab_compare.py can put the two languages side by side.
+#!
+#!   NET_FIXTURE_URL=http://127.0.0.1:8799 indent run benchmarks/net_ab_indent.ind
+
+var base string = os_getenv "NET_FIXTURE_URL" "http://127.0.0.1:8799"
+var getUrl string = base + "/get"
+var postUrl string = base + "/post"
+var bigUrl string = base + "/large?n=1000"
+
+var rawN string = os_getenv "NET_AB_N" "50"
+var N int = int rawN
+
+#! Warm up (connection setup, TLS, thread pool), then measure.
+http_get getUrl
+http_post_json postUrl {"warm": 1}
+
+var t0 float = time_perf_counter
+repeat N
+    var r dynamic = http_get getUrl
+    var s int = r["status"]
+var t1 float = time_perf_counter
+say "RESULT get_loop " + string(t1 - t0)
+
+var body dynamic = {"name": "indent", "n": 7, "list": [1, 2, 3, 4, 5], "flag": true}
+var t2 float = time_perf_counter
+repeat N
+    var r2 dynamic = http_post_json postUrl body
+    var s2 int = r2["status"]
+var t3 float = time_perf_counter
+say "RESULT post_loop " + string(t3 - t2)
+
+#! One big GET, then parse its 1000-element body N times (pure CPU).
+var big dynamic = http_get bigUrl
+var raw string = big["body"]
+var t4 float = time_perf_counter
+var total int = 0
+repeat N
+    var parsed dynamic = json_parse raw
+    total is total + len(parsed["items"])
+var t5 float = time_perf_counter
+say "RESULT parse_loop " + string(t5 - t4)
+
+#! Serialising the same structure N times.
+var t6 float = time_perf_counter
+repeat N
+    var s6 string = json_dumps body
+var t7 float = time_perf_counter
+say "RESULT dumps_loop " + string(t7 - t6)
+say "RESULT n " + string(N)

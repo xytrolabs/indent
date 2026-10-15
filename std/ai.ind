@@ -302,6 +302,15 @@ fun _ErrorFromResponse status resp
 #! Returns {"ok": bool, "status": int, "data": <parsed body|empty>, "error": <errObj|{}>}.
 #! Never throws. Retries connection errors, 408/409/429 and 5xx with backoff,
 #! honouring Retry-After. Captures the x-request-id header for support tickets.
+#! Clear the recorded error state. `LastError()`/`WasError()` are documented as
+#! "{} = success", so the state has to be reset when a call succeeds — including
+#! when a retry succeeds after an earlier attempt failed, which previously left
+#! WasError() true for a call that had actually returned fine.
+fun _ClearError
+    _errObj is {}
+    _errText is ""
+    _lastRequestId is ""
+
 fun _ApiRequest method path payload
     _errObj is {}
     _errText is ""
@@ -313,6 +322,9 @@ fun _ApiRequest method path payload
     var resp dynamic = {"ok": false, "status": 0, "body": ""}
     repeat while attempt <= _maxRetries
         attempt is attempt + 1
+        #! A fresh attempt starts from a clean error state, so a retry that
+        #! succeeds cannot leave the previous attempt's error visible.
+        _ClearError()
         do:
             resp is http_request method url payload auth {}
         catch as e:
@@ -333,6 +345,7 @@ fun _ApiRequest method path payload
             if has_key resp "body"
                 body is resp.body
             if len(body) == 0
+                _ClearError()
                 give {"ok": true, "status": status, "data": empty, "error": {}}
             var parsed = empty
             var parseOk int = 1
@@ -344,6 +357,7 @@ fun _ApiRequest method path payload
                 var ei string = "invalid_response_error"
                 _SetError ei status "" ("invalid JSON: " + string(e)) "" _lastRequestId body
                 give {"ok": false, "status": status, "data": empty, "error": _errObj}
+            _ClearError()
             give {"ok": true, "status": status, "data": parsed, "error": {}}
 
         #! failure — record structured error, maybe retry

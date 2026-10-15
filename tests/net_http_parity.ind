@@ -1,0 +1,263 @@
+#! End-to-end tests for the `http_*` networking builtins, against a local fixture
+#! server (tools/mock_fixture_server.py) so they are deterministic and offline.
+#!
+#! Run via tests/run_net_tests.sh, or by hand with the fixture already up:
+#!     python3 tools/mock_fixture_server.py 8799 &
+#!     indent run tests/net_http_parity.ind
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+var base string = os_getenv "NET_FIXTURE_URL" "http://127.0.0.1:8799"
+
+#! The fixture is a local Python server, so this file is skipped (not failed) when
+#! it is not running — `benchmarks/run_suite.sh` and CI stay green without it. Use
+#! tests/run_net_tests.sh to run it for real.
+var healthUrl string = base + "/health"
+var fixtureUp boolean = false
+do:
+    var health dynamic = http_get healthUrl
+    fixtureUp is health["status"] == 200
+catch as errHealth:
+    fixtureUp is false
+if not fixtureUp
+    say "SKIP: no fixture server at " + base
+    say "      start it with: python3 tools/mock_fixture_server.py 8799"
+    process_exit 0
+
+#! ---- 1. plain GET --------------------------------------------------------
+var getUrl string = base + "/get"
+var r1 dynamic = http_get getUrl
+var ok1a boolean = r1["status"] == 200
+var ok1b boolean = r1["ok"] == true
+var g1 dynamic = json_parse r1["body"]
+var ok1c boolean = g1["method"] == "GET"
+assert ok1a "GET returns status 200"
+assert ok1b "GET sets ok=true"
+assert ok1c "GET body is JSON and echo the method"
+
+#! ---- 2. query string -----------------------------------------------------
+var qUrl string = base + "/get?name=indent&n=42"
+var r2 dynamic = http_get qUrl
+var g2 dynamic = json_parse r2["body"]
+var ok2a boolean = g2["args"]["name"] == "indent"
+var ok2b boolean = g2["args"]["n"] == "42"
+assert ok2a "query parameters are sent"
+assert ok2b "query parameters keep their value type as text"
+
+#! ---- 3. response headers are exposed, lowercased --------------------------
+var ok3a boolean = has_key r1 "headers"
+var ok3b boolean = has_key r1["headers"] "content-type"
+assert ok3a "response exposes a headers dict"
+assert ok3b "response header names are lowercase"
+
+#! ---- 4. authorization argument ------------------------------------------
+var authUrl string = base + "/get"
+var r4 dynamic = http_get authUrl "Bearer test-token"
+var g4 dynamic = json_parse r4["body"]
+var ok4 boolean = g4["headers"]["authorization"] == "Bearer test-token"
+assert ok4 "http_get sends the authorization argument"
+
+#! ---- 5. POST JSON round-trip --------------------------------------------
+var postUrl string = base + "/post"
+var payload dynamic = {"name": "indent", "n": 7, "flag": true, "list": [1, 2, 3], "nested": {"a": "b"}}
+var r5 dynamic = http_post_json postUrl payload
+var g5 dynamic = json_parse r5["body"]
+var ok5a boolean = r5["status"] == 200
+var ok5b boolean = g5["json"]["name"] == "indent"
+var ok5c boolean = g5["json"]["n"] == 7
+var ok5d boolean = g5["json"]["flag"] == true
+var ok5e boolean = len(g5["json"]["list"]) == 3
+var ok5f boolean = g5["json"]["nested"]["a"] == "b"
+assert ok5a "POST returns 200"
+assert ok5b "POST sends string fields"
+assert ok5c "POST sends int fields"
+assert ok5d "POST sends bool fields"
+assert ok5e "POST sends nested lists"
+assert ok5f "POST sends nested dicts"
+
+#! ---- 6. content-type is JSON --------------------------------------------
+var ok6 boolean = g5["content_type"] == "application/json"
+assert ok6 "http_post_json sets content-type: application/json"
+
+#! ---- 7. PUT / PATCH / DELETE --------------------------------------------
+var putUrl string = base + "/put"
+var patchUrl string = base + "/patch"
+var delUrl string = base + "/delete"
+var r7a dynamic = http_put_json putUrl payload
+var r7b dynamic = http_patch_json patchUrl payload
+var r7c dynamic = http_delete delUrl
+var gp dynamic = json_parse r7a["body"]
+var gq dynamic = json_parse r7b["body"]
+var gd dynamic = json_parse r7c["body"]
+var ok7a boolean = gp["method"] == "PUT"
+var ok7b boolean = gq["method"] == "PATCH"
+var ok7c boolean = gd["method"] == "DELETE"
+assert ok7a "http_put_json uses PUT"
+assert ok7b "http_patch_json uses PATCH"
+assert ok7c "http_delete uses DELETE"
+
+#! ---- 8. http_request with custom headers --------------------------------
+var hdr dynamic = {"X-Custom": "indent-test", "Accept": "application/json"}
+var r8 dynamic = http_request "GET" getUrl "" "" hdr
+var g8 dynamic = json_parse r8["body"]
+var ok8a boolean = g8["headers"]["x-custom"] == "indent-test"
+var ok8b boolean = g8["headers"]["accept"] == "application/json"
+assert ok8a "http_request sends custom headers"
+assert ok8b "all custom headers arrive"
+
+#! ---- 9. error statuses are returned, not raised -------------------------
+var e404 string = base + "/status/404"
+var e500 string = base + "/status/500"
+var r9a dynamic = http_get e404
+var r9b dynamic = http_get e500
+var ok9a boolean = r9a["status"] == 404
+var ok9b boolean = r9a["ok"] == false
+var ok9c boolean = r9b["status"] == 500
+assert ok9a "a 404 is returned with its status"
+assert ok9b "a 404 sets ok=false"
+assert ok9c "a 500 is returned with its status"
+
+#! ---- 10. Retry-After is visible on 429 ----------------------------------
+var e429 string = base + "/status/429"
+var r10 dynamic = http_get e429
+var ok10a boolean = r10["status"] == 429
+var ok10b boolean = has_key r10["headers"] "retry-after"
+assert ok10a "429 is returned"
+assert ok10b "Retry-After header is visible to the caller"
+
+#! ---- 11. redirects are followed ----------------------------------------
+var redir string = base + "/redirect/2"
+var r11 dynamic = http_get redir
+var g11 dynamic = json_parse r11["body"]
+var ok11a boolean = r11["status"] == 200
+var ok11b boolean = g11["path"] == "/get"
+assert ok11a "redirects are followed to a 200"
+assert ok11b "redirect lands on the final endpoint"
+
+#! ---- 12. large payload integrity ---------------------------------------
+var bigUrl string = base + "/large?n=1000"
+var r12 dynamic = http_get bigUrl
+var g12 dynamic = json_parse r12["body"]
+var items dynamic = g12["items"]
+var ok12a boolean = len(items) == 1000
+var ok12b boolean = items[999]["i"] == 999
+var ok12c boolean = items[0]["s"] == "row-0"
+assert ok12a "a 1000-element JSON array arrives intact"
+assert ok12b "the last element is correct"
+assert ok12c "the first element is correct"
+
+#! ---- 13. gzip response bodies ------------------------------------------
+var gzUrl string = base + "/gzip"
+var r13 dynamic = http_get gzUrl
+var ok13 boolean = false
+do:
+    var g13 dynamic = json_parse r13["body"]
+    ok13 is g13["gzipped"] == true
+catch as err13:
+    say "  (gzip not decoded: " + string(err13) + ")"
+assert ok13 "a gzip-encoded body is transparently decoded"
+
+#! ---- 14. 204 No Content -------------------------------------------------
+var ncUrl string = base + "/no-content"
+var r14 dynamic = http_get ncUrl
+var ok14a boolean = r14["status"] == 204
+var ok14b boolean = r14["body"] == ""
+assert ok14a "204 status is reported"
+assert ok14b "204 has an empty body"
+
+#! ---- 15. non-UTF-8 charset ---------------------------------------------
+var l1Url string = base + "/latin1"
+var r15 dynamic = http_get l1Url
+var ok15 boolean = r15["body"] == "café naïve"
+assert ok15 "latin-1 bodies are decoded using the declared charset"
+
+#! ---- 16. JSON helpers --------------------------------------------------
+var round dynamic = json_parse (json_dumps payload)
+var ok16a boolean = round["name"] == "indent"
+var ok16b boolean = round["nested"]["a"] == "b"
+assert ok16a "json_dumps/json_parse round-trips a dict"
+assert ok16b "json_dumps/json_parse round-trips nesting"
+
+var caughtBadJson boolean = false
+do:
+    var bad dynamic = json_parse "{not json"
+    say "unreachable"
+catch as errBad:
+    caughtBadJson is true
+assert caughtBadJson "invalid JSON raises instead of returning garbage"
+
+#! ---- 17. timeouts ------------------------------------------------------
+var beforeTimeout float = http_timeout()
+var ok17a boolean = beforeTimeout > 0.0
+assert ok17a "http_timeout reports the current timeout"
+
+http_set_timeout 1
+var slowUrl string = base + "/slow?ms=2500"
+var caughtTimeout boolean = false
+var timeoutMsg string = ""
+do:
+    var r17 dynamic = http_get slowUrl
+    say "unreachable: slow request should have timed out"
+catch as err17:
+    caughtTimeout is true
+    timeoutMsg is string(err17)
+assert caughtTimeout "a request slower than the timeout raises"
+
+var fastUrl string = base + "/get"
+var r17b dynamic = http_get fastUrl
+var ok17b boolean = r17b["status"] == 200
+assert ok17b "requests still work after a timeout"
+http_set_timeout 30
+
+#! ---- 18. connection failure -------------------------------------------
+var deadUrl string = "http://127.0.0.1:9/nothing"
+var caughtConn boolean = false
+var connType string = ""
+do:
+    var r18 dynamic = http_get deadUrl
+    say "unreachable: connecting to a dead port should fail"
+catch as err18:
+    caughtConn is true
+    connType is error_type err18
+assert caughtConn "connecting to a dead port raises"
+say "  (connection error_type = " + connType + ")"
+
+#! ---- 19. the net package wrappers --------------------------------------
+get HttpGet from net
+get PostJson from net
+var r19a dynamic = HttpGet getUrl
+var r19b dynamic = PostJson postUrl payload
+var ok19a boolean = r19a["status"] == 200
+var ok19b boolean = r19b["status"] == 200
+assert ok19a "net.HttpGet wraps http_get"
+assert ok19b "net.PostJson wraps http_post_json"
+
+#! ---- 20. the web package response builders ----------------------------
+get Json from web
+get Html from web
+get Text from web
+get Send from web
+get NotFound from web
+var w20a dynamic = Json {"a": 1}
+var w20b dynamic = Html "<p>hi</p>"
+var w20c dynamic = Text "plain"
+var w20d dynamic = Send 201 "made" "text/plain"
+var w20e dynamic = NotFound "nope"
+var ok20a boolean = w20a["status"] == 200
+var ok20b boolean = w20a["content_type"] == "application/json"
+var ok20c boolean = w20b["content_type"] == "text/html; charset=utf-8"
+var ok20d boolean = w20c["content_type"] == "text/plain"
+var ok20e boolean = w20d["status"] == 201
+var ok20f boolean = w20e["status"] == 404
+assert ok20a "web.Json sets 200"
+assert ok20b "web.Json sets the JSON content type"
+assert ok20c "web.Html sets the HTML content type"
+assert ok20d "web.Text sets the text content type"
+assert ok20e "web.Send honours an explicit status"
+assert ok20f "web.NotFound is a 404"
+
+say "net/http parity: all assertions passed"

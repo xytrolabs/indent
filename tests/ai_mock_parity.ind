@@ -1,0 +1,189 @@
+#! End-to-end tests for the `ai` package against the local mock OpenAI server in
+#! tools/mock_fixture_server.py — no provider, no API key, no cost, deterministic.
+#!
+#! Skipped (not failed) when the fixture is not running, so benchmarks/run_suite.sh
+#! and CI stay green; run it for real with tests/run_net_tests.sh.
+
+get SetBase from ai
+get SetApiKey from ai
+get SetTimeout from ai
+get SetRetries from ai
+get Chat from ai
+get ChatFull from ai
+get Ask from ai
+get Embed from ai
+get EmbedMany from ai
+get Models from ai
+get Similarity from ai
+get WasError from ai
+get GetLastError from ai
+get GetLastStatus from ai
+get LastUsage from ai
+get LastFinishReason from ai
+get ErrorType from ai
+get ErrorTypeFor from ai
+get IsRetryable from ai
+get IsAuthError from ai
+get IsPermissionError from ai
+get IsBadRequest from ai
+get IsNotFound from ai
+get IsRateLimit from ai
+get IsServerError from ai
+get IsConnectionError from ai
+get IsTimeout from ai
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+var base string = os_getenv "NET_FIXTURE_URL" "http://127.0.0.1:8799"
+
+#! Probe the fixture (same reasoning as net_http_parity.ind).
+var healthUrl string = base + "/health"
+var fixtureUp boolean = false
+do:
+    var health dynamic = http_get healthUrl
+    fixtureUp is health["status"] == 200
+catch as errHealth:
+    fixtureUp is false
+if not fixtureUp
+    say "SKIP: no fixture server at " + base
+    say "      start it with: python3 tools/mock_fixture_server.py 8799"
+    process_exit 0
+
+SetBase(base + "/v1")
+SetApiKey("test-key")
+SetTimeout(10.0)
+SetRetries(0)
+
+#! ---- 1. chat completion -------------------------------------------------
+var one dynamic = [{"role": "user", "content": "ping"}]
+var reply dynamic = Chat("mock-model", one)
+var ok1 boolean = reply == "echo:ping"
+assert ok1 "Chat returns the assistant message content"
+
+var full dynamic = ChatFull("mock-model", one)
+var ok2a boolean = full["finish_reason"] == "stop"
+var ok2b boolean = full["message"]["role"] == "assistant"
+assert ok2a "ChatFull exposes finish_reason"
+assert ok2b "ChatFull exposes the message object"
+
+var asked dynamic = Ask("mock-model", "hello there")
+var ok3 boolean = asked == "echo:hello there"
+assert ok3 "Ask sends a single user message"
+
+#! ---- 2. usage / finish reason are captured -------------------------------
+var usage dynamic = LastUsage()
+var ok4a boolean = usage["total_tokens"] == 7
+var ok4b boolean = LastFinishReason() == "stop"
+assert ok4a "token usage is captured"
+assert ok4b "the finish reason is captured"
+
+#! ---- 3. every error class is classified, and nothing raises --------------
+var e401 dynamic = Chat("err-401", one)
+var ok5a boolean = e401 == empty
+var ok5b boolean = WasError() == true
+var ok5c boolean = IsAuthError() == true
+var ok5d boolean = GetLastStatus() == 401
+assert ok5a "a failed chat returns empty instead of raising"
+assert ok5b "WasError reports the failure"
+assert ok5c "401 is classified as an auth error"
+assert ok5d "the HTTP status is preserved"
+
+var e403 dynamic = Chat("err-403", one)
+var ok6 boolean = IsPermissionError() == true
+assert ok6 "403 is classified as a permission error"
+
+var e400 dynamic = Chat("err-400", one)
+var ok7 boolean = IsBadRequest() == true
+assert ok7 "400 is classified as a bad request"
+
+var e404 dynamic = Chat("err-404", one)
+var ok8 boolean = IsNotFound() == true
+assert ok8 "404 is classified as not found"
+
+var e429 dynamic = Chat("err-429", one)
+var ok9a boolean = IsRateLimit() == true
+var ok9b boolean = GetLastStatus() == 429
+assert ok9a "429 is classified as a rate limit"
+assert ok9b "429 keeps its status"
+
+var e500 dynamic = Chat("err-500", one)
+var ok10 boolean = IsServerError() == true
+assert ok10 "500 is classified as a server error"
+
+var errText string = GetLastError()
+var ok11 boolean = len(errText) > 0
+assert ok11 "the error message text is available"
+
+#! ---- 4. pure status helpers --------------------------------------------
+var ok12a boolean = ErrorTypeFor(429) == "rate_limit_error"
+var ok12b boolean = ErrorTypeFor(401) == "authentication_error"
+var ok12c boolean = IsRetryable(500) == true
+var ok12d boolean = IsRetryable(404) == false
+var ok12e boolean = IsRetryable(429) == true
+assert ok12a "ErrorTypeFor classifies 429"
+assert ok12b "ErrorTypeFor classifies 401"
+assert ok12c "a 500 is retryable"
+assert ok12d "a 404 is not retryable"
+assert ok12e "a 429 is retryable"
+
+#! ---- 5. retries recover from transient failures -------------------------
+#! `err-429-retry` fails twice with a Retry-After, then succeeds.
+SetRetries(3)
+var recovered dynamic = Chat("err-429-retry", one)
+var ok13a boolean = recovered == "recovered"
+var ok13b boolean = WasError() == false
+assert ok13a "a flaky endpoint succeeds after retries"
+assert ok13b "the retried call reports no error"
+
+SetRetries(0)
+
+#! ---- 6. a connection failure is classified, not fatal --------------------
+var deadBase string = "http://127.0.0.1:9/v1"
+SetBase(deadBase)
+var dead dynamic = Chat("mock-model", one)
+var ok14a boolean = WasError() == true
+var ok14b boolean = IsConnectionError() == true
+assert ok14a "an unreachable base URL is an error, not a crash"
+assert ok14b "the error is classified as a connection error"
+
+SetBase(base + "/v1")
+
+#! ---- 7. timeout classification ------------------------------------------
+SetTimeout(1.0)
+var late dynamic = Chat("slow-model", one)
+var ok15 boolean = WasError() == true
+var kind string = ErrorType()
+assert ok15 "a slow model trips the timeout instead of hanging"
+say "  (slow-model error_type = " + kind + ")"
+SetTimeout(10.0)
+
+#! ---- 8. embeddings ------------------------------------------------------
+var vec dynamic = Embed("mock-embed", "hello")
+var ok16a boolean = len(vec) == 3
+var ok16b boolean = vec[0] == 5.0
+assert ok16a "Embed returns a vector"
+assert ok16b "Embed returns the provider's values"
+
+var many dynamic = EmbedMany("mock-embed", ["a", "bb", "ccc"])
+var ok17a boolean = len(many) == 3
+var ok17b boolean = many[0][0] == 1.0
+var ok17c boolean = many[2][0] == 3.0
+assert ok17a "EmbedMany returns one vector per input"
+assert ok17b "EmbedMany preserves order (first)"
+assert ok17c "EmbedMany preserves order (last)"
+
+var ok18 boolean = Similarity([1.0, 0.0], [1.0, 0.0]) > 0.99
+var ok19 boolean = Similarity([1.0, 0.0], [0.0, 1.0]) < 0.01
+assert ok18 "Similarity of identical vectors is ~1"
+assert ok19 "Similarity of orthogonal vectors is ~0"
+
+#! ---- 9. the model list --------------------------------------------------
+var models dynamic = Models()
+var ok20 boolean = len(models) >= 2
+assert ok20 "Models lists the provider's models"
+
+say "ai parity: all assertions passed"
