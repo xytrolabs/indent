@@ -1,0 +1,78 @@
+#! Cost probe: `do:` / `catch as e:` inside a loop.
+#!
+#! A `do:` block used to send its whole enclosing loop back to the tree-walker, and
+#! the corpus is full of them. Each body now runs as a program of its own, with the
+#! loop's variables handed over at the boundary — the same hand-over a call gets —
+#! so this measures both the compiling and that boundary.
+#!
+#! The failing block fails through a *type error*, deliberately: a body that names a
+#! variable which does not exist is refused by the compiler, because a compiled read
+#! of an unknown name would produce `empty` where the tree-walker raises the error
+#! the `catch` is there to see. That refusal is the point.
+#!
+#! Expected: caught 20000, ok 20000, acc 20000, and `digits` equal on both engines
+#! (it is the total length of the caught messages, so it checks the text too).
+
+var N int = 20000
+
+fun bump amount
+    give amount + 1
+
+#! ---- a block that always fails ----
+var bad int = 0
+var caught int = 0
+var digits int = 0
+var t0 float = time_perf_counter
+repeat N
+    do:
+        bad is 1 - "x"
+    catch as e:
+        caught is caught + 1
+        digits is digits + len(e)
+var t1 float = time_perf_counter
+say "catch always  " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a block that never fails ----
+var ok int = 0
+var t2 float = time_perf_counter
+repeat N
+    do:
+        ok is ok + 1
+    catch as e:
+        ok is ok - 1000000
+var t3 float = time_perf_counter
+say "catch never   " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a block that writes what the loop reads ----
+var acc int = 0
+var t4 float = time_perf_counter
+repeat N
+    do:
+        acc is acc + 1
+    catch as e:
+        acc is acc - 1000000
+var t5 float = time_perf_counter
+say "block writes  " + string((t5 - t4) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a busy body that happens to contain a block ----
+#! This is the shape that matters. The block is one statement of many, and before
+#! this stage its presence dragged every other statement in the body back to the
+#! tree-walker with it, so the number here is mostly the rest of the body.
+var mix int = 0
+var sink dynamic = []
+var t6 float = time_perf_counter
+repeat N
+    if mix < 100
+        mix is mix + 1
+    otherwise
+        mix is mix - 1
+    sink is append sink mix
+    mix is bump(mix)
+    do:
+        mix is mix + 2
+    catch as e:
+        mix is mix - 1000000
+var t7 float = time_perf_counter
+say "mixed body    " + string((t7 - t6) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(caught) + " " + string(ok) + " " + string(acc) + " " + string(digits) + " " + string(mix) + " " + string(len(sink))

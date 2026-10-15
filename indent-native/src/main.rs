@@ -2038,6 +2038,24 @@ impl<'a> ExecContext<'a> {
         self.rt.vars.remove(name)
     }
 
+    /// Move a variable's value out and leave `Empty` in its place, keeping the
+    /// name where it was — unlike `take_var`, which drops the binding and would
+    /// let a later `set_var` re-create it in an inner frame, changing which
+    /// variable shadows which. This is the move half of the hand-over a compiled
+    /// body does around user code: a slot holding a list costs the same as one
+    /// holding an int instead of a deep copy per call.
+    fn swap_var(&mut self, name: &str) -> Option<Value> {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(slot) = frame.vars.get_mut(name) {
+                return Some(std::mem::replace(slot, Value::Empty));
+            }
+        }
+        self.rt
+            .vars
+            .get_mut(name)
+            .map(|slot| std::mem::replace(slot, Value::Empty))
+    }
+
     fn get_module(&self, name: &str) -> Option<Arc<ModuleInstance>> {
         if let Some(m) = self.rt.modules.get(name) {
             return Some(m.clone());
@@ -3301,6 +3319,14 @@ enum VmInstr {
     /// into `value` and `flag` records that a `give` ran, so the runner can tell a
     /// returned `empty` from a body that fell off its end.
     Return { value: u16, flag: u16 },
+    /// Run a `do:` block: its body, then — when that failed — its `catch` body with
+    /// the message bound. Both bodies are sub-programs of `VmProgram::subs`.
+    TryBlock {
+        do_sub: u16,
+        catch_sub: u16,
+        bind_slot: Option<u16>,
+        bind_name: String,
+    },
     /// The end of a function body, reached only when no `give` ran.
     EndBody { declared: bool },
     /// Pop `argc` arguments, call `callee` with them, push the result.
@@ -3355,6 +3381,13 @@ struct VmProgram {
     /// Scratch slots for a function body: the value `give` produced, and a flag that
     /// records whether one ran at all.
     return_slot: Option<(u16, u16)>,
+    /// Bodies of a `do:` block, as programs of their own.
+    ///
+    /// Running each one separately is what keeps `catch` out of the instruction
+    /// loop: the block's error is caught at the boundary, so no instruction needs to
+    /// know that handlers exist. It also means the block's bodies reach the loop's
+    /// variables through the frames, exactly as a call does.
+    subs: Vec<VmProgram>,
 }
 
 impl VmProgram {
@@ -3371,6 +3404,7 @@ impl VmProgram {
             reps_stack: Vec::new(),
             allow_return: false,
             return_slot: None,
+            subs: Vec::new(),
         }
     }
 }
@@ -3821,6 +3855,27 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
     true
 }
 
+/// Compile a statement block as a program of its own — the bodies of a `do:` block.
+///
+/// Deliberately not a loop: `Reps` inside one names the enclosing loop's counter
+/// through the frame, which the hand-over keeps current, rather than a counter of
+/// its own.
+fn vm_compile_sub(body: &[Stmt], allow_return: bool, rt: &Runtime) -> Option<VmProgram> {
+    let mut prog = VmProgram::new();
+    prog.allow_return = allow_return;
+    if allow_return {
+        // A `give` in a block leaves the program the way one outside it does, so
+        // the block needs somewhere to put the value for the caller to propagate.
+        let value = vm_scratch(&mut prog.slots);
+        let flag = vm_scratch(&mut prog.slots);
+        prog.return_slot = Some((value, flag));
+    }
+    if !vm_compile_stmts(body, &mut prog, rt) {
+        return None;
+    }
+    Some(prog)
+}
+
 /// Compile a function body.
 ///
 /// The same statements a loop body takes, plus `give` — which is a `Return` here,
@@ -3961,6 +4016,53 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                     return false;
                 }
             }
+            // `do:` with a single `catch as name:` — the shape the corpus uses. Each
+            // body becomes a program of its own, run at the boundary, so the error
+            // path of no single instruction has to know about handlers.
+            //
+            // A block with `otherwise`, `lastly` or several `catch` clauses is left
+            // to the tree-walker for now: those change what happens to a control
+            // value that came out of a body, and getting that wrong silently is
+            // worse than not compiling it.
+            Stmt::DoChain {
+                do_body,
+                catches,
+                otherwise_body,
+                lastly_body,
+                ..
+            } if catches.len() == 1 && otherwise_body.is_none() && lastly_body.is_none() => {
+                let Some(do_prog) = vm_compile_sub(do_body, prog.allow_return, rt) else {
+                    return false;
+                };
+                let (binding, catch_body) = &catches[0];
+                let mut catch_prog = VmProgram::new();
+                catch_prog.allow_return = prog.allow_return;
+                if prog.allow_return {
+                    let value = vm_scratch(&mut catch_prog.slots);
+                    let flag = vm_scratch(&mut catch_prog.slots);
+                    catch_prog.return_slot = Some((value, flag));
+                }
+                // The binding is the block's, not the caller's: it need not exist
+                // beforehand and dies with the frame the block pushes.
+                let bind_slot = binding.as_ref().map(|name| {
+                    let slot = vm_slot(&mut catch_prog.slots, name);
+                    catch_prog.owned.push(slot);
+                    slot
+                });
+                if !vm_compile_stmts(catch_body, &mut catch_prog, rt) {
+                    return false;
+                }
+                let do_sub = prog.subs.len() as u16;
+                prog.subs.push(do_prog);
+                let catch_sub = prog.subs.len() as u16;
+                prog.subs.push(catch_prog);
+                prog.instrs.push(VmInstr::TryBlock {
+                    do_sub,
+                    catch_sub,
+                    bind_slot,
+                    bind_name: binding.clone().unwrap_or_default(),
+                });
+            }
             // `give`, which only a function body can do. It is a `Return` here, so a
             // `give` inside a loop in the body is the same instruction, and the
             // frames those loops pushed are unwound by the runner.
@@ -4031,12 +4133,15 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
 /// front rather than mid-loop where a bail-out could leave half a loop's
 /// assignments behind. `Reps` is excluded: the loop binds it itself.
 fn vm_names_bound(prog: &VmProgram, ctx: &ExecContext<'_>) -> bool {
-    prog.slots.iter().enumerate().all(|(i, name)| {
-        let i = i as u16;
-        // `Reps` and the `for` item are bound by the loop, at every level; a
-        // scratch slot is the compiler's own and names nothing.
-        name.is_empty() || prog.owned.contains(&i) || ctx.has_var(name)
-    })
+    // A guarded block's bodies are programs too, and their names have to exist for
+    // the same reason — checked here, once, rather than mid-block.
+    prog.subs.iter().all(|sub| vm_names_bound(sub, ctx))
+        && prog.slots.iter().enumerate().all(|(i, name)| {
+            let i = i as u16;
+            // `Reps` and the `for` item are bound by the loop, at every level; a
+            // scratch slot is the compiler's own and names nothing.
+            name.is_empty() || prog.owned.contains(&i) || ctx.has_var(name)
+        })
 }
 
 /// Whether reaching `callee` can run Indent code against the current frames.
@@ -4099,13 +4204,20 @@ fn vm_concat_slot(
     }
 }
 
-/// Copy the slot mirrors into the frame stack.
+/// Move the slot mirrors into the frame stack.
 ///
 /// A compiled body keeps its variables in `values` and only writes them back when
 /// the loop ends, so without this a callee would read the values from *before* the
 /// loop and, worse, a pull-back afterwards would undo the iterations that already
 /// ran. The counter is handed over too, because a callee can read `Reps`.
-fn vm_flush_slots(prog: &VmProgram, values: &[Value], ctx: &mut ExecContext<'_>) {
+///
+/// The hand-over is a move, not a copy: a body holding a large list used to pay a
+/// deep copy of it into the frame and another one out of the frame on *every* call
+/// it made, which turned any loop with a list and a call into quadratic work. The
+/// moved-out slots hold `Empty` until `vm_pull_slots` runs, and no user code can
+/// observe that: the frames, which are what user code reads, are filled before the
+/// boundary and emptied only after it.
+fn vm_flush_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'_>) {
     // Slot order matters: when loops are nested, two slots are named `Reps` and
     // `set_var` resolves to the innermost frame holding that name, so writing the
     // outer level first leaves the inner counter — the one a callee should see —
@@ -4114,7 +4226,7 @@ fn vm_flush_slots(prog: &VmProgram, values: &[Value], ctx: &mut ExecContext<'_>)
         if name.is_empty() {
             continue;
         }
-        ctx.set_var(name, values[i].clone());
+        ctx.set_var(name, std::mem::replace(&mut values[i], Value::Empty));
     }
 }
 
@@ -4124,14 +4236,21 @@ fn vm_flush_slots(prog: &VmProgram, values: &[Value], ctx: &mut ExecContext<'_>)
 /// through frames, and those writes have to come back into the loop's cache or
 /// the body would keep reading the values it had before the call. Paired with
 /// `vm_flush_slots`, this keeps the two engines' view identical across a call.
-fn vm_pull_slots(prog: &VmProgram, values: &mut [Value], ctx: &ExecContext<'_>) {
+fn vm_pull_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'_>) {
     for (i, name) in prog.slots.iter().enumerate() {
         // The loop's own bindings are not the callee's to replace, and scratch
         // slots name nothing.
         if name.is_empty() || prog.owned.contains(&(i as u16)) {
             continue;
         }
-        values[i] = ctx.get_var(name).unwrap_or(Value::Empty);
+        // `get_var` consults the positional aliases before the frame's variables,
+        // so a slot named `argument` keeps taking the copying read; every other
+        // name moves the value straight back into the slot.
+        if positional_alias_index(name).is_some() {
+            values[i] = ctx.get_var(name).unwrap_or(Value::Empty);
+        } else if let Some(value) = ctx.swap_var(name) {
+            values[i] = value;
+        }
     }
 }
 
@@ -4233,7 +4352,7 @@ fn vm_run(
                         let object_operand =
                             matches!(a, Value::Object { .. }) || matches!(b, Value::Object { .. });
                         if object_operand {
-                            vm_flush_slots(prog, &values, ctx);
+                            vm_flush_slots(prog, &mut values, ctx);
                         }
                         let result = eval_binary(op, a, b, ctx);
                         if object_operand {
@@ -4254,7 +4373,7 @@ fn vm_run(
                         // the callee replaced back into the frame.
                         let user_code = vm_call_runs_user_code(callee, &args, ctx);
                         if user_code {
-                            vm_flush_slots(prog, &values, ctx);
+                            vm_flush_slots(prog, &mut values, ctx);
                         }
                         let result = invoke_callable_values(callee, args, ctx);
                         if user_code {
@@ -4315,7 +4434,7 @@ fn vm_run(
                         if matches!(values[idx], Value::Object { .. }) {
                             // An operator method is user code, so this one case
                             // takes the hand-over a call takes.
-                            vm_flush_slots(prog, &values, ctx);
+                            vm_flush_slots(prog, &mut values, ctx);
                             let lhs = std::mem::replace(&mut values[idx], Value::Empty);
                             let result = eval_binary("+", lhs, rhs, ctx);
                             vm_pull_slots(prog, &mut values, ctx);
@@ -4386,6 +4505,51 @@ fn vm_run(
                             );
                         }
                         break;
+                    }
+                    VmInstr::TryBlock {
+                        do_sub,
+                        catch_sub,
+                        bind_slot,
+                        bind_name,
+                    } => {
+                        // The bodies are programs of their own, so the loop's variables
+                        // are handed over exactly as they are around a call — before
+                        // the body, and read back after it, whichever way it ended.
+                        vm_flush_slots(prog, &mut values, ctx);
+                        let outcome = vm_run(None, None, &prog.subs[*do_sub as usize], ctx);
+                        vm_pull_slots(prog, &mut values, ctx);
+                        let returned = match outcome {
+                            Ok(value) => value,
+                            Err(message) => {
+                                // `catch as name:` runs in a frame of its own, with the
+                                // message bound there — the tree-walker's shape. The
+                                // binding is defined before the body so its own slot for
+                                // the name reads it out of that frame.
+                                ctx.push_frame();
+                                if bind_slot.is_some() {
+                                    ctx.define_local(bind_name, Value::Str(message));
+                                }
+                                // The body that failed may have written variables; the
+                                // catch body reads them through the frames.
+                                vm_flush_slots(prog, &mut values, ctx);
+                                let caught = vm_run(None, None, &prog.subs[*catch_sub as usize], ctx);
+                                vm_pull_slots(prog, &mut values, ctx);
+                                ctx.pop_frame();
+                                caught?
+                            }
+                        };
+                        match returned {
+                            // A `give` inside the block leaves the program the same way
+                            // one outside it does.
+                            Some(v) => {
+                                if let Some((value, flag)) = prog.return_slot {
+                                    values[value as usize] = v;
+                                    values[flag as usize] = Value::Bool(true);
+                                }
+                                ip = prog.instrs.len();
+                            }
+                            None => ip += 1,
+                        }
                     }
                     VmInstr::JumpIfFalse(target) => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;

@@ -105,3 +105,28 @@ var ok7a boolean = total == 15
 assert ok7a "the loop sees the value the call returned"
 var ok7b boolean = counter == 5
 assert ok7b "the loop sees the global the call wrote"
+
+#! ---- 8. a container crossing a call boundary every iteration ----
+#! The hand-over moves each slot into its frame and back rather than copying it,
+#! so a loop that both holds a list and calls has to see the same list on either
+#! side of the boundary. The callee appends through the frame, so a pull that put
+#! an `empty` back into the slot, or a flush that moved a value out twice, fails
+#! here as a type error rather than as a wrong count.
+
+fun push_one
+    sink is append sink "y"
+
+var sink dynamic = []
+var rounds int = 0
+repeat 5
+    sink is append sink "x"
+    push_one()
+    rounds is rounds + 1
+var ok8a boolean = len(sink) == 10
+assert ok8a "a list survives the boundary in both directions"
+var ok8b boolean = sink[0] == "x"
+assert ok8b "the item the loop appended is the first one"
+var ok8c boolean = sink[9] == "y"
+assert ok8c "the item the callee appended is the last one"
+var ok8d boolean = rounds == 5
+assert ok8d "an int slot comes back across the boundary too"
