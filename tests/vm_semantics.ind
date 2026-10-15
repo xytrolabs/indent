@@ -1,0 +1,107 @@
+#! Semantics guard for the compiled paths (`INDENT_VM`), the counterpart of
+#! `expr_memo_semantics.ind` for the code generator.
+#!
+#! The VM takes a body only when it can compile it, and everything else runs on the
+#! tree-walker, so the two engines have to agree statement for statement. These
+#! assertions cover the parts of that agreement a small test can pin down: the
+#! counter each nesting level publishes, the item and index a `for` binds, `give`
+#! out of a loop inside a function body, the two assignments that grow a value in
+#! place, and a callee writing what its caller's loop reads.
+#!
+#! Every one of them is written as a single condition in a variable first: a
+#! comparison cannot be an inline argument here.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. nested loops each publish their own Reps ----
+#! Four outer passes of three inner ones: the inner counter sums to 0+1+2 per pass,
+#! the outer body reads 0, 1, 2, 3.
+var inner int = 0
+var outer int = 0
+repeat 4
+    repeat 3
+        inner is inner + Reps
+    outer is outer + Reps
+var ok1a boolean = inner == 12
+assert ok1a "a nested body reads the inner counter"
+var ok1b boolean = outer == 6
+assert ok1b "the outer body reads its own counter again afterwards"
+
+#! ---- 2. a for binds the item and publishes the index ----
+var xs dynamic = [10, 20, 30]
+var sum int = 0
+var idxsum int = 0
+repeat v in xs
+    sum is sum + v
+    idxsum is idxsum + Reps
+var ok2a boolean = sum == 60
+assert ok2a "a for binds each item"
+var ok2b boolean = idxsum == 3
+assert ok2b "a for publishes the item index as Reps"
+
+#! ---- 3. a while publishes completed passes ----
+var i int = 0
+var seen int = -1
+repeat while i < 5
+    seen is Reps
+    i is i + 1
+var ok3a boolean = seen == 4
+assert ok3a "a while publishes completed passes as Reps"
+var ok3b boolean = i == 5
+assert ok3b "a while runs until its condition fails"
+
+#! ---- 4. give out of a loop inside a function body ----
+fun first_big items limit
+    repeat v in items
+        if v > limit
+            give v
+    give -1
+
+var ok4a boolean = first_big(xs, 15) == 20
+assert ok4a "give leaves the loop and the body with its value"
+var ok4b boolean = first_big(xs, 99) == -1
+assert ok4b "a body that never gives falls through to its end"
+
+#! ---- 5. a body whose loop runs once per call ----
+var hits int = 0
+fun count_hits n
+    repeat n
+        hits is hits + 1
+
+count_hits(3)
+count_hits(2)
+var ok5 boolean = hits == 5
+assert ok5 "a body with a loop runs for every call"
+
+#! ---- 6. the two assignments that grow a value in place ----
+var built dynamic = []
+var text string = ""
+var n int = 0
+repeat 200
+    built is append built n
+    text is text + "x"
+    n is n + 1
+var ok6a boolean = len(built) == 200
+assert ok6a "append in a loop keeps every item"
+var ok6b boolean = built[199] == 199
+assert ok6b "append in a loop keeps item order"
+var ok6c boolean = len(text) == 200
+assert ok6c "string accumulation keeps every character"
+
+#! ---- 7. a callee writing what the caller's loop reads ----
+var counter int = 0
+var total int = 0
+fun bump
+    counter is counter + 1
+    give counter
+
+repeat 5
+    total is total + bump()
+var ok7a boolean = total == 15
+assert ok7a "the loop sees the value the call returned"
+var ok7b boolean = counter == 5
+assert ok7b "the loop sees the global the call wrote"
