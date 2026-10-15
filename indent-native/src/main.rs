@@ -3242,8 +3242,14 @@ enum VmInstr {
     Pop,
     /// Pop a condition and jump to the given instruction when it is falsy.
     JumpIfFalse(usize),
+    /// Pop a condition and jump to the given instruction when it is truthy.
+    JumpIfTrue(usize),
     /// Jump to the given instruction.
     Jump(usize),
+    /// Error out when a loop counter has passed the tree-walker's safety limit.
+    CheckLimit { slot: u16, msg: String },
+    /// Add one to a loop counter.
+    BumpSlot(u16),
     /// Pop `argc` arguments, call `callee` with them, push the result.
     Call { callee: String, argc: u16 },
     /// Pop a value and append it to frame slot `slot` in place, under `callee`'s
@@ -3421,6 +3427,67 @@ fn vm_concat_self<'a>(name: &str, text: &'a str) -> Option<&'a str> {
         Some(rhs) if !rhs.is_empty() => Some(rhs),
         _ => None,
     }
+}
+
+/// Compile a `while`/`until` loop.
+///
+/// Unlike a `repeat N` body this stream carries its own jumps and counter, so the
+/// condition is compiled exactly where the tree-walker evaluates it — inside the
+/// loop, before the body — and the runner just executes the stream once.
+fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
+    // In the tree-walker `Reps` does not exist until the body runs, so a condition
+    // that reads it sees an enclosing loop's counter, or the undefined-variable
+    // error. Binding the slot before the first condition would answer differently,
+    // so such a loop is left to the tree-walker.
+    if vm_mentions_reps(cond) {
+        return None;
+    }
+    let mut prog = VmProgram {
+        instrs: Vec::new(),
+        slots: Vec::new(),
+        reps_slot: None,
+    };
+    let reps = vm_slot(&mut prog.slots, "Reps");
+    prog.reps_slot = Some(reps);
+    prog.instrs.push(VmInstr::Const(Value::Int(0)));
+    prog.instrs.push(VmInstr::StoreSlot(reps));
+    let start = prog.instrs.len();
+    prog.instrs.push(VmInstr::CheckLimit {
+        slot: reps,
+        msg: if until {
+            "Repeat until loop exceeded safety limit".to_string()
+        } else {
+            "Repeat while loop exceeded safety limit".to_string()
+        },
+    });
+    if !vm_compile_text(cond, &mut prog, rt) {
+        return None;
+    }
+    // `until` leaves the loop when the condition first holds; `while` when it
+    // first fails.
+    let exit_jump = prog.instrs.len();
+    prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
+    if !vm_compile_stmts(body, &mut prog, rt) {
+        return None;
+    }
+    prog.instrs.push(VmInstr::BumpSlot(reps));
+    prog.instrs.push(VmInstr::Jump(start));
+    let end = prog.instrs.len();
+    prog.instrs[exit_jump] = if until {
+        VmInstr::JumpIfTrue(end)
+    } else {
+        VmInstr::JumpIfFalse(end)
+    };
+    Some(prog)
+}
+
+/// Whether an expression's text mentions the bare name `Reps`.
+///
+/// A word scan rather than an AST walk: a false positive only means the loop is
+/// left to the tree-walker, which is always correct.
+fn vm_mentions_reps(text: &str) -> bool {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|word| word == "Reps")
 }
 
 /// Compile one expression from its text: the same parse cache `eval_expr` uses,
@@ -3638,8 +3705,7 @@ fn vm_concat_slot(
 /// A compiled body keeps its variables in `values` and only writes them back when
 /// the loop ends, so without this a callee would read the values from *before* the
 /// loop and, worse, a pull-back afterwards would undo the iterations that already
-/// ran. Every slot except `Reps` — which belongs to the loop, not to the frame — is
-/// handed over before any user code runs.
+/// ran. The counter is handed over too, because a callee can read `Reps`.
 fn vm_flush_slots(
     slots: &[String],
     reps_slot: Option<u16>,
@@ -3648,6 +3714,7 @@ fn vm_flush_slots(
 ) {
     for (i, name) in slots.iter().enumerate() {
         if Some(i as u16) == reps_slot {
+            ctx.set_var("Reps", values[i].clone());
             continue;
         }
         ctx.set_var(name, values[i].clone());
@@ -3675,8 +3742,26 @@ fn vm_pull_slots(
     }
 }
 
+/// The ceiling the tree-walker puts on loops whose exit it cannot predict.
+const LOOP_MAX_ITERS: usize = 100_000;
+
 /// Run a compiled `repeat N` body in the frame `exec_repeat` already pushed.
+/// The runner supplies the iterations and writes `Reps` before each of them.
 fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<(), String> {
+    vm_run(Some(n), prog, ctx)
+}
+
+/// Run a compiled loop whose instruction stream carries its own jumps and counter,
+/// so it runs exactly once — `while` and `until`.
+fn vm_run_stream(prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<(), String> {
+    vm_run(None, prog, ctx)
+}
+
+fn vm_run(
+    iterations: Option<usize>,
+    prog: &VmProgram,
+    ctx: &mut ExecContext<'_>,
+) -> Result<(), String> {
     // Read the body's variables once. Slots are then just a `Vec` index, so the
     // loop body never hashes a name again.
     let mut values: Vec<Value> = prog
@@ -3690,10 +3775,16 @@ fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<
     if prog.reps_slot.is_some() {
         ctx.define_local("Reps", Value::Empty);
     }
+    // A stream counts for itself, through `BumpSlot` and `CheckLimit`.
+    let reps_slot = if iterations.is_some() {
+        prog.reps_slot
+    } else {
+        None
+    };
     let mut stack: [Value; VM_STACK] = std::array::from_fn(|_| Value::Empty);
     let outcome = (|| -> Result<(), String> {
-        for reps in 0..n {
-            if let Some(s) = prog.reps_slot {
+        for reps in 0..iterations.unwrap_or(1) {
+            if let Some(s) = reps_slot {
                 values[s as usize] = Value::Int(reps as i64);
             }
             let mut sp = 0usize;
@@ -3799,8 +3890,31 @@ fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
                         ip = if stack[sp].to_bool() { ip + 1 } else { *target };
                     }
+                    VmInstr::JumpIfTrue(target) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        ip = if stack[sp].to_bool() { *target } else { ip + 1 };
+                    }
                     VmInstr::Jump(target) => {
                         ip = *target;
+                    }
+                    VmInstr::CheckLimit { slot, msg } => {
+                        let count = match &values[*slot as usize] {
+                            Value::Int(i) => *i,
+                            _ => 0,
+                        };
+                        if count > LOOP_MAX_ITERS as i64 {
+                            return Err(msg.clone());
+                        }
+                        ip += 1;
+                    }
+                    VmInstr::BumpSlot(slot) => {
+                        let idx = *slot as usize;
+                        let next = match &values[idx] {
+                            Value::Int(i) => i + 1,
+                            _ => 1,
+                        };
+                        values[idx] = Value::Int(next);
+                        ip += 1;
                     }
                 }
             }
@@ -3873,7 +3987,7 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
 }
 
 fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, String> {
-    let max_iters = 100_000usize;
+    let max_iters = LOOP_MAX_ITERS;
 
     match mode {
         RepeatMode::Infinite => {
@@ -3956,6 +4070,14 @@ fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_
             Ok(Control::None)
         }
         RepeatMode::While(cond_expr) => {
+            if vm_enabled() {
+                if let Some(prog) = vm_compile_while(cond_expr, false, body, ctx.rt) {
+                    if vm_names_bound(&prog, ctx) {
+                        vm_run_stream(&prog, ctx)?;
+                        return Ok(Control::None);
+                    }
+                }
+            }
             let mut reps = 0usize;
             loop {
                 if reps > max_iters {
@@ -3974,6 +4096,14 @@ fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_
             Ok(Control::None)
         }
         RepeatMode::Until(cond_expr) => {
+            if vm_enabled() {
+                if let Some(prog) = vm_compile_while(cond_expr, true, body, ctx.rt) {
+                    if vm_names_bound(&prog, ctx) {
+                        vm_run_stream(&prog, ctx)?;
+                        return Ok(Control::None);
+                    }
+                }
+            }
             let mut reps = 0usize;
             loop {
                 if reps > max_iters {

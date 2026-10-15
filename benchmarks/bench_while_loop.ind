@@ -1,0 +1,53 @@
+#! Cost probe: the two loop forms whose exit is a condition, not a count.
+#!
+#! `repeat while` and `repeat until` used to fall back to the tree-walker
+#! entirely — they are the most common loop form in real programs here, so
+#! nothing in them was ever compiled. Both are checked for their result as well
+#! as their cost; the branch case exercises nested jumps inside the stream.
+#!
+#! N stays under the 100 000-iteration ceiling the tree-walker puts on loops whose
+#! exit it cannot predict, so both engines run the whole probe.
+
+var N int = 50000
+var x int = 0
+var y int = 0
+
+var t0 float = time_perf_counter
+repeat while x < N
+    x is x + 1
+var t1 float = time_perf_counter
+say "while count   " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+var t2 float = time_perf_counter
+repeat until y >= N
+    y is y + 1
+var t3 float = time_perf_counter
+say "until count   " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a branch inside the loop ----
+#! The first 100 passes add 1, the remaining ones add 2, so `z` must be
+#! 100 + 2 * (N - 100) when the jumps are nested correctly.
+var k int = 0
+var z int = 0
+var t4 float = time_perf_counter
+repeat while k < N
+    if k < 100
+        z is z + 1
+    otherwise
+        z is z + 2
+    k is k + 1
+var t5 float = time_perf_counter
+say "while branch  " + string((t5 - t4) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a call inside the loop ----
+fun bump amount
+    give amount * 2
+
+var c int = 0
+var t6 float = time_perf_counter
+repeat while c < N
+    c is c + bump(1)
+var t7 float = time_perf_counter
+say "while call    " + string((t7 - t6) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(x) + " " + string(y) + " " + string(z) + " " + string(k) + " " + string(c)
