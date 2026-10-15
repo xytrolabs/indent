@@ -2241,7 +2241,34 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             Ok(Control::None)
         }
         Stmt::AssignOp { line, name, op, value } => {
+            // `xs += [x]` had the same quadratic shape as `xs is xs + [x]`: the
+            // old path called `get_var` (cloning the whole list) and then
+            // `eval_binary`, whose `(List, List)` arm extended *another* copy,
+            // so two O(n) copies happened per step. Decide the shape before
+            // evaluating the right-hand side so it is still evaluated once.
+            let in_place_container = op == "+="
+                && !name.contains('.')
+                && is_bare_identifier(name)
+                && matches!(ctx.get_var_ref(name), Some(Value::List(_) | Value::Dict(_)));
             let rhs = eval_value_source(value, ctx)?;
+            if in_place_container {
+                if let Some(container) = ctx.take_var(name) {
+                    let out = match (container, rhs) {
+                        (Value::List(mut l), Value::List(r)) => {
+                            l.extend(r);
+                            Value::List(l)
+                        }
+                        (Value::Dict(mut d), Value::Dict(r)) => {
+                            d.extend(r);
+                            Value::Dict(d)
+                        }
+                        (container, rhs) => eval_binary("+", container, rhs, ctx)
+                            .map_err(|e| format!("Line {}: {}", line, e))?,
+                    };
+                    ctx.set_var(name, out);
+                    return Ok(Control::None);
+                }
+            }
             let lhs = ctx.get_var(name)
                 .ok_or_else(|| format!("Line {}: variable '{}' is not defined", line, name))?;
             let result = eval_binary(&op[..op.len()-1], lhs, rhs, ctx)
