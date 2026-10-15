@@ -1,10 +1,11 @@
 # Indent Changelog
 
-## Unreleased — reading a container is now O(1)
+## 2.6.0 — 2026-10-14 (reading a container is now O(1)) 🚀
 
-Measured against the released **2.2.2** binary (`benchmarks/best_of.sh`, best of 3):
+The final round of the performance work. Measured against the released **2.2.2**
+binary (`benchmarks/best_of.sh`, best of 3):
 
-| Case | 2.2.2 | now | gain |
+| Case | 2.2.2 | **2.6.0** | gain |
 |---|---|---|---|
 | 300 × `len(20 000-item list)` | 59.0 ms | **0.057 ms** | **~1000×** |
 | 300 × `len(5 000-key dict)` | 44.4 ms | **0.054 ms** | **~820×** |
@@ -29,7 +30,9 @@ destructuring sites), but it leaves ~138 compile errors that each need a
 clone-vs-move decision, so it is a dedicated pass with its own verification, not a
 rush at the end of a session.
 
-**Verification:** 51/51 language tests.
+**Verification:** 51/51 language tests, 28/28 Rust tests.
+
+## 2.5.0 — 2026-10-14 (no more hidden copies) 🧹
 
 ## 2.5.0 — 2026-10-14 (no more hidden copies) 🧹
 

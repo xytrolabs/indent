@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.5.0
+# Indent Language (.ind) v2.6.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,7 +7,53 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
-> ## 🚀 Indent 2.5 — no more hidden copies
+> ## 🚀 Indent 2.6 — the performance work, compared to 2.2.2
+>
+> Four rounds of speed work (2.3 → 2.6), all additive. Every number below is
+> measured against the released **2.2.2** binary with `benchmarks/` (best of N;
+> `sh benchmarks/verify.sh` reproduces the test side of it).
+>
+> | Workload | 2.2.2 | **2.6.0** | Gain |
+> |---|---|---|---|
+> | Interpreter hot-path suite | 377 ms | **109 ms** | **3.5×** |
+> | `len()` of a 20 000-item list | 59.0 ms / 300 | **0.057 ms / 300** | **~1000×** |
+> | `len()` of a 5 000-key dict | 44.4 ms / 300 | **0.054 ms / 300** | **~820×** |
+> | `has_key()` on a 5 000-key dict | 44.3 ms / 300 | **0.092 ms / 300** | **~480×** |
+> | Call into a 302-statement function | 16.36 µs | **0.33 µs** | **50×** |
+> | Building a 50 000-item list with `append` | 75.6 s | **0.01 s** | **over 4000×** |
+> | Loop over a 5 000-string list (×20) | 101 ms | **25 ms** | 4.0× |
+> | 1-argument function call | 402 ns | **213 ns** | 1.9× |
+> | 2-argument function call | 700 ns | **338 ns** | 2.1× |
+> | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
+> | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
+> | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
+> | `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
+>
+> ### What made it faster
+> - 🧠 **Expressions are parsed once, not on every evaluation.** Every statement
+>   stored its expressions as *text* and the interpreter re-lexed and re-parsed
+>   them inside every loop iteration.
+> - 💾 **`__incache__/` — Indent's `__pycache__`.** The parsed program is written
+>   beside the source and reused, so imports skip lexing and parsing entirely.
+> - 📞 **Function calls no longer scale with the size of the function.** Resolving
+>   a call deep-copied the entire body AST, so a 302-statement function cost
+>   16.4 µs per call even when two of its statements ran.
+> - 🧩 **Container writes move instead of copying** (`l is append l x`,
+>   `d[k] is v`), which turned two quadratic loops into linear ones.
+> - 🧵 **Loops stopped copying their iterable twice**, and `+`/`==`/`in` stopped
+>   deep-copying both operands just to test for object methods.
+> - 🔢 **`len`/`has_key` on a container are O(1)** — they used to copy it to
+>   measure it.
+> - ⚙️ **Release profile**: fat LTO, one codegen unit, no unwind tables, stripped.
+> - 🧊 **`Value` is 56 bytes, not 128**, and call frames are recycled.
+>
+> ### Still O(n), honestly
+> Reading a container still copies it: passing a list to a user function is 6.7×
+> faster than 2.2.2 but the copy remains. Copy-on-write values (`Arc<Vec<Value>>`)
+> are the next step — the plan and its measured cost are in `tools/arc_rewrite.py`
+> and the changelog.
+>
+> ### 🎉 What's New in 2.5.0
 >
 > Third performance release in a row, this one hunting the copies the interpreter
 > made for no reason. Best-of-N, measured against the shipped 2.4.0 build:
