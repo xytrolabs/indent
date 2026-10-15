@@ -696,10 +696,41 @@ fn rainbow_text(text: &str, bg: bool) -> String {
     multicolor_text(text, &rainbow_palette(), bg)
 }
 
+/// Write `n` as decimal digits, straight into the formatter.
+///
+/// `core::fmt`'s integer formatting routes through its generic machinery (width,
+/// fill, precision, alignment flags) that this `Display` impl can never be asked
+/// to honour, and every `say`, `string(n)` and string concatenation involving a
+/// number goes through here. The digits themselves are a handful of integer ops.
+#[inline]
+fn write_int(f: &mut fmt::Formatter<'_>, n: i64) -> fmt::Result {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    // `unsigned_abs` so that i64::MIN does not overflow on negation.
+    let mut u = n.unsigned_abs();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (u % 10) as u8;
+        u /= 10;
+        if u == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    match std::str::from_utf8(&buf[i..]) {
+        Ok(digits) => f.write_str(digits),
+        // Unreachable: only ASCII digits and '-' are ever written above.
+        Err(_) => Err(fmt::Error),
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Value::Int(v) => write!(f, "{v}"),
+            Value::Int(v) => write_int(f, *v),
             Value::Float(v) => {
                 if (v.fract()).abs() < f64::EPSILON {
                     write!(f, "{:.1}", v)
