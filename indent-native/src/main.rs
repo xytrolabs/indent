@@ -563,10 +563,16 @@ enum Value {
     /// an inline `HashMap` is 48 bytes each, which made `Value` 128 bytes and
     /// charged every variable read, argument pass and list element a 128-byte
     /// move. Boxing them takes `Value` to 56 bytes.
+    ///
+    /// `methods` is an `Arc` because the merged parent+own method table belongs
+    /// to the *class*, not the instance: every object of a class used to build
+    /// its own copy of that map (a fresh `HashMap`, one `String` key and one
+    /// `Arc<FunctionDef>` clone per method, per object). It is now built once per
+    /// class definition and shared by refcount.
     Object {
         class_name: String,
         fields: Box<HashMap<String, Value>>,
-        methods: Box<HashMap<String, Arc<FunctionDef>>>,
+        methods: Arc<HashMap<String, Arc<FunctionDef>>>,
         is_dataclass: bool,
     },
     Func(String),
@@ -907,13 +913,13 @@ impl Value {
 
 // Instantiate a class: create an Object with fields initialized from positional args.
 // If the class has a parent, parent fields come first, then child fields.
-fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &Map<String, ClassDef>) -> Value {
+fn instantiate_class(class_def: &ClassDef, args: &[Value], rt: &mut Runtime) -> Value {
     // Collect all fields: parent fields first, then child fields
     let mut all_fields: Vec<ClassField> = Vec::new();
     if let Some(ref parent_name) = class_def.parent {
-        if let Some(parent_def) = classes.get(parent_name) {
+        if let Some(parent_def) = rt.classes.get(parent_name) {
             // Recursively collect parent fields (grandparent, etc.)
-            let parent_fields = collect_all_fields(parent_def, classes);
+            let parent_fields = collect_all_fields(parent_def, &rt.classes);
             all_fields.extend(parent_fields);
         }
     }
@@ -929,19 +935,14 @@ fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &Map<String,
         fields.insert(field.name.clone(), value);
     }
 
-    // Merge methods: parent methods first, child methods override
-    let mut methods = HashMap::new();
-    if let Some(ref parent_name) = class_def.parent {
-        if let Some(parent_def) = classes.get(parent_name) {
-            methods.extend(collect_all_methods(parent_def, classes));
-        }
-    }
-    methods.extend(class_def.methods.clone());
+    // Shared merged method table (built once per class, see `class_methods`)
+    // rather than a fresh parent+own merge for every instance.
+    let methods = rt.class_methods(class_def);
 
     Value::Object {
         class_name: class_def.name.clone(),
         fields: Box::new(fields),
-        methods: Box::new(methods),
+        methods,
         is_dataclass: class_def.is_dataclass,
     }
 }
@@ -1211,6 +1212,13 @@ struct Runtime {
     /// reused. Shared across module runtimes (like `module_cache`), so a
     /// std-library expression is parsed once per process.
     expr_cache: Arc<RwLock<Map<String, Arc<Expr>>>>,
+    /// Merged method table per class name, shared by every instance of that
+    /// class (see `Runtime::class_methods`). Each entry records the class
+    /// generation it was built for, so a later `class` statement invalidates it.
+    method_tables: HashMap<String, (u64, Arc<HashMap<String, Arc<FunctionDef>>>)>,
+    /// Bumped by every `class` statement. `method_tables` entries are only valid
+    /// while this matches the value they were built with.
+    class_gen: u64,
     debugger: Option<Debugger>,
     async_funcs: HashSet<String>,
 }
@@ -1238,6 +1246,8 @@ impl Runtime {
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
             expr_cache: Arc::new(RwLock::new(Map::default())),
+            method_tables: HashMap::new(),
+            class_gen: 0,
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1260,6 +1270,10 @@ impl Runtime {
         temp.funcs = std::mem::take(&mut self.funcs);
         temp.callables = std::mem::take(&mut self.callables);
         temp.modules = std::mem::take(&mut self.modules);
+        // The class-method table cache goes along with the classes it describes,
+        // so a method body that instantiates objects does not rebuild them.
+        temp.method_tables = std::mem::take(&mut self.method_tables);
+        temp.class_gen = self.class_gen;
         temp.module_dir = self.module_dir.clone();
         temp.expr_cache = Arc::clone(&self.expr_cache);
         temp.module_cache = Arc::clone(&self.module_cache);
@@ -1271,6 +1285,38 @@ impl Runtime {
         self.funcs = temp.funcs;
         self.callables = temp.callables;
         self.modules = temp.modules;
+        self.method_tables = temp.method_tables;
+        // A method body may define a class, which invalidates tables built before
+        // it; taking the newer generation is the safe direction (a stale entry
+        // just gets rebuilt, where a too-new one would be trusted).
+        self.class_gen = temp.class_gen;
+    }
+
+    /// Merged method table for a class: its own methods plus every ancestor's,
+    /// child overriding parent. Shared by every instance of the class.
+    ///
+    /// `instantiate_class` used to rebuild this map for every single instance — a
+    /// fresh `HashMap`, one `String` key per method and one `Arc` clone per method,
+    /// per object. `class_gen` is bumped by every `class` statement, so redefining
+    /// a class (or a parent, which children pick up through `collect_all_methods`)
+    /// invalidates the cached table exactly as rebuilding per instance did.
+    fn class_methods(&mut self, class_def: &ClassDef) -> Arc<HashMap<String, Arc<FunctionDef>>> {
+        if let Some((generation, table)) = self.method_tables.get(&class_def.name) {
+            if *generation == self.class_gen {
+                return Arc::clone(table);
+            }
+        }
+        let mut methods = HashMap::new();
+        if let Some(ref parent_name) = class_def.parent {
+            if let Some(parent_def) = self.classes.get(parent_name) {
+                methods.extend(collect_all_methods(parent_def, &self.classes));
+            }
+        }
+        methods.extend(class_def.methods.clone());
+        let table = Arc::new(methods);
+        self.method_tables
+            .insert(class_def.name.clone(), (self.class_gen, Arc::clone(&table)));
+        table
     }
 
     fn new(module_dir: PathBuf) -> Self {
@@ -1284,6 +1330,8 @@ impl Runtime {
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
             expr_cache: Arc::new(RwLock::new(Map::default())),
+            method_tables: HashMap::new(),
+            class_gen: 0,
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1300,6 +1348,8 @@ impl Runtime {
             module_cache: cache,
             module_loading: Arc::new(Mutex::new(HashSet::new())),
             expr_cache: Arc::new(RwLock::new(Map::default())),
+            method_tables: HashMap::new(),
+            class_gen: 0,
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1323,6 +1373,8 @@ impl Runtime {
             module_cache: cache,
             module_loading: loading,
             expr_cache: exprs,
+            method_tables: HashMap::new(),
+            class_gen: 0,
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -2615,6 +2667,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                     is_dataclass: *is_dataclass,
                 },
             );
+            // Invalidate the per-class method-table cache: an existing class may
+            // have been redefined, or a child may now see this as its parent.
+            ctx.rt.class_gen += 1;
             Ok(Control::None)
         }
         Stmt::Assign { name, value, .. } => {
@@ -3589,7 +3644,7 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
-        return Ok(instantiate_class(&class_def, &positional, &ctx.rt.classes));
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
     // Object `len` special method (natural name).
@@ -4562,7 +4617,7 @@ fn invoke_callable_expr(
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
-        return Ok(instantiate_class(&class_def, &positional, &ctx.rt.classes));
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
     let callable = resolve_callable(callee, ctx)?;

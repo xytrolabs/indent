@@ -1,0 +1,56 @@
+#! Cost probe: creating class instances.
+#!
+#! Every instance used to build its own copy of the class's merged parent+own
+#! method table: a fresh HashMap, one String key per method and one Arc clone per
+#! method, per object. Six methods means a six-entry table allocated for every
+#! Particle in this loop. The table now belongs to the class and is shared by
+#! refcount, so the loop measures field setup rather than table construction.
+
+class Particle
+    var x float
+    var y float
+    var vx float
+    var vy float
+
+    fun step
+        give Particle(x + vx, y + vy, vx, vy)
+
+    fun magnitude
+        give x * x + y * y
+
+    fun add other
+        give Particle(x + other.x, y + other.y, vx, vy)
+
+    fun scale k
+        give Particle(x * k, y * k, vx, vy)
+
+    fun reset
+        give Particle(0.0, 0.0, 0.0, 0.0)
+
+    fun to_string
+        give "Particle(" + string(x) + ")"
+
+    fun equals other
+        give x == other.x and y == other.y
+
+var N int = 20000
+var acc float = 0.0
+
+var t0 float = time_perf_counter
+repeat N
+    var p dynamic = Particle(1.0, 2.0, 0.5, 0.5)
+    acc is p.x
+var t1 float = time_perf_counter
+say "create object " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+var a dynamic = Particle(1.0, 2.0, 0.5, 0.5)
+var b dynamic = Particle(3.0, 4.0, 0.5, 0.5)
+
+var t2 float = time_perf_counter
+var last dynamic = 0
+repeat N
+    last is a + b
+var t3 float = time_perf_counter
+say "method add    " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(acc) + " " + string(last) + " " + string(a == b)
