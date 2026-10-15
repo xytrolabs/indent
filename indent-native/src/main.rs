@@ -5398,7 +5398,7 @@ fn invoke_object_method(
     fields: &HashMap<String, Value>,
     args: &[Value],
     ctx: &mut ExecContext<'_>,
-) -> Result<Value, String> {
+) -> Result<(Value, HashMap<String, Value>), String> {
     // A method body runs in its own runtime so that it sees its fields as
     // globals and does *not* see the caller's locals.
     //
@@ -5429,8 +5429,19 @@ fn invoke_object_method(
         }
     };
 
+    // The body reads and writes its fields as globals of that runtime, so the
+    // fields as they stand afterwards are what the caller has to put back on the
+    // instance. Only the names the class declares are read back: a write to
+    // anything else stays what it was inside the method, which is the same rule
+    // a write from outside follows.
+    let mut after = HashMap::new();
+    for (name, before) in fields.iter() {
+        let value = temp_rt.vars.get(name).cloned().unwrap_or_else(|| before.clone());
+        after.insert(name.clone(), value);
+    }
+
     ctx.rt.reclaim_tables_from(temp_rt);
-    out
+    out.map(|value| (value, after))
 }
 
 /// Call an object's method by its natural-language name, if defined.
@@ -5457,7 +5468,7 @@ fn call_object_method_value(
             // method -- once for the callee, once per candidate -- on every
             // special-method lookup (`+`, `==`, `string()`, `len`, ...).
             if name.eq_ignore_ascii_case(method) {
-                return Some(invoke_object_method(mdef, fields, args, ctx));
+                return Some(invoke_object_method(mdef, fields, args, ctx).map(|(value, _)| value));
             }
         }
         // dataclass auto-generated defaults (when no user method is defined).
@@ -5533,7 +5544,100 @@ fn invoke_object_method_call(
         )));
     }
 
+    // The receiver is a variable, so a method that assigns a field can write it
+    // back onto the instance the variable holds. Tried before the value path,
+    // which cannot: it holds a copy.
+    if let Some(result) = invoke_method_on_place(receiver_name, method_name, positional, ctx) {
+        return Some(result);
+    }
+
     Some(invoke_method_on_value(receiver, method_name, positional, ctx))
+}
+
+/// Run a class method for a receiver that is a *variable*, and put the instance
+/// back where it came from.
+///
+/// A method body sees its fields as globals of a runtime of its own, so a field
+/// it assigns — `fun bump` whose body is `x is x + 1` — changed that throwaway
+/// runtime and nothing else, and `p.bump()` looked like it did nothing at all.
+/// The receiver is moved out of the variable, run against, and moved back, so
+/// those writes reach the instance the variable holds. Moving rather than
+/// copying is also why this does not pay the instance clone that reading the
+/// receiver as a value would.
+///
+/// `None` means the receiver is not an instance with a class method of that
+/// name, so the caller's other dispatch — a function-valued field, a module, a
+/// builtin method — is still to be tried, and the receiver is exactly where it
+/// was.
+fn invoke_method_on_place(
+    receiver_name: &str,
+    method: &str,
+    args: &[Value],
+    ctx: &mut ExecContext<'_>,
+) -> Option<Result<Value, String>> {
+    // Fold only when there is something to fold: call sites spell methods
+    // canonically, and this runs on every object method call.
+    let owned_lc;
+    let method_lc: &str = if method.bytes().any(|b| b.is_ascii_uppercase()) {
+        owned_lc = method.to_ascii_lowercase();
+        &owned_lc
+    } else {
+        method
+    };
+
+    // Look the method up on the instance as it stands, before taking it apart.
+    let method_def = {
+        let Value::Object { methods, .. } = ctx.get_var_ref(receiver_name)? else {
+            return None;
+        };
+        let mut found = None;
+        for (name, def) in methods.iter() {
+            if name.eq_ignore_ascii_case(method_lc) {
+                found = Some(Arc::clone(def));
+                break;
+            }
+        }
+        found?
+    };
+
+    let Some(Value::Object {
+        class_name,
+        fields,
+        methods,
+        is_dataclass,
+    }) = ctx.take_var(receiver_name)
+    else {
+        return None;
+    };
+
+    let (out, after) = match invoke_object_method(&method_def, &fields, args, ctx) {
+        Ok(pair) => pair,
+        // The body failed: the instance goes back as it was, because a method
+        // that raised cannot be said to have assigned anything.
+        Err(e) => {
+            ctx.set_var(
+                receiver_name,
+                Value::Object {
+                    class_name,
+                    fields,
+                    methods,
+                    is_dataclass,
+                },
+            );
+            return Some(Err(e));
+        }
+    };
+
+    ctx.set_var(
+        receiver_name,
+        Value::Object {
+            class_name,
+            fields: Box::new(after),
+            methods,
+            is_dataclass,
+        },
+    );
+    Some(Ok(out))
 }
 
 fn invoke_method_on_value(
@@ -5562,7 +5666,7 @@ fn invoke_method_on_value(
     } = target_val
     {
         if let Some(method_def) = methods.get(method_lc) {
-            return invoke_object_method(method_def, fields, args, ctx);
+            return invoke_object_method(method_def, fields, args, ctx).map(|(value, _)| value);
         }
         if let Some(Value::Func(fn_name)) = fields.get(method) {
             let exprs: Vec<Expr> = args.iter().map(|v| match v {
@@ -13588,6 +13692,19 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             let mut arg_vals = Vec::with_capacity(args.len());
             for a in args {
                 arg_vals.push(eval_ast(a, ctx)?);
+            }
+            // A bare variable receiver is a place, so a method that assigns a
+            // field changes the instance the variable holds. Anything else
+            // (`a.b.m()`, `xs[0].m()`) stays a value, and its fields stop at the
+            // method.
+            if let Expr::Var(parts) = &**target {
+                if parts.len() == 1 && is_bare_identifier(&parts[0]) {
+                    if let Some(result) =
+                        invoke_method_on_place(&parts[0], method, &arg_vals, ctx)
+                    {
+                        return result;
+                    }
+                }
             }
             invoke_method_on_value(target_val, method, &arg_vals, ctx)
         }

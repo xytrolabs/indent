@@ -82,4 +82,65 @@ check (len(p.xs) == 2) "field concat grows the same list"
 p.x is 10
 check (p.get_x() == 10) "a method reads its own field"
 
+#! ---- 8. a method that assigns a field changes the instance ----
+#! A method body sees its fields as globals of a runtime of its own, so a field
+#! it assigned changed that throwaway runtime and nothing else. The receiver of
+#! a call on a bare variable is now moved out, run against, and moved back.
+class Tally
+    var n int
+    var log dynamic = []
+
+    fun bump
+        n is n + 1
+        give n
+
+    fun bump_by step
+        n is n + step
+        give n
+
+    fun peek
+        give n
+
+    fun reset
+        n is 0
+
+var c dynamic = Tally(0, [])
+var first int = c.bump()
+check (first == 1) "a method gives back what it computed"
+check (c.n == 1) "a method that assigns a field changes the instance"
+check (c.peek() == 1) "a later method sees the new field"
+
+c.bump()
+check (c.n == 2) "a statement method call writes as well"
+
+var back int = c.bump_by(10)
+check (back == 12) "a method with an argument writes through it"
+check (c.n == 12) "and the instance holds the new value"
+
+c.reset()
+check (c.n == 0) "a method with no give still writes"
+
+#! A receiver that is not a bare variable is a value, so the method runs on a
+#! copy and its writes stay there — the same rule an argument follows.
+var xs dynamic = [Tally(0, [])]
+xs[0].bump()
+check (xs[0].n == 0) "a method on a list element writes to the copy"
+
+#! A method that fails leaves the instance as it was.
+class Guard
+    var v int
+
+    fun explode
+        v is 99
+        flag "boom"
+
+var g dynamic = Guard(1)
+var raised boolean = false
+do:
+    g.explode()
+catch as e:
+    raised is true
+check raised "a method that flags reports the failure"
+check (g.v == 1) "and the instance was not half-written"
+
 say "field_write_semantics: all checks passed"
