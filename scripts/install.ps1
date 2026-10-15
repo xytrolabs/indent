@@ -202,7 +202,13 @@ if ($Local) {
         } else {
             $api = "https://api.github.com/repos/$Repo/releases/tags/$Version"
         }
-        $release = Invoke-RestMethod -Uri $api -TimeoutSec 60
+        # The GitHub API rejects requests without a User-Agent, and PowerShell has
+        # historically sent none — that alone has broken installers like this one.
+        $apiHeaders = @{
+            "User-Agent" = "indent-installer"
+            "Accept"     = "application/vnd.github+json"
+        }
+        $release = Invoke-RestMethod -Uri $api -TimeoutSec 60 -Headers $apiHeaders
         # Windows releases are .zip archives containing indent.exe. Match by
         # exact target first, then fall back to any windows/arch .zip so naming
         # variants (pc-windows-msvc vs windows) both work.
@@ -212,6 +218,16 @@ if ($Local) {
             $asset = $release.assets | Where-Object {
                 ($_.name -like "*.zip") -and ($_.name -like "*$archTok*") -and ($_.name -like "*windows*")
             } | Select-Object -First 1
+        }
+        # There is no native ARM64 Windows build yet, but Windows 11 on ARM runs
+        # the x86_64 one through its built-in emulation. Falling back is far more
+        # useful than telling an ARM user that nothing exists.
+        if (-not $asset -and $target -like "aarch64-pc-windows-*") {
+            $asset = $release.assets | Where-Object { $_.name -like "*x86_64*pc-windows*.zip" } | Select-Object -First 1
+            if ($asset) {
+                Write-Host "  (no native ARM64 Windows build yet - installing the x86_64 build," -ForegroundColor Yellow
+                Write-Host "   which Windows 11 on ARM runs under emulation)" -ForegroundColor Yellow
+            }
         }
         if ($asset) {
             $tmp = Join-Path $env:TEMP "indent-install-$([guid]::NewGuid())"
@@ -224,12 +240,21 @@ if ($Local) {
                 Copy-Item $exe.FullName (Join-Path $BinDir "indent.exe") -Force
                 Write-Host "✓ Downloaded indent" -ForegroundColor Green
                 foreach ($tool in @("air")) {
-                    $toolFile = Get-ChildItem -Path $tmp -Recurse -Filter "$tool.*" | Select-Object -First 1
+                    # A release archive ships `air.ps1`, a bare `air` (the shell
+                    # version) and `air.ind` (the package source). Matching "air.*"
+                    # and guessing the extension could copy the plain-text `air.ind`
+                    # into place as air.exe, so only accept a real executable form
+                    # and keep its own name.
+                    $toolFile = $null
+                    foreach ($candidate in @("$tool.ps1", "$tool.exe", "$tool.cmd")) {
+                        $found = Get-ChildItem -Path $tmp -Recurse -Filter $candidate | Select-Object -First 1
+                        if ($found) { $toolFile = $found; break }
+                    }
                     if ($toolFile) {
-                        $ext = [System.IO.Path]::GetExtension($toolFile.Name)
-                        $destName = if ($ext -eq ".ps1") { "$tool.ps1" } else { "$tool.exe" }
-                        Copy-Item $toolFile.FullName (Join-Path $BinDir $destName) -Force
-                        Write-Host "✓ Installed $tool" -ForegroundColor Green
+                        Copy-Item $toolFile.FullName (Join-Path $BinDir $toolFile.Name) -Force
+                        Write-Host "✓ Installed $($toolFile.Name)" -ForegroundColor Green
+                    } else {
+                        Write-Host "  (no Windows $tool launcher in this archive; skipped)" -ForegroundColor Yellow
                     }
                 }
                 # Release archives are self-contained: install the complete
@@ -288,12 +313,28 @@ if ($stdInstalled) {
 } else {
     Write-Host "→ Installing standard library..."
     $StdBase = "https://raw.githubusercontent.com/$Repo/main/std"
-    foreach ($file in @("io.ind", "math.ind", "strings.ind", "testing.ind")) {
+    # Ask the API for the real file list: the old hard-coded four modules meant a
+    # user who fell back to this path got a std/ that was mostly missing, which
+    # shows up later as confusing "module not found" errors.
+    $stdFiles = @()
+    try {
+        $listing = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/contents/std?ref=main" `
+            -TimeoutSec 60 -Headers @{ "User-Agent" = "indent-installer"; "Accept" = "application/vnd.github+json" }
+        $stdFiles = @($listing | Where-Object { $_.name -like "*.ind" } | ForEach-Object { $_.name })
+    } catch {
+        Write-Host "  (could not list std/ - falling back to a short list)" -ForegroundColor Yellow
+    }
+    if ($stdFiles.Count -eq 0) {
+        $stdFiles = @("io.ind", "math.ind", "strings.ind", "testing.ind")
+    }
+    $downloaded = 0
+    foreach ($file in $stdFiles) {
         try {
             Invoke-WebRequest -Uri "$StdBase/$file" -OutFile (Join-Path $StdDir $file) -TimeoutSec 30
-        } catch { Write-Host "  (skipping $file - not yet in repo)" }
+            $downloaded++
+        } catch { Write-Host "  (skipping $file)" }
     }
-    Write-Host "✓ Standard library installed" -ForegroundColor Green
+    Write-Host "✓ Standard library installed ($downloaded modules)" -ForegroundColor Green
 }
 
 # ---- create launcher ----
@@ -339,8 +380,8 @@ $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$LauncherDir*") {
     Write-Host "⚠  Add to your user PATH:" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  Run this in an admin PowerShell:" -ForegroundColor Cyan
-    Write-Host "  [Environment]::SetEnvironmentVariable('Path', `$env:Path + ';$LauncherDir', 'User')"
+    Write-Host "  No admin rights are needed - this is the user PATH:" -ForegroundColor Cyan
+    Write-Host "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$LauncherDir', 'User')"
     Write-Host ""
     $response = Read-Host "  Add to PATH now? [Y/n]"
     if ($response -eq "" -or $response -match "^[Yy]") {
