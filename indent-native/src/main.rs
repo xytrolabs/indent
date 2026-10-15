@@ -2055,6 +2055,73 @@ fn try_inplace_string_concat(
     }
 }
 
+/// `xs is xs + ys` for lists and dicts — the same trap `s is s + x` had.
+///
+/// `eval_binary`'s `(List, List)` arm is `x.extend(y)` on a *clone* of the left
+/// operand, so growing a list one element at a time (`xs is xs + [x]`, which
+/// `benchmarks/bench_append_scaling.ind` measures as `build2`) copied everything
+/// accumulated so far on every step: O(n²) to build an n-element list. Merging a
+/// dict in a loop had the identical shape.
+///
+/// Like the string version this match is deliberately narrow — exactly
+/// `name + <rest>` after a complete identifier, and only when the variable
+/// already holds a list or a dict. Unlike the string version it cannot tell from
+/// the left-hand side alone whether the *right* operand will be the matching
+/// kind, so instead of returning `None` (which would make the caller evaluate
+/// the right-hand side a second time, running its side effects twice) it hands
+/// both operands it already holds to `eval_binary`. That keeps every other
+/// combination — the `Object.add` dispatch, `list + string`, and the type error
+/// — decided in exactly one place.
+fn try_inplace_container_concat(
+    name: &str,
+    value: &ValueSource,
+    ctx: &mut ExecContext<'_>,
+) -> Option<Result<Control, String>> {
+    if name.is_empty() || name.contains('.') || name.contains('[') || !is_bare_identifier(name) {
+        return None;
+    }
+    let text = match value {
+        ValueSource::Expr(text) => text.as_str(),
+        _ => return None,
+    };
+    let rhs_text = match text
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix(" + "))
+    {
+        Some(rhs) if !rhs.is_empty() => rhs,
+        _ => return None,
+    };
+    // One lookup rejects the overwhelming majority of assignments here.
+    if !matches!(ctx.get_var_ref(name), Some(Value::List(_) | Value::Dict(_))) {
+        return None;
+    }
+
+    // The right-hand side may read `name` (`xs is xs + xs`), so it has to be
+    // evaluated while the old value is still in place.
+    let rhs = match eval_expr(rhs_text, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let lhs = ctx.take_var(name)?;
+
+    let out = match (lhs, rhs) {
+        (Value::List(mut l), Value::List(r)) => {
+            l.extend(r);
+            Value::List(l)
+        }
+        (Value::Dict(mut d), Value::Dict(r)) => {
+            d.extend(r);
+            Value::Dict(d)
+        }
+        (lhs, rhs) => match eval_binary("+", lhs, rhs, ctx) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        },
+    };
+    ctx.set_var(name, out);
+    Some(Ok(Control::None))
+}
+
 fn eval_value_source(value: &ValueSource, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     match value {
         ValueSource::Expr(expr) => eval_expr(expr, ctx),
@@ -2164,6 +2231,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 return result;
             }
             if let Some(result) = try_inplace_string_concat(name, value, ctx) {
+                return result;
+            }
+            if let Some(result) = try_inplace_container_concat(name, value, ctx) {
                 return result;
             }
             let v = eval_value_source(value, ctx)?;

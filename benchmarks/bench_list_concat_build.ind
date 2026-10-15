@@ -1,0 +1,23 @@
+#! Scaling probe for `xs is xs + [x]` list building.
+#!
+#! This is the list counterpart of bench_string_build.ind, and it measured the
+#! same quadratic trap: `eval_binary`'s `(List, List)` arm extends a *clone* of
+#! the left operand, so every step copied everything accumulated so far.
+#!
+#! A correct result: the per-step cost stays roughly flat as n doubles and the
+#! total time doubles. If totals quadruple when n doubles, the quadratic
+#! behaviour is back.
+#!
+#! Sizes are deliberately small: while quadratic, n=8000 already moves ~1.8 GB
+#! of `Value`s, and larger sizes take minutes.
+#!
+#! Run:  indent benchmarks/bench_list_concat_build.ind
+
+repeat n in [1000, 2000, 4000, 8000]
+    var t0 float = time_perf_counter
+    var xs dynamic = []
+    repeat n
+        xs is xs + [1]
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    say "build " + string(n) + ": " + string(t1 - t0) + "s total, " + string(per) + " ns/step, len " + string(len(xs))
