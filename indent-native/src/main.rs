@@ -202,116 +202,6 @@ fn register_task(id: i64, state: TaskState) {
     }
 }
 
-// ── Event loop (async/await) ────────────────────────────────
-/// A future representing an async computation.
-enum FutureState {
-    Pending,
-    Ready(Value),
-    Cancelled,
-}
-
-struct AsyncFuture {
-    state: FutureState,
-    /// If Some, this is a spawned thread's JoinHandle (for thread-backed futures).
-    handle: Option<std::thread::JoinHandle<Result<Value, String>>>,
-}
-
-impl AsyncFuture {
-    fn new() -> Self {
-        Self { state: FutureState::Pending, handle: None }
-    }
-
-    fn is_ready(&self) -> bool {
-        matches!(self.state, FutureState::Ready(_))
-    }
-
-    fn is_cancelled(&self) -> bool {
-        matches!(self.state, FutureState::Cancelled)
-    }
-
-    fn take_result(self) -> Option<Value> {
-        match self.state {
-            FutureState::Ready(v) => Some(v),
-            _ => None,
-        }
-    }
-}
-
-/// The global event loop scheduler.
-/// Stores all active futures keyed by id, plus a queue of ready tasks.
-struct Scheduler {
-    /// All registered futures: id → future
-    futures: HashMap<i64, AsyncFuture>,
-    /// Next available future id
-    next_id: i64,
-    /// Queue of future ids that are ready to resume (pop from front)
-    ready_queue: Vec<i64>,
-}
-
-impl Scheduler {
-    fn new() -> Self {
-        Self {
-            futures: HashMap::new(),
-            next_id: 1,
-            ready_queue: Vec::new(),
-        }
-    }
-
-    fn register(&mut self, future: AsyncFuture) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.futures.insert(id, future);
-        id
-    }
-
-    fn resolve(&mut self, id: i64, value: Value) {
-        if let Some(fut) = self.futures.get_mut(&id) {
-            fut.state = FutureState::Ready(value);
-            self.ready_queue.push(id);
-        }
-    }
-
-    fn cancel(&mut self, id: i64) {
-        if let Some(fut) = self.futures.get_mut(&id) {
-            fut.state = FutureState::Cancelled;
-        }
-    }
-
-    fn get(&self, id: i64) -> Option<&AsyncFuture> {
-        self.futures.get(&id)
-    }
-
-    fn take_next_ready(&mut self) -> Option<(i64, Value)> {
-        while let Some(id) = self.ready_queue.first().cloned() {
-            if let Some(fut) = self.futures.get(&id) {
-                if fut.is_ready() {
-                    // Remove from map and return
-                    let removed = self.futures.remove(&id)?;
-                    self.ready_queue.retain(|&x| x != id);
-                    return Some((id, removed.take_result()?));
-                } else if fut.is_cancelled() {
-                    self.futures.remove(&id);
-                    self.ready_queue.retain(|&x| x != id);
-                    continue;
-                }
-            } else {
-                self.ready_queue.retain(|&x| x != id);
-                continue;
-            }
-            break; // No more ready futures
-        }
-        None
-    }
-
-    fn len(&self) -> usize {
-        self.futures.len()
-    }
-}
-
-static SCHEDULER: LazyLock<Mutex<Scheduler>> =
-    LazyLock::new(|| Mutex::new(Scheduler::new()));
-static SCHEDULER_NEXT_ID: AtomicI64 = AtomicI64::new(1);
-
 #[derive(Debug, Clone)]
 struct SourceLine {
     line_no: usize,
@@ -1423,10 +1313,16 @@ impl Runtime {
             return Ok(hit.clone());
         }
         let parsed = Arc::new(parse_expr_ast(expr)?);
-        self.expr_cache
-            .write()
-            .unwrap()
-            .insert(expr.to_string(), parsed.clone());
+        let mut cache = self.expr_cache.write().unwrap();
+        // Expression text is usually a fixed set taken from the program, but a
+        // long-running service can build it at runtime (templates, filters), and
+        // this map is shared for the life of the process. Past the cap we stop
+        // adding new entries rather than evicting: evicting would let a program
+        // near the cap re-parse everything on every pass, which is far worse than
+        // a few uncached texts. Existing entries keep serving hits.
+        if cache.len() < EXPR_CACHE_MAX {
+            cache.insert(expr.to_string(), parsed.clone());
+        }
         Ok(parsed)
     }
 
@@ -1870,6 +1766,12 @@ struct ExprMemoSlot {
     text: String,
     kind: ExprKind,
 }
+
+/// Upper bound on parsed expressions kept in `Runtime::expr_cache` (see
+/// `Runtime::cached_expr`). Expression text is normally a fixed set taken from the
+/// program, but a long-running service can generate it at runtime, so this keeps
+/// that growth bounded rather than unbounded.
+const EXPR_CACHE_MAX: usize = 20_000;
 
 /// Slots in `Runtime::expr_memo`. A power of two so the index is a mask.
 ///
