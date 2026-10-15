@@ -484,10 +484,10 @@ enum Callable {
 #[derive(Debug, Clone)]
 struct ModuleInstance {
     vars: Map<String, Value>,
-    funcs: HashMap<String, Arc<FunctionDef>>,
+    funcs: Map<String, Arc<FunctionDef>>,
     // Functions this module imported from other modules (via `get X from Y`).
     // Preserved so a module's functions can call its own imports.
-    callables: HashMap<String, Callable>,
+    callables: Map<String, Callable>,
 }
 
 #[derive(Debug, Clone)]
@@ -847,7 +847,7 @@ impl Value {
 
 // Instantiate a class: create an Object with fields initialized from positional args.
 // If the class has a parent, parent fields come first, then child fields.
-fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &HashMap<String, ClassDef>) -> Value {
+fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &Map<String, ClassDef>) -> Value {
     // Collect all fields: parent fields first, then child fields
     let mut all_fields: Vec<ClassField> = Vec::new();
     if let Some(ref parent_name) = class_def.parent {
@@ -887,7 +887,7 @@ fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &HashMap<Str
 }
 
 /// Recursively collect all fields from a class and its ancestors (parent first)
-fn collect_all_fields(class_def: &ClassDef, classes: &HashMap<String, ClassDef>) -> Vec<ClassField> {
+fn collect_all_fields(class_def: &ClassDef, classes: &Map<String, ClassDef>) -> Vec<ClassField> {
     let mut fields = Vec::new();
     if let Some(ref parent_name) = class_def.parent {
         if let Some(parent_def) = classes.get(parent_name) {
@@ -899,7 +899,7 @@ fn collect_all_fields(class_def: &ClassDef, classes: &HashMap<String, ClassDef>)
 }
 
 /// Recursively collect all methods from a class and its ancestors (parent first, child overrides)
-fn collect_all_methods(class_def: &ClassDef, classes: &HashMap<String, ClassDef>) -> HashMap<String, Arc<FunctionDef>> {
+fn collect_all_methods(class_def: &ClassDef, classes: &Map<String, ClassDef>) -> HashMap<String, Arc<FunctionDef>> {
     let mut methods = HashMap::new();
     if let Some(ref parent_name) = class_def.parent {
         if let Some(parent_def) = classes.get(parent_name) {
@@ -1115,10 +1115,10 @@ fn to_f64_value(value: &Value) -> Result<f64, String> {
 struct Runtime {
     module_dir: PathBuf,
     vars: Map<String, Value>,
-    funcs: HashMap<String, Arc<FunctionDef>>,
-    callables: HashMap<String, Callable>,
-    modules: HashMap<String, Arc<ModuleInstance>>,
-    classes: HashMap<String, ClassDef>,
+    funcs: Map<String, Arc<FunctionDef>>,
+    callables: Map<String, Callable>,
+    modules: Map<String, Arc<ModuleInstance>>,
+    classes: Map<String, ClassDef>,
     module_cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
     /// Canonical paths currently being loaded — used to detect circular imports
     /// (A imports B imports A) and report a clean error instead of recursing
@@ -1130,7 +1130,7 @@ struct Runtime {
     /// times a second. Parsing is context-free, so the AST is cached here and
     /// reused. Shared across module runtimes (like `module_cache`), so a
     /// std-library expression is parsed once per process.
-    expr_cache: Arc<RwLock<HashMap<String, Arc<Expr>>>>,
+    expr_cache: Arc<RwLock<Map<String, Arc<Expr>>>>,
     debugger: Option<Debugger>,
     async_funcs: HashSet<String>,
 }
@@ -1146,13 +1146,13 @@ impl Runtime {
         Self {
             module_dir,
             vars: default_color_vars(),
-            funcs: HashMap::new(),
-            callables: HashMap::new(),
-            modules: HashMap::new(),
-            classes: HashMap::new(),
+            funcs: Map::default(),
+            callables: Map::default(),
+            modules: Map::default(),
+            classes: Map::default(),
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
-            expr_cache: Arc::new(RwLock::new(HashMap::new())),
+            expr_cache: Arc::new(RwLock::new(Map::default())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1162,13 +1162,13 @@ impl Runtime {
         Self {
             module_dir,
             vars: default_color_vars(),
-            funcs: HashMap::new(),
-            callables: HashMap::new(),
-            modules: HashMap::new(),
-            classes: HashMap::new(),
+            funcs: Map::default(),
+            callables: Map::default(),
+            modules: Map::default(),
+            classes: Map::default(),
             module_cache: cache,
             module_loading: Arc::new(Mutex::new(HashSet::new())),
-            expr_cache: Arc::new(RwLock::new(HashMap::new())),
+            expr_cache: Arc::new(RwLock::new(Map::default())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1180,15 +1180,15 @@ impl Runtime {
         module_dir: PathBuf,
         cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
         loading: Arc<Mutex<HashSet<PathBuf>>>,
-        exprs: Arc<RwLock<HashMap<String, Arc<Expr>>>>,
+        exprs: Arc<RwLock<Map<String, Arc<Expr>>>>,
     ) -> Self {
         Self {
             module_dir,
             vars: default_color_vars(),
-            funcs: HashMap::new(),
-            callables: HashMap::new(),
-            modules: HashMap::new(),
-            classes: HashMap::new(),
+            funcs: Map::default(),
+            callables: Map::default(),
+            modules: Map::default(),
+            classes: Map::default(),
             module_cache: cache,
             module_loading: loading,
             expr_cache: exprs,
@@ -1941,7 +1941,14 @@ fn eval_value_source(value: &ValueSource, ctx: &mut ExecContext<'_>) -> Result<V
 }
 
 fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> {
-    maybe_debug(stmt_line(stmt), ctx)?;
+    // `stmt_line` is a match over every `Stmt` variant, and `exec_stmt` is the
+    // hottest function in the interpreter — running it unconditionally charged
+    // every statement of every program for a line number that only the debugger
+    // ever reads. `maybe_debug` returns immediately when no debugger is
+    // attached, so skipping the call entirely is exactly equivalent.
+    if ctx.rt.debugger.is_some() {
+        maybe_debug(stmt_line(stmt), ctx)?;
+    }
 
     match stmt {
         Stmt::Say { expr, line } => {
