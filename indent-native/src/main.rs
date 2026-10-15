@@ -2263,6 +2263,111 @@ fn try_inplace_member_append(
     Some(Ok(Control::None))
 }
 
+/// `holder.xs is holder.xs + ys` — the concat spelling of the member case above,
+/// and equally quadratic (measured 4174 → 37228 ns/step over n=500 → 4000).
+///
+/// Only list-plus-list is done in place, because that is the arm of `eval_binary`
+/// whose cost is a copy of the left operand (`x.extend(y)`). The right-hand side
+/// is evaluated first and the container is only taken out of the variable once it
+/// is known to be a list, so the "not a list" case needs no restoration and can
+/// simply fall through to the normal path.
+fn try_inplace_member_concat(
+    name: &str,
+    value: &ValueSource,
+    ctx: &mut ExecContext<'_>,
+) -> Option<Result<Control, String>> {
+    let (root, field) = match name.split_once('.') {
+        Some((r, f)) if !f.contains('.') && is_bare_identifier(r) && is_bare_identifier(f) => (r, f),
+        _ => return None,
+    };
+    let text = match value {
+        ValueSource::Expr(text) => text.as_str(),
+        _ => return None,
+    };
+    let rhs_text = match text
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix(" + "))
+    {
+        Some(rhs) if !rhs.is_empty() => rhs,
+        _ => return None,
+    };
+    let holds_list = match ctx.get_var_ref(root) {
+        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::List(_))),
+        Some(Value::Object { fields, .. }) => matches!(fields.get(field), Some(Value::List(_))),
+        _ => false,
+    };
+    if !holds_list {
+        return None;
+    }
+
+    // Evaluate before taking anything out. If this is not list+list the ordinary
+    // path handles it (and the right-hand side is evaluated a second time only in
+    // that case, which `try_inplace_string_concat` already documents).
+    let rhs = match eval_expr(rhs_text, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let extra = match rhs {
+        Value::List(r) => r,
+        _ => return None,
+    };
+
+    let root_val = ctx.take_var(root)?;
+    let updated = match root_val {
+        Value::Dict(mut m) => {
+            let mut list = match m.remove(field) {
+                Some(Value::List(l)) => l,
+                Some(other) => {
+                    m.insert(field.to_string(), other);
+                    ctx.set_var(root, Value::Dict(m));
+                    return None;
+                }
+                None => {
+                    ctx.set_var(root, Value::Dict(m));
+                    return None;
+                }
+            };
+            list.extend(extra);
+            m.insert(field.to_string(), Value::List(list));
+            Value::Dict(m)
+        }
+        Value::Object {
+            class_name,
+            mut fields,
+            methods,
+            is_dataclass,
+        } => {
+            let mut list = match fields.remove(field) {
+                Some(Value::List(l)) => l,
+                Some(other) => {
+                    fields.insert(field.to_string(), other);
+                    ctx.set_var(
+                        root,
+                        Value::Object { class_name, fields, methods, is_dataclass },
+                    );
+                    return None;
+                }
+                None => {
+                    ctx.set_var(
+                        root,
+                        Value::Object { class_name, fields, methods, is_dataclass },
+                    );
+                    return None;
+                }
+            };
+            list.extend(extra);
+            fields.insert(field.to_string(), Value::List(list));
+            Value::Object { class_name, fields, methods, is_dataclass }
+        }
+        other => {
+            ctx.set_var(root, other);
+            return None;
+        }
+    };
+    ctx.set_var(root, updated);
+    Some(Ok(Control::None))
+}
+
 fn eval_value_source(value: &ValueSource, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     match value {
         ValueSource::Expr(expr) => eval_expr(expr, ctx),
@@ -2372,6 +2477,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 return result;
             }
             if let Some(result) = try_inplace_member_append(name, value, ctx) {
+                return result;
+            }
+            if let Some(result) = try_inplace_member_concat(name, value, ctx) {
                 return result;
             }
             if let Some(result) = try_inplace_string_concat(name, value, ctx) {
