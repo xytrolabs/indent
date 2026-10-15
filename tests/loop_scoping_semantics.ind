@@ -1,0 +1,85 @@
+#! Semantics guard for loop scoping.
+#!
+#! `exec_repeat` now pushes ONE frame for the whole loop instead of pushing and
+#! popping a frame per iteration (which re-created the `Reps` and item-variable
+#! keys on every pass). This test pins down what must NOT have changed:
+#! `Reps` still counts from 0, item variables still bind correctly, nested loops
+#! still shadow properly, `stop`/`next` still work, a loop body still cannot see
+#! a variable declared in an outer function's frame, and — the property the
+#! change could plausibly have broken — a `var` declared inside a loop body is
+#! still NOT visible after the loop.
+#!
+#! NOTE: conditions are always precomputed into a boolean variable first — a
+#! comparison cannot be written inline as a space-call argument.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. `Reps` counts from 0 ----
+var seen string = ""
+repeat 5
+    seen is seen + string(Reps)
+var ok1 boolean = seen == "01234"
+assert ok1 "Reps counts from 0 and increments"
+
+#! ---- 2. an item variable binds each element ----
+var items string = ""
+repeat x in [10, 20, 30]
+    items is items + string(x) + ","
+var ok2 boolean = items == "10,20,30,"
+assert ok2 "repeat x in <list> binds each element"
+
+#! ---- 3. nested loops shadow `Reps` independently ----
+var pairs string = ""
+repeat a in [1, 2]
+    repeat b in [7, 8]
+        pairs is pairs + string(a) + string(b) + " "
+var ok3 boolean = pairs == "17 18 27 28 "
+assert ok3 "nested loops keep their own Reps and item variables"
+
+#! ---- 4. `stop` still breaks out ----
+var counted int = 0
+repeat 100
+    counted is counted + 1
+    if counted == 3
+        stop
+var ok4 boolean = counted == 3
+assert ok4 "stop breaks the loop"
+
+#! ---- 5. `next` still skips to the following iteration ----
+var skipped int = 0
+repeat n in [1, 2, 3, 4]
+    if n == 2
+        next
+    skipped is skipped + n
+var ok5 boolean = skipped == 8
+assert ok5 "next skips the rest of the iteration"
+
+#! ---- 6. an outer function's variable is still reachable from the body, and
+#! the body's own `var` is fresh each iteration ----
+fun accumulate
+    var total int = 0
+    repeat 4
+        var step int = 0
+        step is step + 1
+        total is total + step
+    give total
+
+var acc int = accumulate
+var ok6 boolean = acc == 4
+assert ok6 "a function variable is visible in the body and body vars stay fresh"
+
+#! ---- 7. a body variable must NOT be visible after the loop ----
+var leaked boolean = FALSE
+do:
+    var probe dynamic = bodyOnlyDeclaredInsideTheLoop
+    say probe
+catch as e:
+    leaked is TRUE
+var ok7 boolean = leaked == TRUE
+assert ok7 "a variable declared in a loop body is not visible after the loop"
+
+say "loop scoping semantics: ALL PASS"

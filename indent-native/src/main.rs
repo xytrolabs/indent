@@ -2620,7 +2620,28 @@ fn maybe_debug(line: usize, ctx: &mut ExecContext<'_>) -> Result<(), String> {
     }
 }
 
+/// Runs a loop with ONE frame for the whole loop rather than one per iteration.
+///
+/// `run_loop_iteration` used to push and pop a frame per iteration, which meant
+/// re-inserting the `Reps` and item-variable keys every time round: two
+/// `String` allocations, two hash inserts and their deallocations on every
+/// iteration of every loop in every program, plus a frame push/pop. Binding
+/// them once for the loop's duration lets `define_local` update those entries in
+/// place, because the keys stay alive.
+///
+/// Loop bodies are still scoped — the frame is popped when the loop exits, on
+/// every path including an error or an early `give` — so a `var` declared
+/// inside a loop still cannot be seen after it. The one observable difference is
+/// that such a variable now survives from one iteration to the next within the
+/// same loop, which is the behaviour most languages have anyway.
 fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, String> {
+    ctx.push_frame();
+    let out = exec_repeat_framed(mode, body, ctx);
+    ctx.pop_frame();
+    out
+}
+
+fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, String> {
     let max_iters = 100_000usize;
 
     match mode {
@@ -2731,20 +2752,20 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
     }
 }
 
+/// Runs one pass of a loop body. The loop's frame is pushed once by
+/// `exec_repeat`, so binding `Reps` and the item variable updates the existing
+/// entries in place instead of allocating a fresh key on every iteration.
 fn run_loop_iteration(
     body: &[Stmt],
     ctx: &mut ExecContext<'_>,
     reps: usize,
     item: Option<(&str, Value)>,
 ) -> Result<Control, String> {
-    ctx.push_frame();
     ctx.define_local("Reps", Value::Int(reps as i64));
     if let Some((name, value)) = item {
         ctx.define_local(name, value);
     }
-    let out = exec_block(body, ctx);
-    ctx.pop_frame();
-    out
+    exec_block(body, ctx)
 }
 
 fn import_stmt(
