@@ -1,6 +1,6 @@
 [package]
 name = "indent"
-version = "2.6.0"
+version = "2.3.0"
 edition = "2024"
 
 # Release profile tuned for a tree-walking interpreter: the evaluator is one hot

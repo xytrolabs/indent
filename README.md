@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.6.0
+# Indent Language (.ind) v2.3.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,178 +7,57 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
-> ## 🚀 Indent 2.6 — the performance work, compared to 2.2.2
+> ## 🚀 Indent 2.3.0 — the performance release
 >
-> Four rounds of speed work (2.3 → 2.6), all additive. Every number below is
-> measured against the released **2.2.2** binary with `benchmarks/` (best of N;
-> `sh benchmarks/verify.sh` reproduces the test side of it).
+> Major optimizations and general improvements coming to Indent in 2.3! All of it
+> is additive, and every figure below is the same benchmark run against the
+> released **2.2.2** binary and this build (`sh benchmarks/verify.sh` reproduces it).
 >
-> | Workload | 2.2.2 | **2.6.0** | Gain |
+> | Workload | 2.2.2 | **2.3.0** | Gain |
 > |---|---|---|---|
 > | Interpreter hot-path suite | 377 ms | **109 ms** | **3.5×** |
-> | `len()` of a 20 000-item list | 59.0 ms / 300 | **0.057 ms / 300** | **~1000×** |
-> | `len()` of a 5 000-key dict | 44.4 ms / 300 | **0.054 ms / 300** | **~820×** |
-> | `has_key()` on a 5 000-key dict | 44.3 ms / 300 | **0.092 ms / 300** | **~480×** |
+> | 100 000 function calls | 0.1238 s | **0.0365 s** | 3.4× |
+> | 50 000 list `append`s | **52.5 s** | **0.0071 s** | **~7 400×** |
+> | `len()` of a 20 000-item list | 59.0 ms / 300 | **0.057 ms** | **~1000×** |
+> | `has_key()` on a 5 000-key dict | 44.3 ms / 300 | **0.092 ms** | **~480×** |
 > | Call into a 302-statement function | 16.36 µs | **0.33 µs** | **50×** |
-> | Building a 50 000-item list with `append` | 75.6 s | **0.01 s** | **over 4000×** |
-> | Loop over a 5 000-string list (×20) | 101 ms | **25 ms** | 4.0× |
-> | 1-argument function call | 402 ns | **213 ns** | 1.9× |
-> | 2-argument function call | 700 ns | **338 ns** | 2.1× |
+> | 50 000 `call_func` | 0.0707 s | **0.0184 s** | 3.8× |
+> | 50 000 dict writes | 0.0226 s | **0.0087 s** | 2.6× |
+> | 10 000 string concatenations | 0.00745 s | **0.00378 s** | 2.0× |
+> | 1-argument / 2-argument call | 402 / 700 ns | **213 / 338 ns** | 1.9× / 2.1× |
 > | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 > | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-> | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
-> | `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
+> | `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold | 1.4× |
 >
 > ### What made it faster
 > - 🧠 **Expressions are parsed once, not on every evaluation.** Every statement
 >   stored its expressions as *text* and the interpreter re-lexed and re-parsed
 >   them inside every loop iteration.
-> - 💾 **`__incache__/` — Indent's `__pycache__`.** The parsed program is written
->   beside the source and reused, so imports skip lexing and parsing entirely.
-> - 📞 **Function calls no longer scale with the size of the function.** Resolving
->   a call deep-copied the entire body AST, so a 302-statement function cost
->   16.4 µs per call even when two of its statements ran.
+> - 💾 **`__incache__/` — Indent's `__pycache__`.** A file's parsed program is
+>   written beside the source and reused, so imports skip lexing and parsing.
+>   Edit the file and the cache is invalidated immediately; `--no-cache`,
+>   `INDENT_NO_AST_CACHE=1` and `--clear-cache` are available.
+> - 📞 **Calls no longer scale with the size of the function.** Resolving a call
+>   deep-copied the entire body AST, so a 302-statement function cost 16.4 µs per
+>   call even when two of its statements ran.
 > - 🧩 **Container writes move instead of copying** (`l is append l x`,
->   `d[k] is v`), which turned two quadratic loops into linear ones.
-> - 🧵 **Loops stopped copying their iterable twice**, and `+`/`==`/`in` stopped
->   deep-copying both operands just to test for object methods.
-> - 🔢 **`len`/`has_key` on a container are O(1)** — they used to copy it to
->   measure it.
-> - ⚙️ **Release profile**: fat LTO, one codegen unit, no unwind tables, stripped.
-> - 🧊 **`Value` is 56 bytes, not 128**, and call frames are recycled.
+>   `d[k] is v`), turning two quadratic loops into linear ones — 50 000 appends
+>   went from 52.5 s to 0.0071 s.
+> - 🔢 **Operators stopped copying their operands**, and 🧵 **loops stopped
+>   copying their iterable twice**.
+> - ♻️ **`len()`/`has_key()` on a container are O(1)** — they used to copy it to
+>   measure it — and call frames are recycled instead of reallocated.
+> - 🧊 **`Value` is 56 bytes, not 128**, and ⚙️ the release profile is tuned for
+>   an interpreter (fat LTO, one codegen unit, no unwind tables, stripped).
 >
 > ### Still O(n), honestly
-> Reading a container still copies it: passing a list to a user function is 6.7×
-> faster than 2.2.2 but the copy remains. Copy-on-write values (`Arc<Vec<Value>>`)
-> are the next step — the plan and its measured cost are in `tools/arc_rewrite.py`
-> and the changelog.
->
-> ### 🎉 What's New in 2.5.0
->
-> Third performance release in a row, this one hunting the copies the interpreter
-> made for no reason. Best-of-N, measured against the shipped 2.4.0 build:
->
-> | Benchmark | 2.4.0 | **2.5.0** |
-> |---|---|---|
-> | Loops (ranges, 50k lists, 10k strings, nested) | 56.5 ms | **44.5 ms** (**−21%**) |
-> | Hot-path suite | 122.1 ms | **108.8 ms** (**−11%**) |
-> | Call-heavy suite | 317.4 ms | **292.5 ms** (**−8%**) |
-> | Startup, 5 std imports (interleaved) | 3489 µs | **3350 µs** (−4%) |
-> | 1-argument function call | 0.2375 µs | **0.2131 µs** (−10%) |
->
-> - 🔁 **Loops copied their iterable twice** — `repeat x in xs` cloned the whole
->   collection once to read it and again inside the loop helper. Now once.
-> - ➗ **`+`, `==` and `in` deep-copied both operands** just to check for object
->   methods that almost never exist. A discriminant test replaces the copies.
-> - 🧊 **`Value` is 56 bytes, not 128** (the `Object` maps are boxed) — every
->   variable read, argument and list element moves 2.3× less memory.
-> - ♻️ **Call frames are recycled**, so a call with arguments no longer allocates
->   a `HashMap` and a `Vec` every time.
->
-> **Verification:** 51/51 language tests, 28/28 Rust tests.
->
-> ### What's still slow, honestly
 > Reading a container still copies it: `get_var` clones a whole list or dict, so
-> `len(bigList)`, `key in bigDict` and passing any container to a function are
-> O(n). Fixing that properly means copy-on-write values (`Arc<Vec<Value>>`), which
-> touches ~280 call sites and needs its own verification pass — it is the next big
-> lever, not something to slip in quietly.
->
-> ### 🎉 What's New in 2.4.0
->
-> ### `__incache__/` — Indent's `__pycache__`
-> The first run of a file writes its **parsed program** to `__incache__/<name>.inc`
-> beside the source. Later runs load that instead of reading, pre-processing,
-> lexing and parsing the file — the part that dominates startup once you import
-> anything. Editing the file invalidates the cache immediately (size, mtime and a
-> source hash are checked, plus a format version).
->
-> | Startup (per run) | no cache | **cached** |
-> |---|---|---|
-> | `get CtxSend from discord` (119 KB module) | 4.88 ms | **2.47 ms** |
-> | 5 std imports (`json`, `fs`, `strings`, `discord`, `ai`) | 6.19 ms | **3.26 ms** |
-> | the 51-file test suite | 5.55 s | **3.96 s** |
->
-> It is always optional: read-only installs, full disks, deleted sources and
-> corrupt caches just fall back to parsing. `--no-cache` ignores it for a run,
-> `INDENT_NO_AST_CACHE=1` disables it, `--clear-cache` deletes it.
->
-> ### 🧠 Calls no longer cost more in bigger functions
-> Resolving a function deep-copied its **entire body AST on every call**, so a
-> 302-statement function cost 16.4 µs per call *even when only two of its
-> statements ran*. Function definitions are now shared (`Arc`), so a call is a
-> refcount bump:
->
-> | Case | before | after |
-> |---|---|---|
-> | 20 000 calls into a 302-statement body | 407 ms | **13 ms** (**31×**) |
-> | Per call into that body | 16.36 µs | **0.36 µs** (**45×**) |
-> | Interpreter hot-path suite | 632 ms | **604 ms** |
->
-> Anything with sizable functions — Discord handlers, puzzle handlers, AI
-> helpers, parsers — was paying this tax on every invocation.
->
-> **Verification:** 51/51 language tests (cold and warm), 27/27 Rust tests.
->
-> ### 🎉 What's New in 2.3.0
->
-> **Major optimizations and general improvements coming to Indent in 2.3!**
-> To become a real competitive force, Indent development has focused on
-> improving speed in Indent programs through optimizations of Rust code and
-> functions.
->
-> ### Measured results (release build, same machine)
->
-> | Workload | 2.2.2 | **2.3** | Gain |
-> |---|---|---|---|
-> | Interpreter hot-path suite | 1888 ms | **632 ms** | **≈3.0× faster** |
-> | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
-> | Startup — 5 std imports (`json`, `fs`, `strings`, `discord`, `ai`) | 7.0 ms | **5.8 ms** | 1.2× |
-> | 1-argument function call | 402 ns | **249 ns** | 1.6× |
-> | 2-argument function call | 700 ns | **436 ns** | 1.6× |
-> | Variable update in a loop (`i is i + 1`) | 202 ns | **159 ns** | 1.3× |
-> | String concatenation | 270 ns | **221 ns** | 1.2× |
-> | 100 000 function calls | 136 ms | **49 ms** | 2.8× |
-> | Build a list with 50 000 `append`s | 75.6 s | **0.01 s** | **over 4000×** |
->
-> ### What made it faster
-> - 🧠 **Expressions are parsed once instead of on every evaluation.** Every
->   statement stored its expressions as *text*, and the interpreter re-lexed and
->   re-parsed that text inside every loop iteration. Parsed expressions are now
->   cached (and shared by all modules), with allocation-free fast paths for bare
->   variables and literals. This is the single biggest win.
-> - 🧩 **Containers are moved, not copied, on the common write patterns.**
->   `l is append l x`, `l[i] is v` and `d[k] is v` used to duplicate the whole
->   container on every step — quadratic loops (75 seconds to build a 50 000-item
->   list). They now mutate in place, so those loops are **linear**.
-> - 🔤 **Variables update in place.** Assigning to an existing variable no longer
->   rebuilds its name `String` on every iteration.
-> - 📞 **Cheaper calls.** Positional arguments are bound lazily as a list instead
->   of allocating a map key per parameter per call, and named-argument lookups are
->   skipped when there are none.
-> - ⚙️ **Release profile tuned for an interpreter** — fat LTO, one codegen unit,
->   no unwind tables, stripped binary.
->
-> ### Reproduce it yourself
-> ```sh
-> cargo build --release --manifest-path indent-native/Cargo.toml
-> sh benchmarks/verify.sh        # perf + full test suite
-> ```
-> `benchmarks/` ships the hot-path, call-cost, list-building and index-write
-> benchmarks, plus a README with reference numbers.
->
-> ### Bonus fixes in 2.3
-> - **Circular imports** now raise a catchable `import_error` instead of crashing
->   with a stack overflow.
-> - **`launch "sibling.ind"`** resolves relative to the module's own directory.
-> - **Namespace objects** (`var API = {}` + `API["Fn"] is Fn`) work across modules.
-> - **`call_func_lenient`** — dispatch that adapts to a handler's argument count.
-> - **`discord` package** — `CommandCtx`, working ctx dispatch, arity-tolerant
->   handlers, DM-safe `Ctx`; the `ai` package regains its `AI.*` namespace.
->
-> All of it is additive: 51/51 language tests and 21/21 Rust tests pass, and the
-> copy-semantics of the optimised write paths are pinned by
-> `tests/append_semantics.ind` and `tests/index_write_semantics.ind`.
+> passing one to a *user* function is 6.7× faster than 2.2.2 but the copy remains.
+> `len`/`has_key` were given targeted borrowed fast paths. The general fix is
+> copy-on-write values (`Arc<Vec<Value>>` + `Arc::make_mut`), which makes reads
+> O(1) and keeps the in-place writes O(1); the plan, its audited first stage
+> (`tools/arc_rewrite.py`) and the measured cost of its first attempt are recorded
+> in the changelog.
 >
 > ### 🎉 What's New in 2.2.2
 > - 🐛 **Module functions can use their own imports** — a function exported by a

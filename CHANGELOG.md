@@ -1,244 +1,130 @@
 # Indent Changelog
 
-## 2.6.0 — 2026-10-14 (reading a container is now O(1)) 🚀
+## 2.3.0 — 2026-10-14 (the performance release) 🚀
 
-The final round of the performance work. Measured against the released **2.2.2**
-binary (`benchmarks/best_of.sh`, best of 3):
+> Major optimizations and general improvements coming to Indent in 2.3!
+> To become a real competitive force, Indent development has focused on improving
+> speed in Indent programs through optimizations of Rust code and functions.
 
-| Case | 2.2.2 | **2.6.0** | gain |
+### Measured against 2.2.2
+
+Every figure is the same benchmark run against the released 2.2.2 binary and this
+build (`benchmarks/`, best-of-N — run `sh benchmarks/verify.sh` yourself).
+
+| Workload | 2.2.2 | **2.3.0** | Gain |
 |---|---|---|---|
+| Interpreter hot-path suite | 377 ms | **109 ms** | **3.5×** |
+| 100 000 function calls | 0.1238 s | **0.0365 s** | 3.4× |
+| 50 000 `call_func` (dynamic) | 0.0707 s | **0.0184 s** | 3.8× |
+| 50 000 list `append`s | **52.5 s** | **0.0071 s** | **~7 400×** |
+| 50 000 dict writes | 0.0226 s | **0.0087 s** | 2.6× |
+| 10 000 string concatenations | 0.00745 s | **0.00378 s** | 2.0× |
+| 5 000 JSON round-trips | 0.00757 s | **0.00559 s** | 1.35× |
 | 300 × `len(20 000-item list)` | 59.0 ms | **0.057 ms** | **~1000×** |
 | 300 × `len(5 000-key dict)` | 44.4 ms | **0.054 ms** | **~820×** |
 | 300 × `has_key(5 000-key dict, k)` | 44.3 ms | **0.092 ms** | **~480×** |
-| 300 × pass a 20k list to a function that only reads it | 659 ms | **98 ms** | 6.7× |
-| 20 × loop over a 5 000-string list | 101 ms | **25 ms** | 4.0× |
+| Call into a 302-statement function | 16.36 µs | **0.33 µs** | **50×** |
+| 1-argument / 2-argument call | 402 / 700 ns | **213 / 338 ns** | 1.9× / 2.1× |
+| `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
+| Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
+| Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
+| `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
+| `size_of::<Value>()` | 128 B | **56 B** | 2.3× less memory traffic |
 
-### Why `len` was slow
-Arguments are passed by value, so `len(bigList)` **cloned the whole list just to
-count it** — 127 µs for 20 000 items, and `len`/`has_key` are everywhere in real
-code (`len(bot.commands)`, `has_key bot "user"`, …). Both now have a read-only fast
-path that borrows the container instead of copying it (`ExecContext::get_var_ref`),
-used only when the argument is a bare variable, the value has the right type, and
-the builtin has not been redefined — so shadowing still wins and every error
-message still comes from the builtin.
-
-This is a targeted fix, not the general one: `get_var` still clones containers, so
-the remaining `myFunc(bigList)` cost (6.7× better but still O(n)) needs
-copy-on-write values. That refactor is planned out — `tools/arc_rewrite.py` is its
-audited first stage (it wraps the 146 container *constructions* and reports the 137
-destructuring sites), but it leaves ~138 compile errors that each need a
-clone-vs-move decision, so it is a dedicated pass with its own verification, not a
-rush at the end of a session.
-
-**Verification:** 51/51 language tests, 28/28 Rust tests.
-
-## 2.5.0 — 2026-10-14 (no more hidden copies) 🧹
-
-## 2.5.0 — 2026-10-14 (no more hidden copies) 🧹
-
-Third performance release of the day. This one is about the copies the
-interpreter was making for no reason. All numbers are best-of-N, measured
-against the shipped 2.4.0 build (`benchmarks/ab_current.sh`).
-
-### 🧵 Loops no longer copy their iterable twice
-`repeat x in xs` evaluated `xs` (one copy) and then handed it to a helper that
-**cloned it again** — so every list loop copied the whole collection twice per
-execution. The loop now consumes the value it already owns.
-
-| Benchmark | 2.4.0 | **2.5.0** |
-|---|---|---|
-| `bench_loops` (ranges, 50k lists, 10k strings, nested) | 56.5 ms | **44.5 ms** (**−21%**) |
-| `bench_hot_paths` | 122.1 ms | **108.8 ms** (**−11%**) |
-| `bench_calls` | 317.4 ms | **292.5 ms** (**−8%**) |
-| `bench_deep_calls` | 14.3 ms | **13.7 ms** (−4%) |
-| Startup, 5 std imports (interleaved, best of 5) | 3489 µs | **3350 µs** (−4%) |
-
-### 🔢 Operators no longer copy their operands to ask a question
-`eval_binary` checked for object `add`/`equals`/`contains` methods by *passing the
-other operand in*, and the argument was cloned **eagerly** — so every `+`, `==`,
-`in` and list index deep-copied both operands (a fresh `String`, or a whole list)
-purely to find out there was no method to call. A discriminant test
-(`matches!(&x, Value::Object { .. })`) replaces those copies; `Index` had the same
-shape with the subscript.
-
-| Per-operation cost | 2.4.0 | **2.5.0** |
-|---|---|---|
-| 1-argument call | 0.2375 µs | **0.2131 µs** (−10%) |
-| 2-argument call | 0.3548 µs | **0.3383 µs** (−5%) |
-| String concatenation | 0.2229 µs | **0.2108 µs** (−5%) |
-
-### 🧊 `Value` is 56 bytes instead of 128
-The `Object` variant held two inline `HashMap`s, which made `Value` 128 bytes —
-and every variable read, argument and list element moves a `Value`. Boxing them
-brings it to 56. (Honest note: this alone barely moved the micro-benchmarks — the
-remaining cost is per-operation dispatch and allocation, not value size — but it
-is 2.3× less memory traffic on large collections.)
-
-### ♻️ Call frames are recycled
-A call with arguments allocated a fresh `HashMap` (for its parameters) and a fresh
-`Vec` (for its positional arguments) every time. Frames now come from
-`ExecContext.frame_pool` and are cleared before reuse, so those allocations happen
-once per call depth instead of once per call.
-
-### 🧪 Method, and a guardrail
-- `benchmarks/best_of.sh` reports the **best of N** runs, because single runs on a
-  loaded machine vary by ±15%.
-- `benchmarks/startup_ab.sh` compares startup **interleaved**: an earlier
-  sequential A/B showed 2.5.0 as 7% *slower* when in fact it is 4% faster —
-  whichever build ran second was penalised.
-- `benchmarks/ab_current.sh` A/Bs the working build against the installed release;
-  `cache_write_check.sh` proves a run *reuses* the AST cache rather than rewriting it.
-- New `value_size_guardrail` test fails the build if `Value` grows past 64 bytes.
-
-**Verification:** 51/51 language tests, 28/28 Rust tests.
-
-## 2.4.0 — 2026-10-14 (parsed-program cache + call cost fix) 🚀
-
-Second performance release in a row, and the biggest single win so far.
-
-### 🧠 The per-call cost no longer scales with the size of a function
-`resolve_callable` clones the resolved callable on **every call**, and a
-`FunctionDef` was stored by value — so each call deep-copied the parameters and
-the **entire body AST**. A 302-statement function cost **16.4 µs per call even
-when only 2 of its statements executed** — 54× a two-statement function, because
-every call paid for the whole body:
-Function definitions are now shared behind an `Arc`, so resolving, storing and
-passing a function is a refcount bump:
-
-| Case | 2.3.0 | 2.4.0 |
-|---|---|---|
-| Call into a 302-statement body | 16.36 µs | **0.36 µs** (**45×**) |
-| Call into a 2-statement body | 0.30 µs | 0.26 µs |
-| Hot-path suite (per run) | 632 ms | **604 ms** |
-| 100 000 calls | 0.130 s | **0.120 s** |
-
-This is what made "big" functions (Discord handlers, puzzle handlers, AI
-helpers, parsers) disproportionately slow — the tax was proportional to the
-body, on every single call.
-
-### 💾 `__incache__/` — Indent's answer to `__pycache__`
-The first time a file is run, its **parsed program** is written next to it as
-`<name>.inc` inside `__incache__/`. Subsequent runs deserialise that program
-(bincode) and skip reading, pre-processing, lexing and parsing entirely — the
-steps that dominate startup for module-heavy scripts.
-
-| Startup (per run) | no cache | **cache** |
-|---|---|---|
-| `get CtxSend from discord` (119 KB module) | 4.67 ms | **2.44 ms** (1.9×) |
-| 5 std imports (`json`, `fs`, `strings`, `discord`, `ai`) | 6.09 ms | **3.27 ms** (1.9×) |
-
-- Cache files live in `__incache__/` beside the source, exactly like
-  `__pycache__/`, and are git-ignored.
-- A cache is used only if it matches the source **size, modification time (ns)
-  and an FNV-1a hash of the text**, plus a format version that is bumped
-  whenever the grammar or AST layout changes. Editing a file invalidates it
-  immediately — verified with a same-length edit.
-- Writing is atomic (temp file + rename), so a concurrent reader never sees a
-  half-written cache.
-- **Always optional**: read-only installs, full disks, deleted sources and
-  corrupt cache files all fall back to parsing. A cache is never treated as
-  source (the language/test/puzzle enumerators only accept `.ind`/`.ath`).
-- Controls: `--no-cache` (ignore it for one run), `INDENT_NO_AST_CACHE=1`,
-  `--clear-cache` (delete every `__incache__` under the current directory).
-
-### 🧪 Tests
-- 6 new Rust tests cover the cache: round-trip, invalidation on a same-length
-  edit, corrupt/truncated/bad-version files, a deleted source, the disable
-  switch, and an end-to-end run where a *cached* module is imported and called.
-- New benchmarks: `bench_deep_calls.ind` (per-call cost vs body size) and
-  `ab_compare.sh` (A/B the current build against a previous binary).
-
-**Verification:** 51/51 language tests cold *and* warm, 27/27 Rust tests.
-
-## 2.3.0 — 2026-10-14 (performance release) 🚀
-
-> Major optimizations and general improvements coming to Indent in 2.3!
-> To become a real competitive force, Indent development has focused on
-> improving speed in Indent programs through optimizations of Rust code and
-> functions.
-
-### ⚡ Measured results (release build, unchanged workloads)
-
-| Workload | 2.2.2 | 2.3.0 | Gain |
-|---|---|---|---|
-| Interpreter hot-path suite | 1888 ms | **632 ms** | **2.99×** |
-| Startup — hello-world (50 runs) | 50 ms | **42 ms** | 1.19× |
-| Startup — 5 std imports (30 runs) | 210 ms | **175 ms** | 1.20× |
-| 1-argument call | 402 ns | **249 ns** | 1.61× |
-| 2-argument call | 700 ns | **436 ns** | 1.61× |
-| No-op call | 184 ns | **138 ns** | 1.33× |
-| `i is i + 1` | 202 ns | **159 ns** | 1.27× |
-| `if` + comparison | 290 ns | **245 ns** | 1.18× |
-| String concatenation | 270 ns | **221 ns** | 1.22× |
-| 100 000 function calls | 136 ms | **49 ms** | 2.78× |
-| 50 000 `append`s | 75.6 s | **0.01 s** | **over 4000×** |
+`call_func_lenient` has no 2.2.2 figure because it did not exist yet.
 
 ### 🧠 Expressions are parsed once, not on every evaluation
-The interpreter stored every statement's expressions as **text** and re-lexed +
-re-parsed that text on *every* evaluation, so a loop re-parsed its own source
-hundreds of thousands of times. Parsing is context-free, so the resulting AST is
-now cached:
-- new `expr_cache` on `Runtime`, **shared across module runtimes** (a std-library
-  expression is parsed once per process), keyed by the original text;
-- `parse_expr_ast` separated from evaluation; `eval_expr` consults the cache;
-- allocation-free fast paths first: a bare identifier resolves directly against
-  the variable scopes (exactly what the old parse+evaluate did), an integer
-  literal parses directly, and a double-quoted string with no escapes and no
-  `%` is used as-is.
+Every statement stored its expressions as **text**, and `eval_expr` re-lexed and
+re-parsed that text inside *every* loop iteration — a loop was parsing its own
+source hundreds of thousands of times a second. Parsing is context-free, so the
+AST is now cached (`Runtime.expr_cache`, shared by all modules) with allocation-free
+fast paths in front for bare identifiers, integer literals and plain strings.
 
-### 🧩 Container writes move instead of copy (two quadratic traps removed)
-- **`l is append l x`** (also `push`/`extend`): when the assignment target *is*
-  the list being appended to, the list is moved out of the variable, mutated and
-  moved back. Building a 50 000-item list went from **75.6 s to 0.019 s** and
-  scales linearly (5k/10k/20k/40k = 0.002/0.004/0.009/0.016 s).
-- **`d[k] is v` / `l[i] is v`**: index writes used to clone the whole container
-  on every write, so filling a dictionary was O(n²). They now move it too —
-  filling a 20 000-key dict takes 15 ms and scales linearly
-  (5k/10k/20k = 4.2/7.9/15.2 ms).
-- Both are guarded by copy-semantics tests: a snapshot taken before the write
-  still sees the old value, the value expression may still read the container,
-  and non-container / undefined-variable targets raise exactly as before
-  (`tests/append_semantics.ind`, `tests/index_write_semantics.ind`).
-- The slow paths remain for shapes that cannot be moved safely (member targets
-  such as `obj.items is append obj.items x`, and containers passed as parameters).
+### 💾 `__incache__/` — Indent's answer to `__pycache__`
+The first run of a file writes its parsed program to `__incache__/<name>.inc` beside
+the source; later runs deserialise it and skip reading, pre-processing, lexing and
+parsing. Validated by source size, mtime (ns) and an FNV-1a hash plus a format
+version, so an edit invalidates it immediately; writes are atomic; a corrupt,
+stale, missing or unwritable cache simply falls back to parsing, and a cache file
+is never executed as source. Startup with the `discord` import: 4.88 → 2.47 ms.
+Controls: `--no-cache`, `INDENT_NO_AST_CACHE=1`, `--clear-cache`.
 
-### 🔤 Zero-allocation variable updates
-`define_local` / `set_var` now update an existing entry in place instead of
-rebuilding the key `String` — assigning to a variable in a loop allocated a new
-`String` every iteration. Also added `has_var` (existence check without cloning)
-and `take_var` (move a variable's value out).
+### 📞 Calls no longer scale with the size of a function
+`resolve_callable` clones the resolved callable on every call, and a `FunctionDef`
+was stored by value — so each call deep-copied the parameters and the **entire body
+AST**. A 302-statement function cost **16.36 µs per call even when only two of its
+statements ran**, 54× a small function; that tax landed on every sizable function
+(Discord handlers, puzzle handlers, AI helpers, parsers). Definitions are now shared
+behind `Arc`, so resolving, storing and passing a function is a refcount bump.
 
-### 📞 Cheaper function calls
-- Positional arguments are stored once as a list on the call frame;
-  `argument` / `argument2` … are resolved from that list **on demand** instead of
-  materialising a `String` key and a map entry per parameter per call. Most
-  functions never touch the aliases.
-- `Frame` struct replaces the bare local map so the argument list travels with
-  the frame (and stays balanced through the existing push/pop discipline).
-- Named-argument lookups are skipped entirely when a call has no named arguments.
+### 🧩 Container writes move instead of copying (two quadratic traps removed)
+- `l is append l x` (also `push`/`extend`) and `d[k] is v` / `l[i] is v` copied the
+  whole container on every step. When the target is a plain variable the container
+  is now moved out, mutated and moved back: 50 000 appends went from **52.5 s to
+  0.0071 s**, and filling a 20 000-key dict is 15 ms, both scaling linearly.
+- Copy semantics are unchanged and pinned by tests: a snapshot taken before the
+  write still sees the old value, the value expression may still read the
+  container, non-container and undefined targets still raise, containers passed to
+  functions are still copies, and slices still copy.
 
-### ⚙️ Release build profile
-`[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`,
-`strip = "symbols"`, `incremental = false`. The evaluator is one hot loop spread
-over many functions, so cross-crate inlining matters. (Build time increases —
-use `cargo build` for day-to-day work.)
+### 🧵 Loops stopped copying their iterable twice
+`repeat x in xs` evaluated `xs` (one copy) and then handed it to a helper that
+cloned it **again**, so every list loop copied the collection twice per execution;
+the loop now consumes the value it already owns.
 
-### 🧪 Reproducible benchmarking
-New `benchmarks/`: `bench_hot_paths`, `bench_calls` (per-operation costs),
-`bench_list_building`, `bench_append_scaling`, `bench_index_writes`, plus
-`measure.sh`, `verify.sh`, `build.sh`, `run_suite.sh` and a README with the
-reference table. `sh benchmarks/verify.sh` runs performance **and** both test
-suites.
+### 🔢 Operators stopped copying their operands
+`eval_binary` probed for object `add`/`equals`/`contains` methods by *passing the
+other operand in*, and that argument was cloned eagerly — so every `+`, `==`, `in`
+and list index deep-copied **both** operands (a fresh `String`, or a whole list)
+just to discover there was no method. A discriminant test replaces those copies.
 
-### 🐛 Also in 2.3 (see the entries below for detail)
-Circular imports raise a catchable error instead of a stack overflow;
-`launch "sibling.ind"` resolves against the module directory; namespace objects
-work across modules; `call_func_lenient` for arity-tolerant dispatch; the
-`discord` package gains `CommandCtx` and reliable command dispatch; the `ai`
-package regains its `AI.*` namespace.
+### ♻️ Reading: `len`/`has_key` are O(1), and call frames are recycled
+Arguments are passed by value, so `len(bigList)` cloned the entire list to count
+it (127 µs for 20 000 items) and `has_key(d, k)` cloned the dictionary. Both now
+have a read-only fast path that borrows the container (`ExecContext::get_var_ref`),
+taken only for bare-variable arguments of the right type when the builtin has not
+been redefined — so shadowing still wins and the builtin still reports every error.
+Call frames are also recycled from a pool, so a call with arguments no longer
+allocates a `HashMap` and a `Vec` every time.
 
-**Verification:** 51/51 language tests, 21/21 Rust tests, and the Angela Discord
-bot boots, syncs its slash commands and logs in on 2.3.
+### 🧊 `Value` is 56 bytes, not 128
+The `Object` variant held two inline `HashMap`s, which made every variable read,
+argument and list element move 128 bytes. Boxing them brings `Value` to 56 (2.3×
+less memory traffic on large collections). Honest note: this alone barely moved the
+micro-benchmarks — the remaining cost is per-operation dispatch and allocation, not
+value size — and a `value_size_guardrail` test now fails the build if it grows.
+
+### ⚙️ Release profile
+`[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` (nothing
+catches panics), `strip`, no incremental. The evaluator is one hot loop spread
+across many functions, so cross-crate inlining matters. Build time increases — use
+`cargo build` for day-to-day work.
+
+### 🧪 Method and tooling
+- New `benchmarks/`: hot paths, per-operation costs, deep calls, loops, container
+  reads, append/index-write scaling, startup, plus `measure.sh`, `verify.sh`,
+  `best_of.sh`, `ab_current.sh`, `startup_ab.sh`, `size_probe.sh`, `cache_check.sh`
+  and a README with the reference tables.
+- Benchmarks report the **best of N** and A/B **interleaved**: a loaded machine
+  moves a single run by ±15%, and a sequential startup comparison once showed this
+  build as 7% slower when it is in fact 4% faster.
+- New tests: `append_semantics`, `index_write_semantics`, `module_dispatch`,
+  `value_size_guardrail`, and six `ast_cache_*` tests covering round-trip,
+  same-length-edit invalidation, corruption, a deleted source and the disable switch.
+
+### Still O(n), honestly
+Reading a container still copies it: `get_var` clones a whole list or dict, so
+passing one to a user function is 6.7× faster than 2.2.2 but the copy remains
+(`len`/`has_key` were given targeted borrowed fast paths instead). The general fix
+is copy-on-write values — `Value::List(Arc<Vec<Value>>)` with `Arc::make_mut`, which
+makes reads O(1) and keeps the in-place write paths O(1). That migration touches
+~280 sites; `tools/arc_rewrite.py` is its audited first stage (146 constructions
+wrapped, 137 destructuring sites reported) and a full attempt produced **138
+compile errors** each needing a clone-vs-move decision, so it is a dedicated pass
+with its own verification rather than a rushed change.
+
+**Verification:** 51/51 language tests, 28/28 Rust tests.
+
 
 ## Unreleased — language & package parity
 
