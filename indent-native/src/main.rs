@@ -1480,8 +1480,8 @@ impl Runtime {
 //
 // The cache is always optional: any failure to read, validate or write it simply
 // falls back to parsing, and `INDENT_NO_AST_CACHE=1` disables it entirely. Cache
-// files are never treated as source (the language/test/puzzle enumerators only
-// accept `.ind`/`.ath`).
+// files are never treated as source (every file enumerator only accepts
+// `.ind`/`.ath`).
 
 /// Bumped whenever the grammar, `Stmt`/`Expr` layout or the parse pipeline
 /// changes, so old cache files are ignored instead of misread. (Python calls
@@ -1613,7 +1613,7 @@ fn store_cached_program(file: &Path, source: &str, program: &[Stmt]) {
     let Some(cache_path) = cache_path_for(file) else {
         return;
     };
-    let Ok(payload) = bincode::serialize(&program.to_vec()) else {
+    let Ok(payload) = bincode::serialize(program) else {
         return;
     };
     let Some(dir) = cache_path.parent() else { return };
@@ -10572,8 +10572,9 @@ fn math_round_builtin(value: &Value, digits: &Value) -> Result<Value, String> {
 /// `json_loads`/`json_parse`, and the previous `&JsonValue` version cloned every
 /// string, every object key and every array element, then let each `HashMap`
 /// grow by rehashing from empty. Object keys and strings are now moved, and the
-/// containers are reserved up front. JSON is the hot path for every web, AI and
-/// Discord call, so the allocation count here is a first-order cost.
+/// containers are reserved up front. Decoding a JSON response is on the hot path
+/// of every API call a script makes, so the allocation count here is a
+/// first-order cost.
 fn json_to_value(value: JsonValue) -> Value {
     match value {
         JsonValue::Null => Value::Empty,
@@ -10864,7 +10865,7 @@ fn value_to_json(value: &Value) -> JsonValue {
 /// Shared HTTP client — created once and reused for every request. Reusing the
 /// client keeps the connection pool (and TLS sessions) alive, so successive
 /// calls to the same host skip the TCP + TLS handshake. This is the single
-/// biggest HTTP performance win for bots (Discord) and AI clients.
+/// biggest HTTP performance win for a script that polls the same host.
 static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
     reqwest::blocking::Client::builder()
         .pool_max_idle_per_host(16)
@@ -13823,7 +13824,11 @@ fn preprocess(source: &str) -> Result<Vec<SourceLine>, String> {
         }
 
         let mut clean = strip_inline_comment(raw);
-        clean = clean.replace('\t', "    ");
+        // `str::replace` allocates a fresh String even when there is nothing to
+        // replace, on every line of every file that is parsed.
+        if clean.contains('\t') {
+            clean = clean.replace('\t', "    ");
+        }
         if clean.trim().is_empty() {
             continue;
         }
@@ -13844,7 +13849,9 @@ fn preprocess(source: &str) -> Result<Vec<SourceLine>, String> {
 }
 
 fn strip_inline_comment(raw: &str) -> String {
-    let mut out = String::new();
+    // The common case has no comment to strip, so the result is the whole line.
+    // Sizing the buffer up front keeps this to a single allocation per line.
+    let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     let mut in_str = false;
     let mut quote = '\0';
@@ -15234,8 +15241,8 @@ fn is_keyword(s: &str) -> bool {
 /// is preprocessed into space-separated-call form (lowercase structural forms
 /// only). Capitalized identifiers such as `Get`, `Ask`, or `Set` are NOT
 /// structural, so a user function named `Get` can be called as `Get a b` —
-/// fixing packages like `discord` whose `Get`/`GetUser` helpers were
-/// unreachable without parentheses.
+/// which previously made helpers such as `Get`/`GetUser` unreachable without
+/// parentheses.
 fn is_structural_keyword(s: &str) -> bool {
     matches!(
         s,
@@ -17296,8 +17303,8 @@ fn main() {
         // Run with the script's directory as the working directory so that
         // relative paths in the script (file ops, os_list_dir, subprocesses)
         // resolve relative to the script — the same behavior as running
-        // `cd <script-dir> && indent bot.ind`. This makes
-        // `indent run /abs/path/bot.ind` work from any terminal directory.
+        // `cd <script-dir> && indent <script>.ind`. This makes
+        // `indent run /abs/path/<script>.ind` work from any terminal directory.
         let _ = env::set_current_dir(base_dir);
         load_project_environment(base_dir);
     }
