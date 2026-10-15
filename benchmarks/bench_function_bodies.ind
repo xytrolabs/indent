@@ -1,0 +1,57 @@
+#! Cost probe: function bodies.
+#!
+#! Until this stage only *loops* were compiled: a call's body — its straight-line
+#! statements, its `give`, and the loops inside it — was still walked statement by
+#! statement. These are the shapes a call-heavy program hits: a body that is one
+#! expression, one with an if-chain and two exits, and one whose whole body is a
+#! loop (which now runs as part of the function's own stream).
+#!
+#! Expected on N = 50000: even 25000, odd 25000, acc 2499950000
+#! (2 * sum(0..49999)), total 2499950000 (the same sum, twice).
+
+var N int = 50000
+
+fun twice x
+    give x + x
+
+fun classify n
+    if n % 2 == 0
+        give "even"
+    give "odd"
+
+var total int = 0
+var i int = 0
+fun add_range n
+    i is 0
+    repeat while i < n
+        total is total + i
+        i is i + 1
+
+#! ---- a body that is one expression ----
+var acc int = 0
+var t0 float = time_perf_counter
+repeat N
+    acc is acc + twice(Reps)
+var t1 float = time_perf_counter
+say "body expr     " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a body with a branch and two exits ----
+var even int = 0
+var odd int = 0
+var t2 float = time_perf_counter
+repeat N
+    if classify(Reps) == "even"
+        even is even + 1
+    otherwise
+        odd is odd + 1
+var t3 float = time_perf_counter
+say "body branch   " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+#! ---- a body whose whole job is a loop ----
+var t4 float = time_perf_counter
+repeat 2
+    add_range(50000)
+var t5 float = time_perf_counter
+say "body loop     " + string((t5 - t4) * 1000000000.0 / float(100000)) + " ns/op"
+
+say "checks " + string(acc) + " " + string(even) + " " + string(odd) + " " + string(total)

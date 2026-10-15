@@ -932,6 +932,29 @@ fn stmts_contain_yield(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_contain_yield)
 }
 
+/// Whether a statement holds a loop, at any depth.
+///
+/// Used to decide whether a function body is worth compiling. Measured, a body
+/// whose work is a loop runs several times faster as instructions, while a body of
+/// a couple of straight-line statements pays the slot setup, the compile and the
+/// call's variable hand-over for less work than the tree-walker does — `give x + x`
+/// came out 1.6x *slower*. Only `Repeat` and the `if` chains that can contain one
+/// are searched: anything else is either refused by the compiler or too rare to
+/// matter.
+fn stmt_contain_loop(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Repeat { .. } => true,
+        Stmt::IfChain { branches, .. } => {
+            branches.iter().any(|(_, body)| stmts_contain_loop(body))
+        }
+        _ => false,
+    }
+}
+
+fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contain_loop)
+}
+
 /// Convert an *owned* iterable into its items without copying it again.
 ///
 /// `iterable_items` takes a reference and clones the whole list/set, and loops
@@ -3260,6 +3283,12 @@ enum VmInstr {
     CheckCount { slot: u16 },
     /// Pop an iterable, materialise it for a nested `for`, or fail with `msg`.
     IterPrepare { items: u16, index: u16, msg: String },
+    /// Pop the value a `give` produced and leave the stream with it. The value goes
+    /// into `value` and `flag` records that a `give` ran, so the runner can tell a
+    /// returned `empty` from a body that fell off its end.
+    Return { value: u16, flag: u16 },
+    /// The end of a function body, reached only when no `give` ran.
+    EndBody { declared: bool },
     /// Pop `argc` arguments, call `callee` with them, push the result.
     Call { callee: String, argc: u16 },
     /// Fetch the next item of a materialised iterable: bind it, advance the
@@ -3305,6 +3334,30 @@ struct VmProgram {
     /// An inner level shadows the outer one, which is what makes `Reps` inside a
     /// nested body mean the inner counter.
     reps_stack: Vec<u16>,
+    /// Whether `give` may compile. Only a function body can return; a loop the VM
+    /// runs on its own has to hand `Control` values back to `exec_repeat` instead.
+    allow_return: bool,
+    /// Scratch slots for a function body: the value `give` produced, and a flag that
+    /// records whether one ran at all.
+    return_slot: Option<(u16, u16)>,
+}
+
+impl VmProgram {
+    /// An empty program. The slots, the `owned` set and the level stack are filled
+    /// in by whichever compiler builds it.
+    fn new() -> Self {
+        Self {
+            instrs: Vec::new(),
+            slots: Vec::new(),
+            reps_slot: None,
+            item_slot: None,
+            items_slot: None,
+            owned: Vec::new(),
+            reps_stack: Vec::new(),
+            allow_return: false,
+            return_slot: None,
+        }
+    }
 }
 
 /// Slot index for `name`, adding it if this body has not used it yet.
@@ -3444,15 +3497,7 @@ fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
 /// control flow (`stop`, `next`, `give`, nested loops, `if`) is refused, so a
 /// compiled body always runs to completion and yields `Control::None`.
 fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
-    let mut prog = VmProgram {
-        instrs: Vec::new(),
-        slots: Vec::new(),
-        reps_slot: None,
-        item_slot: None,
-        items_slot: None,
-        owned: Vec::new(),
-        reps_stack: Vec::new(),
-    };
+    let mut prog = VmProgram::new();
     // The counter is allocated up front rather than discovered in the body: the
     // runner publishes it either way, and a nested loop's shadow slot of the same
     // name can then never be mistaken for this one.
@@ -3509,15 +3554,7 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
     if vm_mentions_reps(cond) {
         return None;
     }
-    let mut prog = VmProgram {
-        instrs: Vec::new(),
-        slots: Vec::new(),
-        reps_slot: None,
-        item_slot: None,
-        items_slot: None,
-        owned: Vec::new(),
-        reps_stack: Vec::new(),
-    };
+    let mut prog = VmProgram::new();
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
     prog.owned.push(reps);
@@ -3573,15 +3610,7 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
 /// exist beforehand, and neither survives the loop (the tree-walker's loop frame
 /// is popped too).
 fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
-    let mut prog = VmProgram {
-        instrs: Vec::new(),
-        slots: Vec::new(),
-        reps_slot: None,
-        item_slot: None,
-        items_slot: None,
-        owned: Vec::new(),
-        reps_stack: Vec::new(),
-    };
+    let mut prog = VmProgram::new();
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
     prog.owned.push(reps);
@@ -3777,6 +3806,43 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
     true
 }
 
+/// Compile a function body.
+///
+/// The same statements a loop body takes, plus `give` — which is a `Return` here,
+/// so a `give` inside a loop in the body is the same instruction. Everything else
+/// about a call is untouched: the frame, the parameters, the arity and default
+/// handling and the return-type coercion all stay in `invoke_function`, which only
+/// swaps how the body runs.
+fn vm_compile_function(body: &[Stmt], declared_return: bool, rt: &Runtime) -> Option<VmProgram> {
+    if !stmts_contain_loop(body) {
+        return None;
+    }
+    let mut prog = VmProgram::new();
+    prog.allow_return = true;
+    let value = vm_scratch(&mut prog.slots);
+    let flag = vm_scratch(&mut prog.slots);
+    prog.return_slot = Some((value, flag));
+    if !vm_compile_stmts(body, &mut prog, rt) {
+        return None;
+    }
+    prog.instrs.push(VmInstr::EndBody {
+        declared: declared_return,
+    });
+    Some(prog)
+}
+
+/// Run a compiled function body.
+///
+/// `give` is `Control::Return` and falling off the end is `Control::None` — the two
+/// outcomes `exec_block` reports — so `invoke_function` keeps deciding what they
+/// mean (an implicit `empty`, or the error for a body that declares a return type).
+fn vm_run_body(prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<Control, String> {
+    Ok(match vm_run(None, None, prog, ctx)? {
+        Some(v) => Control::Return(v),
+        None => Control::None,
+    })
+}
+
 /// Whether an expression's text mentions the bare name `Reps`.
 ///
 /// A word scan rather than an AST walk: a false positive only means the loop is
@@ -3879,6 +3945,19 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 if !vm_compile_nested(mode, body, prog, rt) {
                     return false;
                 }
+            }
+            // `give`, which only a function body can do. It is a `Return` here, so a
+            // `give` inside a loop in the body is the same instruction, and the
+            // frames those loops pushed are unwound by the runner.
+            Stmt::Give { expr, .. } if prog.allow_return => {
+                let (value, flag) = match prog.return_slot {
+                    Some(slots) => slots,
+                    None => return false,
+                };
+                if !vm_compile_text(expr, prog, rt) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::Return { value, flag });
             }
             // A call standing on its own line: the result is discarded, as
             // `exec_stmt` does.
@@ -4047,13 +4126,13 @@ const LOOP_MAX_ITERS: usize = 100_000;
 /// Run a compiled `repeat N` body in the frame `exec_repeat` already pushed.
 /// The runner supplies the iterations and writes `Reps` before each of them.
 fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<(), String> {
-    vm_run(Some(n), None, prog, ctx)
+    vm_run(Some(n), None, prog, ctx).map(|_| ())
 }
 
 /// Run a compiled loop whose instruction stream carries its own jumps and counter,
 /// so it runs exactly once — `while` and `until`.
 fn vm_run_stream(prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<(), String> {
-    vm_run(None, None, prog, ctx)
+    vm_run(None, None, prog, ctx).map(|_| ())
 }
 
 /// Run a compiled `for` loop over an already-materialised iterable.
@@ -4063,7 +4142,7 @@ fn vm_run_for(
     ctx: &mut ExecContext<'_>,
 ) -> Result<(), String> {
     let preload = prog.items_slot.map(|s| (s, Value::List(items)));
-    vm_run(None, preload, prog, ctx)
+    vm_run(None, preload, prog, ctx).map(|_| ())
 }
 
 fn vm_run(
@@ -4071,7 +4150,7 @@ fn vm_run(
     preload: Option<(u16, Value)>,
     prog: &VmProgram,
     ctx: &mut ExecContext<'_>,
-) -> Result<(), String> {
+) -> Result<Option<Value>, String> {
     // A nested loop's stream may have pushed a frame that an error skipped the
     // `PopFrame` for, so drop back to the depth the loop started at.
     let depth = ctx.frames.len();
@@ -4271,6 +4350,28 @@ fn vm_run(
                         values[*index as usize] = Value::Int(0);
                         ip += 1;
                     }
+                    VmInstr::Return { value, flag } => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        values[*value as usize] = stack[sp].clone();
+                        values[*flag as usize] = Value::Bool(true);
+                        // Only a function body emits this, and its stream runs exactly
+                        // one pass, so leaving the instruction loop is leaving the
+                        // program — and it skips the `EndBody` below the last
+                        // instruction, which is how a body that returned avoids the
+                        // "declares a return type" error. The frames its loops pushed
+                        // are unwound after the run.
+                        ip = prog.instrs.len();
+                    }
+                    VmInstr::EndBody { declared } => {
+                        // Reached only when no `give` ran.
+                        if *declared {
+                            return Err(
+                                "Function declares a return type but no Give statement returned a value"
+                                    .to_string(),
+                            );
+                        }
+                        break;
+                    }
                     VmInstr::JumpIfFalse(target) => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
                         ip = if stack[sp].to_bool() { ip + 1 } else { *target };
@@ -4318,7 +4419,13 @@ fn vm_run(
         }
         ctx.set_var(name, values[i].clone());
     }
-    outcome
+    outcome?;
+    Ok(match prog.return_slot {
+        Some((value, flag)) if values[flag as usize].to_bool() => {
+            Some(values[value as usize].clone())
+        }
+        _ => None,
+    })
 }
 
 fn vm_overflow() -> String {
@@ -5640,7 +5747,7 @@ fn invoke_function(
         g.insert("__gen_values__".to_string(), Value::List(values));
         Ok(Value::Dict(g))
     } else {
-        match exec_block(&f.body, ctx)? {
+        match resumed_body(f, ctx)? {
             Control::Return(v) => {
                 if let Some(rt) = &f.return_type {
                     let checked = coerce_type(0, "return", rt, v)
@@ -5667,6 +5774,27 @@ fn invoke_function(
 
     ctx.pop_frame();
     output
+}
+
+/// Run a function body, compiled when the VM can take it and on the tree-walker
+/// otherwise.
+///
+/// The choice is invisible to the caller: the body sees the frame `invoke_function`
+/// already built, and reports the same `Control` either way. A body the VM cannot
+/// compile — one with `var`, `do:`/`catch`, `yield`, `stop`/`next`, or a statement
+/// it has no instruction for — simply runs as it did before.
+fn resumed_body(
+    f: &FunctionDef,
+    ctx: &mut ExecContext<'_>,
+) -> Result<Control, String> {
+    if vm_enabled() {
+        if let Some(prog) = vm_compile_function(&f.body, f.return_type.is_some(), ctx.rt) {
+            if vm_names_bound(&prog, ctx) {
+                return vm_run_body(&prog, ctx);
+            }
+        }
+    }
+    exec_block(&f.body, ctx)
 }
 
 fn invoke_callable_expr(
