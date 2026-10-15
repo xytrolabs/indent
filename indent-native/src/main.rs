@@ -1219,6 +1219,28 @@ struct Runtime {
     /// Bumped by every `class` statement. `method_tables` entries are only valid
     /// while this matches the value they were built with.
     class_gen: u64,
+    /// Direct-mapped cache of recently evaluated expressions.
+    ///
+    /// `eval_expr` receives raw *text*, so on every evaluation it has to work
+    /// out what that text is: a bare variable name, a literal, or something to
+    /// parse — two scans, then the parse cache's lock and a hash of the text.
+    /// A loop body repeats the same handful of texts, so caching the
+    /// *classification* per text removes all of that from the inner loop.
+    ///
+    /// A previous version of this was one entry, justified by the idea that a
+    /// bigger table "would cost more to search than the compare it saves". That
+    /// had it backwards: a loop body with more than one statement *alternates*
+    /// its expression texts, so the single entry was replaced before it could
+    /// ever be reused and the memo missed on nearly every evaluation. Keying by
+    /// text instead of by recency is what makes it work.
+    ///
+    /// It lives on the runtime rather than on `ExecContext` because it is keyed
+    /// purely by text: the same text classifies the same way in every frame, and
+    /// a context is created for every method call, every spawned task and every
+    /// served HTTP request. Per-context, that was a fresh ~3 KB table of 32
+    /// `Option<ExprMemoSlot>`s (each holding a `String`) allocated and dropped
+    /// each time, and method bodies never got to reuse a single hit.
+    expr_memo: Vec<Option<ExprMemoSlot>>,
     debugger: Option<Debugger>,
     async_funcs: HashSet<String>,
 }
@@ -1248,6 +1270,7 @@ impl Runtime {
             expr_cache: Arc::new(RwLock::new(Map::default())),
             method_tables: HashMap::new(),
             class_gen: 0,
+            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1274,6 +1297,10 @@ impl Runtime {
         // so a method body that instantiates objects does not rebuild them.
         temp.method_tables = std::mem::take(&mut self.method_tables);
         temp.class_gen = self.class_gen;
+        // The expression memo is text-keyed and frame-independent, so the method
+        // body shares the caller's — its expressions then hit on the second call
+        // instead of every call starting from an empty table.
+        temp.expr_memo = std::mem::take(&mut self.expr_memo);
         temp.module_dir = self.module_dir.clone();
         temp.expr_cache = Arc::clone(&self.expr_cache);
         temp.module_cache = Arc::clone(&self.module_cache);
@@ -1290,6 +1317,7 @@ impl Runtime {
         // it; taking the newer generation is the safe direction (a stale entry
         // just gets rebuilt, where a too-new one would be trusted).
         self.class_gen = temp.class_gen;
+        self.expr_memo = temp.expr_memo;
     }
 
     /// Merged method table for a class: its own methods plus every ancestor's,
@@ -1332,6 +1360,7 @@ impl Runtime {
             expr_cache: Arc::new(RwLock::new(Map::default())),
             method_tables: HashMap::new(),
             class_gen: 0,
+            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1350,6 +1379,7 @@ impl Runtime {
             expr_cache: Arc::new(RwLock::new(Map::default())),
             method_tables: HashMap::new(),
             class_gen: 0,
+            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1375,6 +1405,7 @@ impl Runtime {
             expr_cache: exprs,
             method_tables: HashMap::new(),
             class_gen: 0,
+            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1840,7 +1871,7 @@ struct ExprMemoSlot {
     kind: ExprKind,
 }
 
-/// Slots in `ExecContext::expr_memo`. A power of two so the index is a mask.
+/// Slots in `Runtime::expr_memo`. A power of two so the index is a mask.
 ///
 /// Measured: building this same code with the constant set to 1 (which restores
 /// by-recency behaviour) and running the two binaries interleaved, best of 5,
@@ -1879,21 +1910,6 @@ struct ExecContext<'a> {
     /// an allocation optimisation: contents are always cleared before reuse, so
     /// a recycled frame can never leak a variable or a positional argument.
     frame_pool: Vec<Frame>,
-    /// Direct-mapped cache of recently evaluated expressions.
-    ///
-    /// `eval_expr` receives raw *text*, so on every evaluation it has to work
-    /// out what that text is: a bare variable name, a literal, or something to
-    /// parse — two scans, then the parse cache's lock and a hash of the text.
-    /// A loop body repeats the same handful of texts, so caching the
-    /// *classification* per text removes all of that from the inner loop.
-    ///
-    /// A previous version of this was one entry, justified by the idea that a
-    /// bigger table "would cost more to search than the compare it saves". That
-    /// had it backwards: a loop body with more than one statement *alternates*
-    /// its expression texts, so the single entry was replaced before it could
-    /// ever be reused and the memo missed on nearly every evaluation. Keying by
-    /// text instead of by recency is what makes it work.
-    expr_memo: Vec<Option<ExprMemoSlot>>,
     collect_yields: bool,
     yielded_values: Vec<Value>,
 }
@@ -1908,18 +1924,17 @@ impl<'a> ExecContext<'a> {
             rt,
             frames: vec![],
             frame_pool: vec![],
-            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             collect_yields: false,
             yielded_values: vec![],
         }
     }
 
-    /// Look up `expr` in the memo, returning a clone of its cached
+    /// Look up `expr` in the runtime's memo, returning a clone of its cached
     /// classification. A collision returns `None` (the text did not match),
     /// which just means the slow path runs.
     #[inline]
     fn memo_get(&self, expr: &str) -> Option<ExprKind> {
-        let slot = self.expr_memo[expr_memo_index(expr)].as_ref()?;
+        let slot = self.rt.expr_memo[expr_memo_index(expr)].as_ref()?;
         if slot.text == expr {
             Some(slot.kind.clone())
         } else {
@@ -1930,7 +1945,7 @@ impl<'a> ExecContext<'a> {
     /// Remember how `expr` was classified, replacing whatever held its slot.
     #[inline]
     fn memo_put(&mut self, expr: &str, kind: ExprKind) {
-        match &mut self.expr_memo[expr_memo_index(expr)] {
+        match &mut self.rt.expr_memo[expr_memo_index(expr)] {
             Some(slot) if slot.text == expr => slot.kind = kind,
             slot => {
                 *slot = Some(ExprMemoSlot {
