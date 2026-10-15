@@ -1923,6 +1923,74 @@ fn try_inplace_list_append(
     }
 }
 
+/// `s is s + x` — the idiomatic way to build a string in a loop.
+///
+/// Without this, every step goes through `eval_binary`'s `(Str, y)` arm, which
+/// is `format!("{}{}", s, y)`: a brand-new `String` holding everything
+/// accumulated so far. Building an n-character string therefore copied O(n²)
+/// bytes. Appending into the existing buffer makes it O(n).
+///
+/// The match is deliberately conservative, and anything it is not certain about
+/// falls through to the normal path, which is always correct:
+///   * only `name + <rest>` with a real separator follows the name, so a
+///     variable called `s` is never matched against the expression `sum + 1`;
+///   * only when the variable *already holds a string*, and that is checked
+///     before the right-hand side is evaluated, so an expression with side
+///     effects can never be evaluated twice.
+fn try_inplace_string_concat(
+    name: &str,
+    value: &ValueSource,
+    ctx: &mut ExecContext<'_>,
+) -> Option<Result<Control, String>> {
+    if name.is_empty() || name.contains('.') || name.contains('[') || !is_bare_identifier(name) {
+        return None;
+    }
+    let text = match value {
+        ValueSource::Expr(text) => text.as_str(),
+        _ => return None,
+    };
+    let rhs_text = match text
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix(" + "))
+    {
+        Some(rhs) if !rhs.is_empty() => rhs,
+        _ => return None,
+    };
+
+    if !matches!(ctx.get_var_ref(name), Some(Value::Str(_))) {
+        return None;
+    }
+
+    // The right-hand side may read `name` itself (`s is s + s`), so it has to be
+    // evaluated while the old value is still in place.
+    let rhs = match eval_expr(rhs_text, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+
+    match ctx.take_var(name) {
+        Some(Value::Str(mut s)) => {
+            use std::fmt::Write as _;
+            // `write!` appends the `Display` form straight into the buffer, so
+            // the output is byte-for-byte what `format!("{}{}", s, rhs)`
+            // produced, without the intermediate allocation (and without
+            // copying the accumulated prefix a second time). Writing into a
+            // `String` cannot fail, so the result is ignored.
+            let _ = write!(s, "{}", rhs);
+            ctx.set_var(name, Value::Str(s));
+            Some(Ok(Control::None))
+        }
+        // The right-hand side reassigned the variable to something that is not a
+        // string. Put it back and let the normal path decide, exactly as if
+        // this fast path had not been offered at all.
+        Some(other) => {
+            ctx.set_var(name, other);
+            None
+        }
+        None => None,
+    }
+}
+
 fn eval_value_source(value: &ValueSource, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     match value {
         ValueSource::Expr(expr) => eval_expr(expr, ctx),
@@ -2029,6 +2097,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
         }
         Stmt::Assign { name, value, .. } => {
             if let Some(result) = try_inplace_list_append(name, value, ctx) {
+                return result;
+            }
+            if let Some(result) = try_inplace_string_concat(name, value, ctx) {
                 return result;
             }
             let v = eval_value_source(value, ctx)?;
@@ -10739,7 +10810,19 @@ fn read_input_line(prompt: &str) -> Result<String, String> {
 }
 
 fn coerce_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value, String> {
-    match ty.to_lowercase().as_str() {
+    // Type names are lowercase in virtually every program, and this runs for
+    // every `var` declaration — including one inside a loop body, so once per
+    // iteration — and for every typed parameter of every call. `to_lowercase`
+    // allocates a `String`, so only pay for it when there is actually an
+    // uppercase byte to fold.
+    let lowered;
+    let ty = if ty.bytes().any(|b| b.is_ascii_uppercase()) {
+        lowered = ty.to_lowercase();
+        lowered.as_str()
+    } else {
+        ty
+    };
+    match ty {
         "string" => match value {
             Value::Str(_) => Ok(value),
             _ => Err(format!("Line {line}: variable '{name}' expects string")),
@@ -10783,7 +10866,16 @@ fn coerce_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value,
 }
 
 fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value, String> {
-    match ty.to_lowercase().as_str() {
+    // See `coerce_type`: avoid the allocating `to_lowercase` for the normal
+    // already-lowercase type name.
+    let lowered;
+    let ty = if ty.bytes().any(|b| b.is_ascii_uppercase()) {
+        lowered = ty.to_lowercase();
+        lowered.as_str()
+    } else {
+        ty
+    };
+    match ty {
         "string" => Ok(Value::Str(value.to_string())),
         "int" => match value {
             Value::Int(_) => Ok(value),
@@ -11378,6 +11470,14 @@ fn resolve_var_chain(parts: &[String], ctx: &mut ExecContext<'_>) -> Result<Valu
 /// For simple names (no dots), works like ctx.set_var.
 /// For dotted chains, resolves the parent dict and sets the key on it.
 fn assign_var_chain(name: &str, value: Value, ctx: &mut ExecContext<'_>) {
+    // Plain names (no dots) are the overwhelming majority, and this runs for
+    // every assignment — including every iteration of `i is i + 1` in a loop.
+    // `split('.').collect()` allocated a `Vec` for each one, only to find it had
+    // a single element and take the trivial branch.
+    if !name.contains('.') {
+        ctx.set_var(name, value);
+        return;
+    }
     let parts: Vec<&str> = name.split('.').collect();
     if parts.len() == 1 {
         ctx.set_var(name, value);

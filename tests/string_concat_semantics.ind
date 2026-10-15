@@ -1,0 +1,116 @@
+#! Semantics guard for the in-place `s is s + x` fast path.
+#!
+#! `try_inplace_string_concat` skips `eval_binary`'s generic "+" arm, so it must
+#! be *exactly* equivalent to it: a fast path that differs silently corrupts
+#! programs rather than merely slowing them down. These cases pin down the
+#! places where a textual match could go wrong.
+#!
+#! NOTE: conditions are always precomputed into a boolean variable first — a
+#! comparison cannot be written inline as a space-call argument.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. repeated append builds the string ----
+var s string = ""
+repeat 5
+    s is s + "x"
+var ok1 boolean = s == "xxxxx"
+assert ok1 "repeated append builds the string"
+
+#! ---- 2. copy semantics: a snapshot must not change ----
+var base string = "ab"
+var snapshot string = base
+base is base + "c"
+var ok2a boolean = snapshot == "ab"
+assert ok2a "append does not mutate a snapshot"
+var ok2b boolean = base == "abc"
+assert ok2b "append grows the target"
+
+#! ---- 3. the right-hand side may read the target (s is s + s) ----
+var d string = "ab"
+d is d + d
+var ok3 boolean = d == "abab"
+assert ok3 "s is s + s doubles the string"
+
+#! ---- 4. a non-string right-hand side uses the same Display form as '+' ----
+var n string = "n="
+n is n + 5
+var ok4a boolean = n == "n=5"
+assert ok4a "int right-hand side formats like '+'"
+n is n + 1.5
+var ok4b boolean = n == "n=51.5"
+assert ok4b "float right-hand side formats like '+'"
+var flag boolean = 1 == 1
+n is n + flag
+var ok4c boolean = n == "n=51.5TRUE"
+assert ok4c "bool right-hand side formats like '+'"
+
+#! ---- 5. a list right-hand side formats like '+' ----
+var m string = ""
+var lst dynamic = [1, 2]
+m is m + lst
+var ok5 boolean = m == "[1, 2]"
+assert ok5 "list right-hand side formats like '+'"
+
+#! ---- 6. prefix collision: `sum` must never be read as the variable `s` ----
+var s2 string = "S"
+var sum int = 1
+sum is sum + 1
+var ok6a boolean = sum == 2
+assert ok6a "a variable sharing a prefix still adds"
+var ok6b boolean = s2 == "S"
+assert ok6b "the shorter-named variable was not touched"
+
+#! ---- 7. a non-string target still adds arithmetically ----
+var k int = 1
+k is k + 1
+var ok7 boolean = k == 2
+assert ok7 "int target still adds"
+
+#! ---- 8. a whole-call right-hand side is untouched by the fast path ----
+fun join a b
+    give a + b
+var acc2 string = ""
+acc2 is join acc2 "z"
+var ok8 boolean = acc2 == "z"
+assert ok8 "call-shaped assignment still works"
+
+#! ---- 9. not a self-assignment: `t is s + x` leaves the source alone ----
+var p string = "p"
+var q string = ""
+q is p + p
+var ok9a boolean = q == "pp"
+assert ok9a "target receives the concatenation"
+var ok9b boolean = p == "p"
+assert ok9b "source is unchanged"
+
+#! ---- 10. spacing and parenthesised variants must still be correct ----
+var t string = "t"
+t is t+"ight"
+var ok10a boolean = t == "tight"
+assert ok10a "unspaced form still concatenates"
+var u string = "u"
+u is u + ("p")
+var ok10b boolean = u == "up"
+assert ok10b "parenthesised form still concatenates"
+
+#! ---- 11. a long accumulation loop stays correct ----
+var big string = ""
+repeat 2000
+    big is big + "ab"
+var ok11a boolean = len(big) == 4000
+assert ok11a "long accumulation has the right length"
+
+#! ---- 12. the target name must be a complete identifier, not a prefix of the
+#! right-hand side's first identifier (`s5` vs `s5b`) ----
+var s5 string = "A"
+var s5b int = 1
+s5 is s5b + 1
+var ok12 boolean = s5 == 2
+assert ok12 "a longer identifier on the right is not mistaken for the target"
+
+say "string concat semantics: ALL PASS"
