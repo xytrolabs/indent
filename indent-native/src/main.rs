@@ -3537,7 +3537,10 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
             return Err(format!("'{callee}' is not allowed in safe mode"));
         }
     }
-    let mut positional: Vec<Value> = vec![];
+    // Sized from the argument list: `vec![]` grows 1 -> 4 -> 8, so a 5-argument
+    // call reallocated twice. `with_capacity(0)` still does not allocate, so the
+    // no-argument case is unchanged.
+    let mut positional: Vec<Value> = Vec::with_capacity(args.len());
     let mut named: HashMap<String, Value> = HashMap::new();
 
     for arg in args {
@@ -10529,6 +10532,12 @@ fn parse_socket_id(value: &Value) -> Result<i64, String> {
     }
 }
 
+/// Open sockets are resources, not values: a script that reconnects on network
+/// errors without ever calling `ws_close` would otherwise accumulate them (and
+/// their buffers) for the life of the process. Past this many, connecting closes
+/// the oldest socket instead.
+const WS_CLIENT_MAX: usize = 256;
+
 fn ws_connect_builtin(url: &str) -> Result<Value, String> {
     let (socket, _) = ws_connect_blocking(url).map_err(|e| format!("ws_connect failed: {e}"))?;
 
@@ -10536,6 +10545,12 @@ fn ws_connect_builtin(url: &str) -> Result<Value, String> {
     let mut sockets = WS_CLIENTS
         .lock()
         .map_err(|_| "ws_connect failed: socket registry lock poisoned".to_string())?;
+    // Ids increase monotonically, so the lowest id is the oldest connection.
+    if sockets.len() >= WS_CLIENT_MAX {
+        if let Some(oldest) = sockets.keys().min().copied() {
+            sockets.remove(&oldest);
+        }
+    }
     sockets.insert(socket_id, socket);
 
     let mut out = HashMap::new();
