@@ -1658,6 +1658,14 @@ struct ExprMemoSlot {
 }
 
 /// Slots in `ExecContext::expr_memo`. A power of two so the index is a mask.
+///
+/// Measured: building this same code with the constant set to 1 (which restores
+/// by-recency behaviour) and running the two binaries interleaved, best of 5,
+/// `--no-cache`, gave 32 slots 5% faster on bench_hot_paths and 7% faster on
+/// bench_calls (2% on bench_deep_calls). So keying by text really does beat
+/// keeping the most recent expression, which is what the previous one-entry memo
+/// did. 32 covers a loop body with a dozen or more distinct expressions; it costs
+/// one small `Vec` of `Option`s per execution context.
 const EXPR_MEMO_SLOTS: usize = 32;
 
 /// Cheap index for the expression memo. Deliberately not a full hash: hashing
