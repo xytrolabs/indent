@@ -1,0 +1,62 @@
+#! Scaling probe for growing a collection held inside a container.
+#!
+#! `holder.items is append holder.items x` and `holder.items is holder.items + [x]`
+#! are the natural way to keep a growing list on a dict or an object (JSON-ish
+#! data, `self.items`, `bot.commands`). The in-place fast paths reject targets
+#! containing '.', so each step is expected to deep-copy the root container and
+#! the list inside it — the same quadratic shape as the plain-variable forms.
+#!
+#! A correct result: per-step cost flat as n doubles. If it doubles, quadratic.
+#!
+#! Run:  indent benchmarks/bench_member_append.ind
+
+#! ---- 1. dict member, append form ----
+#! NOTE: the member is called `xs`, not `items`. `var x dynamic = d.items` is
+#! currently mis-parsed as a call of the dict's `items()` method (a separate
+#! pre-existing bug), which made this benchmark's length check report 1.
+repeat n in [500, 1000, 2000, 4000]
+    var t0 float = time_perf_counter
+    var holder dynamic = {"xs": []}
+    var i int = 0
+    repeat n
+        holder.xs is append holder.xs i
+        i is i + 1
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    var got dynamic = holder.xs
+    say "member-append " + string(n) + ": " + string(t1 - t0) + "s total, " + string(per) + " ns/step, len " + string(len(got))
+
+#! ---- 2. dict member, `+ [x]` form ----
+repeat n in [500, 1000, 2000, 4000]
+    var t0 float = time_perf_counter
+    var holder2 dynamic = {"xs": []}
+    var j int = 0
+    repeat n
+        holder2.xs is holder2.xs + [j]
+        j is j + 1
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    var got2 dynamic = holder2.xs
+    say "member-concat " + string(n) + ": " + string(t1 - t0) + "s total, " + string(per) + " ns/step, len " + string(len(got2))
+
+#! ---- 3. append to a function parameter ----
+fun fill upTo
+    var acc dynamic = []
+    var k int = 0
+    repeat upTo
+        acc is append acc k
+        k is k + 1
+    give acc
+
+fun growFrom start
+    repeat 200
+        start is append start 1
+    give start
+
+repeat n in [1, 2, 4]
+    var t0 float = time_perf_counter
+    var seed dynamic = []
+    var out dynamic = growFrom seed
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(200 * n)
+    say "param-append trial " + string(n) + ": " + string(t1 - t0) + "s total, " + string(per) + " ns/step, len " + string(len(out))

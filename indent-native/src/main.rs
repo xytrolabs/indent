@@ -2122,6 +2122,147 @@ fn try_inplace_container_concat(
     Some(Ok(Control::None))
 }
 
+/// Append `item` to `list`, applying the same `append`/`push`/`extend` rule the
+/// builtins use. Shared so the plain-variable and member-target fast paths
+/// cannot drift apart.
+fn append_items_into(list: &mut Vec<Value>, item: Value, callee: &str) -> Result<(), String> {
+    match item {
+        Value::List(extra) if callee == "extend" => {
+            list.extend(extra);
+            Ok(())
+        }
+        other if callee == "extend" => {
+            Err(format!("extend expects a list, got {}", other.type_name()))
+        }
+        other => {
+            list.push(other);
+            Ok(())
+        }
+    }
+}
+
+/// `holder.xs is append holder.xs v` — growing a list kept inside a dict or an
+/// object (`holder.xs`, `self.items`, JSON-ish state).
+///
+/// The member form does not reach the plain-variable path above because its
+/// matchers reject names containing '.', so every step deep-copied the root
+/// container *and* the list inside it — twice on the read and once more on the
+/// write. Measured `benchmarks/bench_member_append.ind`: 6967 → 50778 ns/step as
+/// n went 500 → 4000, which is the same quadratic shape as `xs is xs + [x]`.
+///
+/// The root is *moved* out and put back rather than cloned, and the member is
+/// moved out of it, mutated, and moved back. Every path below either rebuilds
+/// the root or puts it back unchanged before returning, so the variable can
+/// never be lost even if an assumption is wrong.
+fn try_inplace_member_append(
+    name: &str,
+    value: &ValueSource,
+    ctx: &mut ExecContext<'_>,
+) -> Option<Result<Control, String>> {
+    let (callee, args) = match value {
+        ValueSource::Call { callee, args } => (callee.as_str(), args),
+        _ => return None,
+    };
+    if !matches!(callee, "append" | "push" | "extend") || args.len() != 2 {
+        return None;
+    }
+    // Exactly `root.field`, both plain identifiers.
+    let (root, field) = match name.split_once('.') {
+        Some((r, f)) if !f.contains('.') && is_bare_identifier(r) && is_bare_identifier(f) => (r, f),
+        _ => return None,
+    };
+    match &args[0] {
+        ArgItem::Positional(expr) if expr.trim() == name => {}
+        _ => return None,
+    }
+    let item_expr = match &args[1] {
+        ArgItem::Positional(expr) => expr,
+        _ => return None,
+    };
+
+    // Confirm the member really is a list before evaluating the value, so an
+    // expression with side effects can never be evaluated twice.
+    let holds_list = match ctx.get_var_ref(root) {
+        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::List(_))),
+        Some(Value::Object { fields, .. }) => matches!(fields.get(field), Some(Value::List(_))),
+        _ => false,
+    };
+    if !holds_list {
+        return None;
+    }
+
+    let item = match eval_expr(item_expr, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let root_val = ctx.take_var(root)?;
+
+    let updated = match root_val {
+        Value::Dict(mut m) => {
+            let mut list = match m.remove(field) {
+                Some(Value::List(l)) => l,
+                Some(other) => {
+                    m.insert(field.to_string(), other);
+                    ctx.set_var(root, Value::Dict(m));
+                    return None;
+                }
+                None => {
+                    ctx.set_var(root, Value::Dict(m));
+                    return None;
+                }
+            };
+            if let Err(e) = append_items_into(&mut list, item, callee) {
+                m.insert(field.to_string(), Value::List(list));
+                ctx.set_var(root, Value::Dict(m));
+                return Some(Err(e));
+            }
+            m.insert(field.to_string(), Value::List(list));
+            Value::Dict(m)
+        }
+        Value::Object {
+            class_name,
+            mut fields,
+            methods,
+            is_dataclass,
+        } => {
+            let mut list = match fields.remove(field) {
+                Some(Value::List(l)) => l,
+                Some(other) => {
+                    fields.insert(field.to_string(), other);
+                    ctx.set_var(
+                        root,
+                        Value::Object { class_name, fields, methods, is_dataclass },
+                    );
+                    return None;
+                }
+                None => {
+                    ctx.set_var(
+                        root,
+                        Value::Object { class_name, fields, methods, is_dataclass },
+                    );
+                    return None;
+                }
+            };
+            if let Err(e) = append_items_into(&mut list, item, callee) {
+                fields.insert(field.to_string(), Value::List(list));
+                ctx.set_var(
+                    root,
+                    Value::Object { class_name, fields, methods, is_dataclass },
+                );
+                return Some(Err(e));
+            }
+            fields.insert(field.to_string(), Value::List(list));
+            Value::Object { class_name, fields, methods, is_dataclass }
+        }
+        other => {
+            ctx.set_var(root, other);
+            return None;
+        }
+    };
+    ctx.set_var(root, updated);
+    Some(Ok(Control::None))
+}
+
 fn eval_value_source(value: &ValueSource, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     match value {
         ValueSource::Expr(expr) => eval_expr(expr, ctx),
@@ -2228,6 +2369,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
         }
         Stmt::Assign { name, value, .. } => {
             if let Some(result) = try_inplace_list_append(name, value, ctx) {
+                return result;
+            }
+            if let Some(result) = try_inplace_member_append(name, value, ctx) {
                 return result;
             }
             if let Some(result) = try_inplace_string_concat(name, value, ctx) {
