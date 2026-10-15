@@ -47,8 +47,13 @@ Helper scripts:
 - Report the **best of several runs** (`best_of.sh`) — a loaded machine moves a
   single run by ±15%, which is larger than most of the wins below.
 - A/B **interleaved**, not sequentially: whichever build runs second inherits any
-  drift in machine load. A sequential run showed 2.5.0 as 7% slower on startup
-  when it is in fact 4% faster.
+  drift in machine load. Measured sequentially, one stage looked 7% *slower* on
+  startup; interleaved, it is 4% faster.
+
+> The tables below were taken during the 2.3.0 work. 2.3.0 shipped as **one
+> release**: the intermediate tags it was measured against (2.4.0/2.5.0/2.6.0)
+> were consolidated away, so the "stage" columns are development stages of 2.3.0,
+> not separate releases.
 
 ## Reference results
 
@@ -57,7 +62,7 @@ Helper scripts:
 The cleanest comparison available: one benchmark file, run against the released
 2.2.2 binary and the current build.
 
-| Case | 2.2.2 | **2.6.0** | Gain |
+| Case | 2.2.2 | **2.3.0** | Gain |
 |---|---|---|---|
 | 100 000 function calls | 0.1238 s | **0.0365 s** | 3.4× |
 | 50 000 `call_func` (dynamic) | 0.0707 s | **0.0184 s** | 3.8× |
@@ -86,9 +91,9 @@ they no longer copy the container. Everything else still clones on read — pass
 a container to a user function is the remaining O(n) case (copy-on-write values
 would fix it).
 
-### 2.4.0 → 2.5.0 (best of N, interleaved where it matters)
+### Stage 3 → stage 4 of the 2.3.0 work (best of N, interleaved where it matters)
 
-| Case | 2.4.0 | **2.5.0** |
+| Case | before | **after** |
 |---|---|---|
 | `bench_loops` | 56.5 ms | **44.5 ms** (−21%) |
 | `bench_hot_paths` | 122.1 ms | **108.8 ms** (−11%) |
@@ -101,13 +106,13 @@ What produced it: loops stopped copying their iterable twice; `eval_binary`/
 `Index` stopped deep-copying operands to test for object methods; the `Object`
 variant's maps were boxed; call frames are recycled instead of reallocated.
 
-### 2.2.2 → 2.4.0
+### 2.2.2 → 2.3.0
 
-Machine: Linux, `--release` (fat LTO), Indent 2.3.0.
+Machine: Linux, `--release` (fat LTO).
 
 ### Per-operation cost
 
-| Case | 2.2.2 | 2.4.0 |
+| Case | 2.2.2 | 2.3.0 |
 |---|---|---|
 | No-op call | 184 ns | **128 ns** |
 | 1-argument call | 402 ns | **250 ns** |
@@ -122,12 +127,12 @@ biggest hidden cost in real programs.
 
 ### Whole-program
 
-| Case | 2.2.2 | 2.4.0 |
+| Case | 2.2.2 | 2.3.0 |
 |---|---|---|
 | Startup, hello-world (per run) | 1.0 ms | **0.8 ms** |
 | Startup, 5 std imports (per run) | 7.0 ms | **5.8 ms** → **3.3 ms** with `__incache__` |
 | Startup, `discord` import (per run) | 4.88 ms | **2.47 ms** with `__incache__` |
-| `.ind` test suite, 51 files | 5.55 s | **3.96 s** (cold), faster warm |
+| `.ind` test suite, 52 files | 5.55 s | **3.96 s** (cold), faster warm |
 | Interpreter hot-path suite (per run) | 377 ms | **120 ms** |
 | 20 000 calls into a 302-statement body | 407 ms | **13 ms** |
 | 50 000 appends | 75.6 s | **0.01 s** |

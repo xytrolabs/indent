@@ -50,6 +50,15 @@ parsing. Validated by source size, mtime (ns) and an FNV-1a hash plus a format
 version, so an edit invalidates it immediately; writes are atomic; a corrupt,
 stale, missing or unwritable cache simply falls back to parsing, and a cache file
 is never executed as source. Startup with the `discord` import: 4.88 → 2.47 ms.
+
+The cache key also includes **the interpreter build that wrote it**. `bincode` is
+not self-describing, so an AST layout change can deserialise *successfully into a
+wrong program* rather than failing — a cache written by one build must never be read
+by another, and that now cannot happen even if somebody forgets to bump the format
+version when releasing. Upgrading Indent costs one re-parse per source, exactly like
+a first run. The alternative — keying on the binary's own mtime/size — was rejected
+because it would throw the cache away on every rebuild of the same version, which
+would silently change the cost of every local benchmark run.
 Controls: `--no-cache`, `INDENT_NO_AST_CACHE=1`, `--clear-cache`.
 
 ### 📞 Calls no longer scale with the size of a function

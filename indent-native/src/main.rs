@@ -1152,9 +1152,10 @@ impl Runtime {
 //
 // Indent's own `__pycache__`: the first time a file is run its parsed program is
 // written next to it as `<name>.inc` inside a `__incache__/` directory, keyed by
-// the source size, modification time and a hash of the source text. The next run
-// deserialises that program instead of reading, pre-processing, lexing and
-// parsing the source — a large module goes from milliseconds to microseconds.
+// the source size, modification time and a hash of the source text — plus the
+// build that wrote it (see `AST_CACHE_BUILD`). The next run deserialises that
+// program instead of reading, pre-processing, lexing and parsing the source — a
+// large module goes from milliseconds to microseconds.
 //
 // The cache is always optional: any failure to read, validate or write it simply
 // falls back to parsing, and `INDENT_NO_AST_CACHE=1` disables it entirely. Cache
@@ -1164,9 +1165,30 @@ impl Runtime {
 /// Bumped whenever the grammar, `Stmt`/`Expr` layout or the parse pipeline
 /// changes, so old cache files are ignored instead of misread. (Python calls
 /// this the magic number.)
-const AST_CACHE_FORMAT: u32 = 1;
-const AST_CACHE_MAGIC: &[u8; 8] = b"INDENTC1";
+const AST_CACHE_FORMAT: u32 = 2;
+const AST_CACHE_MAGIC: &[u8; 8] = b"INDENTC2";
 const AST_CACHE_DIR: &str = "__incache__";
+
+/// The interpreter build that wrote a cache file — the other half of the cache
+/// key.
+///
+/// `bincode` is not self-describing, so an `Stmt`/`Expr` layout change can
+/// deserialize **successfully into a wrong program** instead of failing. A cache
+/// written by one build must therefore never be read by another. Keying on the
+/// package version makes that automatic, rather than relying on somebody
+/// remembering to bump `AST_CACHE_FORMAT` by hand for the release. The cost is
+/// one re-parse of each source per upgrade, which is also what a first run does.
+///
+/// Deliberately *not* keyed on the binary's own mtime/size: that would also
+/// separate two development builds of the same unreleased version, but it would
+/// invalidate every cache on every rebuild (and on every reinstall of the same
+/// release). During development on an unreleased version, bump
+/// `AST_CACHE_FORMAT` after an AST change or run `--clear-cache`.
+const AST_CACHE_BUILD: &str = env!("CARGO_PKG_VERSION");
+
+/// Bytes in a cache header that do not depend on the length of the build string:
+/// `magic | format | build length | size | mtime | hash | payload length`.
+const AST_CACHE_HEADER_FIXED: usize = 8 + 4 + 2 + 8 + 8 + 8 + 8;
 
 fn ast_cache_enabled() -> bool {
     if AST_CACHE_OFF.load(Ordering::Relaxed) {
@@ -1226,27 +1248,34 @@ fn load_cached_program(file: &Path) -> Option<Vec<Stmt>> {
         .unwrap_or(0);
     let data = fs::read(&cache_path).ok()?;
 
-    // Header: magic | format | source size | mtime | source hash | payload len
-    const HEADER: usize = 8 + 4 + 8 + 8 + 8 + 8;
-    if data.len() < HEADER || &data[0..8] != AST_CACHE_MAGIC {
+    // Header: magic | format | build len | build | source size | mtime | hash | payload len
+    if data.len() < AST_CACHE_HEADER_FIXED || &data[0..8] != AST_CACHE_MAGIC {
         return None;
     }
     let format = u32::from_le_bytes(data[8..12].try_into().ok()?);
     if format != AST_CACHE_FORMAT {
         return None;
     }
-    let size = u64::from_le_bytes(data[12..20].try_into().ok()?);
-    let mtime = u64::from_le_bytes(data[20..28].try_into().ok()?);
-    let hash = u64::from_le_bytes(data[28..36].try_into().ok()?);
-    let payload_len = u64::from_le_bytes(data[36..44].try_into().ok()?);
+    let build_len = u16::from_le_bytes(data[12..14].try_into().ok()?) as usize;
+    let build_end = 14 + build_len;
+    // Written by a different Indent build: a miss, never a misread.
+    if data.len() < build_end + 32 || &data[14..build_end] != AST_CACHE_BUILD.as_bytes() {
+        return None;
+    }
+    let fixed = &data[build_end..];
+    let size = u64::from_le_bytes(fixed[0..8].try_into().ok()?);
+    let mtime = u64::from_le_bytes(fixed[8..16].try_into().ok()?);
+    let hash = u64::from_le_bytes(fixed[16..24].try_into().ok()?);
+    let payload_len = u64::from_le_bytes(fixed[24..32].try_into().ok()?);
 
+    let header = build_end + 32;
     if size != source.len() as u64 || mtime != mtime_ns || hash != source_hash(&source) {
         return None;
     }
-    if payload_len != (data.len() - HEADER) as u64 {
+    if payload_len != (data.len() - header) as u64 {
         return None;
     }
-    bincode::deserialize(&data[HEADER..]).ok()
+    bincode::deserialize(&data[header..]).ok()
 }
 
 /// Write the parsed program to the cache. Every failure is ignored — the cache
@@ -1272,9 +1301,11 @@ fn store_cached_program(file: &Path, source: &str, program: &[Stmt]) {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
 
-    let mut out = Vec::with_capacity(44 + payload.len());
+    let mut out = Vec::with_capacity(AST_CACHE_HEADER_FIXED + AST_CACHE_BUILD.len() + payload.len());
     out.extend_from_slice(AST_CACHE_MAGIC);
     out.extend_from_slice(&AST_CACHE_FORMAT.to_le_bytes());
+    out.extend_from_slice(&(AST_CACHE_BUILD.len() as u16).to_le_bytes());
+    out.extend_from_slice(AST_CACHE_BUILD.as_bytes());
     out.extend_from_slice(&(source.len() as u64).to_le_bytes());
     out.extend_from_slice(&mtime_ns.to_le_bytes());
     out.extend_from_slice(&source_hash(source.as_bytes()).to_le_bytes());
@@ -16302,9 +16333,42 @@ mod tests {
         let mut bad = Vec::new();
         bad.extend_from_slice(AST_CACHE_MAGIC);
         bad.extend_from_slice(&(AST_CACHE_FORMAT + 999).to_le_bytes());
-        bad.extend_from_slice(&[0u8; 32]);
+        bad.extend_from_slice(&0u16.to_le_bytes()); // build length
+        bad.extend_from_slice(&[0u8; 32]); // size, mtime, hash, payload length
+        assert_eq!(bad.len(), AST_CACHE_HEADER_FIXED);
         fs::write(&cache, &bad).expect("bad version");
         assert!(load_cached_program(&src).is_none());
+    }
+
+    #[test]
+    fn ast_cache_is_never_shared_between_builds() {
+        // bincode is not self-describing, so a cache written by a different
+        // Indent build could deserialize into a WRONG program instead of failing.
+        // Everything here is valid — source size, mtime, hash and payload are the
+        // real ones — so the build string is the only thing that can reject it.
+        let _guard = cache_test_lock();
+        let dir = unique_dir("indent_test_ast_cache_build");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let src = dir.join("mod_e.ind");
+        let source = "fun Five\n    give 5\n";
+        fs::write(&src, source).expect("write source");
+        let program = parse_source(source).expect("parse");
+        store_cached_program(&src, source, &program);
+        assert!(load_cached_program(&src).is_some(), "expected a cache hit");
+
+        let cache = cache_file_for(&src);
+        let mut bytes = fs::read(&cache).expect("read cache");
+        let build_len = AST_CACHE_BUILD.len();
+        // Same length, different bytes: no other header field moves.
+        let foreign = "9".repeat(build_len);
+        assert!(foreign.as_bytes() != AST_CACHE_BUILD.as_bytes());
+        assert_eq!(&bytes[14..14 + build_len], AST_CACHE_BUILD.as_bytes());
+        bytes[14..14 + build_len].copy_from_slice(foreign.as_bytes());
+        fs::write(&cache, &bytes).expect("write foreign cache");
+        assert!(
+            load_cached_program(&src).is_none(),
+            "a cache written by another build must be a miss, not a misread"
+        );
     }
 
     #[test]

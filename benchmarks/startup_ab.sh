@@ -27,7 +27,7 @@ while [ "$i" -le "$RUNS" ]; do
 done
 
 printf 'startup (%s), best of %s interleaved 20-run batches:\n' "$FILE" "$RUNS"
-printf '  shipped 2.4.0 : %s us/run\n' "$best_old"
+printf '  installed build : %s us/run\n' "$best_old"
 printf '  working build : %s us/run\n' "$best_new"
 if [ "$best_new" -lt "$best_old" ]; then
     printf '  -> working build is %s us faster (%.1f%%)\n' "$((best_old - best_new))" \

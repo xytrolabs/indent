@@ -18,7 +18,7 @@ echo "--- run 2 (new binary), 1s later ---"
 sleep 1
 "$IND" "$D/main.ind" > /dev/null 2>&1
 stamp
-echo "--- run 3 (old 2.4.0 binary) ---"
+echo "--- run 3 (older build, no cache) ---"
 sleep 1
 "$OLD" "$D/main.ind" > /dev/null 2>&1
 stamp

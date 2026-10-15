@@ -38,7 +38,9 @@ say "Hello " + name + "!"
 >   them inside every loop iteration.
 > - 💾 **`__incache__/` — Indent's `__pycache__`.** A file's parsed program is
 >   written beside the source and reused, so imports skip lexing and parsing.
->   Edit the file and the cache is invalidated immediately; `--no-cache`,
+>   Edit the file and the cache is invalidated immediately, and a cache is never
+>   shared with a different Indent build (a `bincode` layout change would otherwise
+>   deserialise into a *wrong* program instead of failing); `--no-cache`,
 >   `INDENT_NO_AST_CACHE=1` and `--clear-cache` are available.
 > - 📞 **Calls no longer scale with the size of the function.** Resolving a call
 >   deep-copied the entire body AST, so a 302-statement function cost 16.4 µs per

@@ -441,7 +441,19 @@ indent nest version          # Show this nest's pinned Indent version
 indent nest list             # Show the active nest & its packages
 indent nest path             # Print the active nest's path
 air delivery                 # Bundle & share a whole project (in a project folder)
+
+# v2.3 performance
+indent --no-cache file.ind    # Skip the __incache__ parsed-program cache for this run
+indent --clear-cache          # Delete __incache__ directories under the current directory
+                              # (also: INDENT_NO_AST_CACHE=1 to disable writing entirely)
 ```
+
+> ⚡ Since 2.3 a file's parsed program is cached as `__incache__/<name>.inc` next to
+> the source (like `__pycache__`), so re-runs and imports skip lexing and parsing.
+> It is an optimisation only: it is invalidated by the source text *and* by the
+> Indent build that wrote it, a corrupt or unreadable cache just means "parse the
+> file", and a cache file is never executed as source. Add `__incache__/` to your
+> `.gitignore`.
 
 > 🪺 A project with a `.nest/` auto-activates when you run files inside it: its
 > `air-packages:` and `lib:` paths are prepended to the module search path.

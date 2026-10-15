@@ -109,16 +109,18 @@ load that instead of lexing and parsing the file again.
   FNV-1a hash of the text**, plus a format version that changes when the grammar
   or AST layout changes. Editing a file (even to a same-length value) takes
   effect on the very next run.
+- It is also keyed by **the Indent build that wrote it** (the package version),
+  because `bincode` is not self-describing: a layout change can deserialise into a
+  *wrong program* rather than failing, so one build's cache must never be read by
+  another. Upgrading Indent therefore costs one re-parse of each file, exactly like
+  a first run. Two *development* builds of the same unreleased version do share
+  caches — after changing the grammar or AST, bump `AST_CACHE_FORMAT` or run
+  `--clear-cache`.
 - Writes are atomic (temp file + rename), so concurrent runs cannot see or leave
   a half-written cache.
 - `__incache__/` is git-ignored; add it to your own `.gitignore` in projects that
   do not use this repo's.
 - Controls: `--no-cache`, `INDENT_NO_AST_CACHE=1`, `--clear-cache`.
-- Deploying a *different build* of the same Indent version: the cache is keyed by
-  the source, not the binary, so bump `AST_CACHE_FORMAT` in `main.rs` if you
-  change the parser in a way that leaves the version number alone.
-
-
 ## Ecosystem
 
 - **Smaller ecosystem than Python/JS.** `air` has far fewer packages than PyPI
