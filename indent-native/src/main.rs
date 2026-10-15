@@ -3841,15 +3841,19 @@ fn call_object_method_value(
         is_dataclass,
     } = receiver
     {
-        let lc = method.to_ascii_lowercase();
         for (name, mdef) in methods.iter() {
-            if name.to_ascii_lowercase() == lc {
+            // `eq_ignore_ascii_case` compares exactly like folded copies would
+            // (ASCII-only folding, non-ASCII bytes compared verbatim) but
+            // allocates nothing.  This loop used to allocate twice per declared
+            // method -- once for the callee, once per candidate -- on every
+            // special-method lookup (`+`, `==`, `string()`, `len`, ...).
+            if name.eq_ignore_ascii_case(method) {
                 return Some(invoke_object_method(mdef, fields, args, ctx));
             }
         }
         // dataclass auto-generated defaults (when no user method is defined).
         if *is_dataclass {
-            if lc == "to_string" {
+            if method.eq_ignore_ascii_case("to_string") {
                 let mut names: Vec<&String> = fields.keys().collect();
                 names.sort();
                 let parts: Vec<String> = names
@@ -3858,7 +3862,7 @@ fn call_object_method_value(
                     .collect();
                 return Some(Ok(Value::Str(format!("{}({})", class_name, parts.join(", ")))));
             }
-            if lc == "equals" {
+            if method.eq_ignore_ascii_case("equals") {
                 if let Some(other) = args.first() {
                     if let Value::Object {
                         class_name: cn2,
@@ -3929,7 +3933,16 @@ fn invoke_method_on_value(
     args: &[Value],
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
-    let method_lc = method.to_ascii_lowercase();
+    // Dispatch on the method name case-insensitively, but call sites essentially
+    // always spell it canonically (lowercase), so only fold when we must: this
+    // used to allocate a folded copy on every method call.
+    let owned_lc;
+    let method_lc: &str = if method.bytes().any(|b| b.is_ascii_uppercase()) {
+        owned_lc = method.to_ascii_lowercase();
+        &owned_lc
+    } else {
+        method
+    };
 
     // 1. Handle Object method dispatch (classes)
     if let Value::Object {
@@ -3939,7 +3952,7 @@ fn invoke_method_on_value(
         ..
     } = target_val
     {
-        if let Some(method_def) = methods.get(&method_lc) {
+        if let Some(method_def) = methods.get(method_lc) {
             return invoke_object_method(method_def, fields, args, ctx);
         }
         if let Some(Value::Func(fn_name)) = fields.get(method) {
@@ -4002,7 +4015,7 @@ fn invoke_method_on_value(
     }
 
     // 3. Built-in mapped methods on List, Str, Dict, Set
-    let builtin_name = match map_object_method_builtin(&target_val, &method_lc) {
+    let builtin_name = match map_object_method_builtin(&target_val, method_lc) {
         Some(name) => name,
         None => {
             return Err(format!(
@@ -4789,11 +4802,22 @@ fn is_safe_builtin(name: &str) -> bool {
 }
 
 fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, String>> {
-    let builtin = callee.to_ascii_lowercase();
-    if safe_mode() && !is_safe_builtin(&builtin) {
+    // Builtin names are all lowercase and lookup is case-insensitive, but every
+    // call site in practice spells them canonically -- so borrow the caller's
+    // string and only fold a copy when the case actually differs. The
+    // unconditional `to_ascii_lowercase()` here was a heap allocation on every
+    // single builtin call.
+    let owned;
+    let builtin: &str = if callee.bytes().any(|b| b.is_ascii_uppercase()) {
+        owned = callee.to_ascii_lowercase();
+        &owned
+    } else {
+        callee
+    };
+    if safe_mode() && !is_safe_builtin(builtin) {
         return Some(Err(format!("'{builtin}' is not allowed in safe mode")));
     }
-    match builtin.as_str() {
+    match builtin {
         "builtins" => {
             if !positional.is_empty() {
                 return Some(Err("builtins takes no arguments".to_string()));
@@ -4827,7 +4851,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
         }
         "colored" | "colorize" | "fg" | "bg" | "style" | "gradient"
         | "bg_gradient" | "multicolor" | "bg_multicolor" | "rainbow"
-        | "bg_rainbow" | "paint" => Some(color_builtin(&builtin, positional)),
+        | "bg_rainbow" | "paint" => Some(color_builtin(builtin, positional)),
         "ask" => {
             if positional.is_empty() || positional.len() > 2 {
                 return Some(Err("ask expects 1 or 2 arguments: ask(prompt) or ask(type, prompt)".to_string()));

@@ -1,0 +1,41 @@
+#! Cost probe: pure builtin dispatch.
+#!
+#! `invoke_builtin` used to run `callee.to_ascii_lowercase()` unconditionally,
+#! which is a heap allocation on every single builtin call, plus a second
+#! allocation per candidate method inside the object special-method lookup. These
+#! loops do nothing but call builtins so the dispatch overhead is what is being
+#! measured.
+
+var N int = 200000
+var xs dynamic = [1, 2, 3, 4, 5]
+var word string = "Hello"
+var i int = 0
+var acc int = 0
+
+var t0 float = time_perf_counter
+repeat N
+    acc is acc + len(xs)
+var t1 float = time_perf_counter
+say "len(xs):     " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+var t2 float = time_perf_counter
+repeat N
+    i is i + 1
+var t3 float = time_perf_counter
+say "loop baseline " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+var t4 float = time_perf_counter
+var s string = ""
+repeat N
+    s is upper(word)
+var t5 float = time_perf_counter
+say "upper(word): " + string((t5 - t4) * 1000000000.0 / float(N)) + " ns/op"
+
+var t6 float = time_perf_counter
+var n int = 0
+repeat N
+    n is abs(i - 5)
+var t7 float = time_perf_counter
+say "abs(n):      " + string((t7 - t6) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(acc) + " " + string(len(s)) + " " + string(n)
