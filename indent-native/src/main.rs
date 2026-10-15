@@ -1639,6 +1639,45 @@ fn positional_alias_index(name: &str) -> Option<usize> {
     }
 }
 
+/// How `eval_expr` classified an expression the last time it saw that text.
+#[derive(Debug, Clone)]
+enum ExprKind {
+    /// A bare identifier: the text names a variable. Only the *shape* is
+    /// cached — the value is still read from the scope on every evaluation.
+    Ident,
+    /// A literal, whose value is fixed by the text, so it is stored ready-made.
+    Literal(Value),
+    /// Anything else, parsed once.
+    Ast(Arc<Expr>),
+}
+
+#[derive(Debug, Clone)]
+struct ExprMemoSlot {
+    text: String,
+    kind: ExprKind,
+}
+
+/// Slots in `ExecContext::expr_memo`. A power of two so the index is a mask.
+const EXPR_MEMO_SLOTS: usize = 32;
+
+/// Cheap index for the expression memo. Deliberately not a full hash: hashing
+/// the whole text would cost about as much as the cache lookup saves. Length
+/// plus the first and last byte separates the expressions that share a loop
+/// body, and a collision is harmless — every hit is still verified by comparing
+/// the text, so a collision only costs a missed hit.
+#[inline]
+fn expr_memo_index(expr: &str) -> usize {
+    let bytes = expr.as_bytes();
+    let mut h = bytes.len().wrapping_mul(31);
+    if let Some(&first) = bytes.first() {
+        h = h.wrapping_add(first as usize);
+    }
+    if let Some(&last) = bytes.last() {
+        h = h.wrapping_add((last as usize).wrapping_mul(7));
+    }
+    h & (EXPR_MEMO_SLOTS - 1)
+}
+
 struct ExecContext<'a> {
     rt: &'a mut Runtime,
     frames: Vec<Frame>,
@@ -1649,16 +1688,21 @@ struct ExecContext<'a> {
     /// an allocation optimisation: contents are always cleared before reuse, so
     /// a recycled frame can never leak a variable or a positional argument.
     frame_pool: Vec<Frame>,
-    /// One-entry memo in front of the shared expression cache.
+    /// Direct-mapped cache of recently evaluated expressions.
     ///
-    /// A loop re-evaluates the *same* expression text on every iteration, and
-    /// `Runtime::cached_expr` costs a lock and a hash of that text on each
-    /// lookup. Remembering the last text → AST pair turns the repeated case
-    /// into a short string compare (`"a + b"` against `"a + b"`) plus an
-    /// `Arc` clone. Only one entry: loop bodies alternate between a handful of
-    /// expressions, and a bigger table would cost more to search than the
-    /// compare it saves.
-    last_expr: Option<(String, Arc<Expr>)>,
+    /// `eval_expr` receives raw *text*, so on every evaluation it has to work
+    /// out what that text is: a bare variable name, a literal, or something to
+    /// parse — two scans, then the parse cache's lock and a hash of the text.
+    /// A loop body repeats the same handful of texts, so caching the
+    /// *classification* per text removes all of that from the inner loop.
+    ///
+    /// A previous version of this was one entry, justified by the idea that a
+    /// bigger table "would cost more to search than the compare it saves". That
+    /// had it backwards: a loop body with more than one statement *alternates*
+    /// its expression texts, so the single entry was replaced before it could
+    /// ever be reused and the memo missed on nearly every evaluation. Keying by
+    /// text instead of by recency is what makes it work.
+    expr_memo: Vec<Option<ExprMemoSlot>>,
     collect_yields: bool,
     yielded_values: Vec<Value>,
 }
@@ -1673,25 +1717,37 @@ impl<'a> ExecContext<'a> {
             rt,
             frames: vec![],
             frame_pool: vec![],
-            last_expr: None,
+            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             collect_yields: false,
             yielded_values: vec![],
         }
     }
 
-    /// Resolve an expression's text to its parsed AST, preferring the one-entry
-    /// memo over the shared cache (see `last_expr`).
-    fn cached_expr(&mut self, expr: &str) -> Result<Arc<Expr>, String> {
-        if let Some((text, ast)) = &self.last_expr {
-            if text == expr {
-                return Ok(ast.clone());
+    /// Look up `expr` in the memo, returning a clone of its cached
+    /// classification. A collision returns `None` (the text did not match),
+    /// which just means the slow path runs.
+    #[inline]
+    fn memo_get(&self, expr: &str) -> Option<ExprKind> {
+        let slot = self.expr_memo[expr_memo_index(expr)].as_ref()?;
+        if slot.text == expr {
+            Some(slot.kind.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Remember how `expr` was classified, replacing whatever held its slot.
+    #[inline]
+    fn memo_put(&mut self, expr: &str, kind: ExprKind) {
+        match &mut self.expr_memo[expr_memo_index(expr)] {
+            Some(slot) if slot.text == expr => slot.kind = kind,
+            slot => {
+                *slot = Some(ExprMemoSlot {
+                    text: expr.to_string(),
+                    kind,
+                })
             }
         }
-        let ast = self.rt.cached_expr(expr)?;
-        if self.last_expr.as_ref().map_or(true, |(t, _)| t != expr) {
-            self.last_expr = Some((expr.to_string(), ast.clone()));
-        }
-        Ok(ast)
     }
 
     fn push_frame(&mut self) {
@@ -11114,8 +11170,24 @@ fn is_bare_identifier(expr: &str) -> bool {
 }
 
 fn eval_expr(expr: &str, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    // Memo first: everything below this point is per-evaluation work on the
+    // expression *text*, and a loop repeats the same handful of texts.
+    match ctx.memo_get(expr) {
+        Some(ExprKind::Literal(v)) => return Ok(v),
+        Some(ExprKind::Ast(ast)) => return eval_ast(&ast, ctx),
+        Some(ExprKind::Ident) => {
+            // Only the shape is cached, never the value, so this still reads the
+            // current scope (and still falls through if it is not a variable).
+            if let Some(v) = ctx.get_var(expr) {
+                return Ok(v);
+            }
+        }
+        None => {}
+    }
+
     // Fast path 1: bare identifier → direct variable read, no parse at all.
     if is_bare_identifier(expr) {
+        ctx.memo_put(expr, ExprKind::Ident);
         if let Some(v) = ctx.get_var(expr) {
             return Ok(v);
         }
@@ -11125,13 +11197,14 @@ fn eval_expr(expr: &str, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
 
     // Fast path 2: plain literals.
     if let Some(v) = fast_literal(expr) {
+        ctx.memo_put(expr, ExprKind::Literal(v.clone()));
         return Ok(v);
     }
 
-    // Otherwise use the cached AST. Parsing used to happen here on *every*
-    // evaluation; now it happens once per distinct expression string, and the
-    // repeat case is served by the context's one-entry memo.
-    let ast = ctx.cached_expr(expr)?;
+    // Otherwise use the shared parse cache. Parsing used to happen here on
+    // *every* evaluation; now it happens once per distinct expression string.
+    let ast = ctx.rt.cached_expr(expr)?;
+    ctx.memo_put(expr, ExprKind::Ast(ast.clone()));
     eval_ast(&ast, ctx)
 }
 

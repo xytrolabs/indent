@@ -1,0 +1,92 @@
+#! Semantics guard for the expression memo (`ExecContext::expr_memo`).
+#!
+#! `eval_expr` now caches how it *classified* an expression's text: a bare
+#! identifier, a literal, or a parsed AST. The danger of caching anything derived
+#! from text is caching something context-dependent — so these cases check that
+#! only the shape is cached, never a value or a binding.
+#!
+#! NOTE: conditions are always precomputed into a boolean variable first — a
+#! comparison cannot be written inline as a space-call argument.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. a cached *identifier* must still read the current value ----
+#! `x` here is evaluated through a memoised Ident; if the value were cached
+#! rather than the shape, `seen` would read a stale `x`.
+var x int = 1
+var seen string = ""
+repeat 3
+    seen is seen + string(x)
+    x is x + 1
+var ok1 boolean = seen == "123"
+assert ok1 "a memoised identifier still reads the live value"
+
+#! ---- 2. a cached AST must still re-read its variables ----
+var n int = 5
+var out int = 0
+repeat 2
+    out is n + 1
+    n is n + 10
+var ok2 boolean = out == 16
+assert ok2 "a memoised expression re-reads its variables each time"
+
+#! ---- 3. a cached *literal* must be handed out as a fresh value ----
+var a string = "x"
+var b string = "x"
+b is b + "y"
+var c string = "x"
+var ok3a boolean = b == "xy"
+assert ok3a "the copied literal grew"
+var ok3b boolean = c == "x"
+assert ok3b "the cached literal was not mutated by an earlier copy"
+var ok3c boolean = a == "x"
+assert ok3c "the original is untouched"
+
+#! ---- 4. the same text must work from different scopes ----
+#! `total + 1` appears in both the outer scope and inside a function; the cached
+#! AST must not bind to whichever variable was seen first.
+fun bump base
+    give base + 1
+
+var total int = 100
+var outer int = 0
+repeat 2
+    outer is total + 1
+var inner int = bump 7
+var ok4a boolean = outer == 101
+assert ok4a "the outer scope still evaluates correctly"
+var ok4b boolean = inner == 8
+assert ok4b "the same shape in a function uses that function's parameters"
+
+#! ---- 5. a variable changing type between reads still works ----
+var v dynamic = 1
+var firstLen int = len(string(v))
+v is "hello"
+var secondLen int = len(string(v))
+var ok5a boolean = firstLen == 1
+assert ok5a "read before the type change"
+var ok5b boolean = secondLen == 5
+assert ok5b "read after the type change"
+
+#! ---- 6. many distinct expressions in one loop (far more than the 32 memo
+#! slots, so slots are reused and collisions occur) still add up ----
+var acc int = 0
+repeat 40
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+    acc is acc + 1
+var ok6 boolean = acc == 400
+assert ok6 "slot reuse and collisions do not corrupt results"
+
+say "expression memo semantics: ALL PASS"
