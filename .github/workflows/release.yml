@@ -128,6 +128,19 @@ jobs:
           $name = "indent-$version-${{ matrix.target }}"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
 
+      # The zip stays the supported install path (it also carries std/, air and
+      # the PowerShell installer), but a bare .exe is what people look for on the
+      # release page — and it is the very same bytes the zip smoke test runs.
+      - name: Stage standalone Windows binary
+        if: matrix.archive_ext == 'zip'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          cp "dist/indent-${VERSION}-${{ matrix.target }}/${{ matrix.bin_name }}" \
+             "dist/indent-${VERSION}-${{ matrix.target }}.exe"
+          ls -l "dist/indent-${VERSION}-${{ matrix.target }}.exe"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -137,6 +150,7 @@ jobs:
             dist/*.zip
             dist/*.deb
             dist/*.rpm
+            dist/*.exe
 
   smoke-artifacts:
     name: Smoke Test ${{ matrix.target }}
@@ -364,7 +378,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find release-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \;
+          find release-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.exe' \) -exec cp {} dist/ \;
 
       - name: Generate checksums
         run: |

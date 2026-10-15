@@ -1,8 +1,9 @@
 # Indent on Windows
 
-> Indent ships a native `indent.exe` for Windows (`x86_64-pc-windows-msvc` and
-> `aarch64-pc-windows-msvc`). The installer is a single PowerShell command and
-> writes **only to user-space locations** — no admin elevation required.
+> Indent ships a native `indent.exe` for Windows. The published build target is
+> **`x86_64-pc-windows-msvc`**; see [ARM64 Windows](#arm64-windows) if you are on an
+> ARM machine. The installer is a single PowerShell command and writes **only to
+> user-space locations** — no admin elevation required.
 
 ---
 
@@ -35,6 +36,35 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Local
 
 The script looks for `indent-native\target\release\indent.exe` relative to the
 script and copies it into place.
+
+### Download just the binary
+
+Every release also publishes the bare `indent.exe` as its own asset, for people who
+do not want the zip:
+
+```
+https://github.com/xytrolabs/indent/releases/download/v2.3.0/indent-2.3.0-x86_64-pc-windows-msvc.exe
+```
+
+> ⚠️ The standalone `.exe` is **only the runtime**. It ships without `std/`, so
+> `import std/math` and friends will fail until `INDENT_PATH` points at a standard
+> library directory. Use the installer above or the `.zip` if you want the
+> batteries-included layout; the `.exe` inside those is the same file as this one.
+
+### ARM64 Windows
+
+There is **no native `aarch64-pc-windows-msvc` release yet** — the published
+Windows build is x86_64. On ARM machines, the practical options are:
+
+- **Run the x86_64 build** — Windows 11 on ARM executes it transparently through
+  the built-in x64 emulation. Download the `.zip` (or the standalone `.exe`) and
+  install it manually, or pass `-Local` to `install.ps1` after unpacking.
+- **Build natively** by running `install.ps1` on the ARM machine: it maps `ARM64` to
+  the `aarch64-pc-windows-msvc` target, finds no published archive for it yet, and
+  falls back to building from source, which needs Rust and the VS ARM64 build tools.
+
+Supporting ARM64 natively means adding that target to the release matrix — tracked
+as future work rather than promised here.
 
 ---
 

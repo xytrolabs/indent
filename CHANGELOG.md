@@ -149,6 +149,11 @@ across many functions, so cross-crate inlining matters. Build time increases —
   `module_dispatch`, `value_size_guardrail`, and six `ast_cache_*` tests covering
   round-trip, same-length-edit invalidation, corruption, a deleted source and the
   disable switch.
+- Windows publishes the bare `indent.exe` as its own release asset beside the `.zip`
+  (identical bytes), so it can be downloaded without unpacking, and it appears in
+  `SHA256SUMS.txt` like every other artifact. `docs/windows.md` no longer claims a
+  native `aarch64-pc-windows-msvc` build, which was never produced — the published
+  Windows target is `x86_64-pc-windows-msvc`.
 
 ### Still O(n), honestly
 `len`, `has_key`, `xs[i]` and slices are now O(1) reads, but the underlying rule is
