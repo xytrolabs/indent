@@ -6197,7 +6197,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let text = positional[0].to_string();
             match serde_json::from_str::<JsonValue>(&text) {
-                Ok(parsed) => Some(Ok(json_to_value(&parsed))),
+                Ok(parsed) => Some(Ok(json_to_value(parsed))),
                 Err(e) => Some(Err(format!("json_loads failed: {e}"))),
             }
         }
@@ -8218,7 +8218,7 @@ print(json.dumps(_value))
     let text = String::from_utf8_lossy(&output.stdout).trim_end().to_string();
     let parsed = serde_json::from_str::<JsonValue>(&text)
         .map_err(|e| format!("python_eval_json produced non-JSON output: {e}"))?;
-    Ok(json_to_value(&parsed))
+    Ok(json_to_value(parsed))
 }
 
 fn python_run_file_builtin(path: &str) -> Result<Value, String> {
@@ -8349,7 +8349,8 @@ print(json.dumps(normalize(result)))
     let value = envelope.get("value").unwrap_or(&JsonValue::Null);
 
     if kind == "json" {
-        Ok(json_to_value(value))
+        // `value` borrows `envelope`, which the other branch still needs.
+        Ok(json_to_value(value.clone()))
     } else {
         Ok(Value::Str(value.as_str().unwrap_or_default().to_string()))
     }
@@ -8785,7 +8786,7 @@ fn toml_dumps_builtin(value: &Value) -> Result<Value, String> {
 fn yaml_loads_builtin(text: &str) -> Result<Value, String> {
     let v: JsonValue =
         serde_yaml::from_str(text).map_err(|e| format!("yaml_loads: {e}"))?;
-    Ok(json_to_value(&v))
+    Ok(json_to_value(v))
 }
 
 /// Serialize an Indent value to YAML text (reuses value_to_json).
@@ -9682,10 +9683,18 @@ fn math_round_builtin(value: &Value, digits: &Value) -> Result<Value, String> {
     Ok(Value::Float((v * factor).round() / factor))
 }
 
-fn json_to_value(value: &JsonValue) -> Value {
+/// Convert a parsed JSON tree into an Indent value, **consuming** the tree.
+///
+/// Taking `JsonValue` by value matters a lot: this runs once per node of every
+/// `json_loads`/`json_parse`, and the previous `&JsonValue` version cloned every
+/// string, every object key and every array element, then let each `HashMap`
+/// grow by rehashing from empty. Object keys and strings are now moved, and the
+/// containers are reserved up front. JSON is the hot path for every web, AI and
+/// Discord call, so the allocation count here is a first-order cost.
+fn json_to_value(value: JsonValue) -> Value {
     match value {
         JsonValue::Null => Value::Empty,
-        JsonValue::Bool(v) => Value::Bool(*v),
+        JsonValue::Bool(v) => Value::Bool(v),
         JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Value::Int(i)
@@ -9695,12 +9704,16 @@ fn json_to_value(value: &JsonValue) -> Value {
                 Value::Empty
             }
         }
-        JsonValue::String(s) => Value::Str(s.clone()),
-        JsonValue::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
+        JsonValue::String(s) => Value::Str(s),
+        JsonValue::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            out.extend(items.into_iter().map(json_to_value));
+            Value::List(out)
+        }
         JsonValue::Object(map) => {
-            let mut out = HashMap::new();
+            let mut out = HashMap::with_capacity(map.len());
             for (k, v) in map {
-                out.insert(k.clone(), json_to_value(v));
+                out.insert(k, json_to_value(v));
             }
             Value::Dict(out)
         }
@@ -9989,7 +10002,7 @@ fn http_timeout() -> Duration {
 }
 
 fn http_response_value(status: i64, body: String, headers: HashMap<String, Value>) -> Value {
-    let mut out = HashMap::new();
+    let mut out = HashMap::with_capacity(4);
     out.insert("ok".to_string(), Value::Bool((200..300).contains(&status)));
     out.insert("status".to_string(), Value::Int(status));
     out.insert("body".to_string(), Value::Str(body));
@@ -9998,11 +10011,21 @@ fn http_response_value(status: i64, body: String, headers: HashMap<String, Value
 }
 
 /// Collect response headers into an Indent dict (lowercased names → values).
+/// Reserved up front: this runs on every single request, and an empty `HashMap`
+/// rehashes its way up to the real size.
 fn http_headers_map(resp: &reqwest::blocking::Response) -> HashMap<String, Value> {
-    let mut out = HashMap::new();
+    let mut out = HashMap::with_capacity(resp.headers().len());
     for (k, v) in resp.headers().iter() {
         if let Ok(s) = v.to_str() {
-            out.insert(k.as_str().to_ascii_lowercase(), Value::Str(s.to_string()));
+            // Header names are already lowercase in HTTP/2 and usually in HTTP/1.1,
+            // so only pay for the rewrite when there is actually an uppercase byte.
+            let name = k.as_str();
+            let key = if name.bytes().any(|b| b.is_ascii_uppercase()) {
+                name.to_ascii_lowercase()
+            } else {
+                name.to_string()
+            };
+            out.insert(key, Value::Str(s.to_string()));
         }
     }
     out
