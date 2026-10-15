@@ -1,0 +1,69 @@
+#! How expensive is it to READ a container?
+#!
+#! Arguments are passed by value, so `get_var` clones a whole list or dict on
+#! every read. That makes "read-only" work on a big collection O(n) per use —
+#! `len(x)`, `x in y`, passing x to a function, or iterating it in an outer loop.
+#!
+#! Run:  indent benchmarks/bench_container_reads.ind
+
+var N int = 20000
+var big dynamic = [i for i in range(N)]
+var words dynamic = ["w" + string(i) for i in range(5000)]
+var d dynamic = {}
+repeat i in range(5000)
+    d[string(i)] is i
+
+#! (a) len() of a big list, repeatedly — len only needs the count
+var t0 float = time_perf_counter
+var total int = 0
+repeat 300
+    total is total + len(big)
+var t1 float = time_perf_counter
+say "300 x len(20k list):        " + string(t1 - t0) + "s"
+
+#! (b) len() of a big dict
+var t2 float = time_perf_counter
+var total2 int = 0
+repeat 300
+    total2 is total2 + len(d)
+var t3 float = time_perf_counter
+say "300 x len(5k dict):        " + string(t3 - t2) + "s"
+
+#! (c) membership test in the dict
+var t4 float = time_perf_counter
+var hits int = 0
+repeat 300
+    if has_key d "4999"
+        hits is hits + 1
+var t5 float = time_perf_counter
+say "300 x has_key(5k dict):    " + string(t5 - t4) + "s"
+
+#! (d) passing a big list to a function that only reads its length
+fun countOf xs
+    give len(xs)
+
+var t6 float = time_perf_counter
+var total3 int = 0
+repeat 300
+    total3 is total3 + countOf(big)
+var t7 float = time_perf_counter
+say "300 x countOf(20k list):   " + string(t7 - t6) + "s"
+
+#! (e) a read that genuinely needs the items: index the last element
+var t8 float = time_perf_counter
+var last dynamic = 0
+repeat 300
+    last is big[N - 1]
+var t9 float = time_perf_counter
+say "300 x big[N-1]:            " + string(t9 - t8) + "s"
+
+#! (f) iterating a string list inside an outer loop
+var t10 float = time_perf_counter
+var chars int = 0
+repeat k in range(20)
+    repeat w in words
+        chars is chars + len(w)
+var t11 float = time_perf_counter
+say "20 x loop over 5k strings: " + string(t11 - t10) + "s"
+
+say "checks: " + string(total) + " " + string(total2) + " " + string(hits) + " " + string(total3) + " " + string(chars)

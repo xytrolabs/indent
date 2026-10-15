@@ -1,5 +1,36 @@
 # Indent Changelog
 
+## Unreleased — reading a container is now O(1)
+
+Measured against the released **2.2.2** binary (`benchmarks/best_of.sh`, best of 3):
+
+| Case | 2.2.2 | now | gain |
+|---|---|---|---|
+| 300 × `len(20 000-item list)` | 59.0 ms | **0.057 ms** | **~1000×** |
+| 300 × `len(5 000-key dict)` | 44.4 ms | **0.054 ms** | **~820×** |
+| 300 × `has_key(5 000-key dict, k)` | 44.3 ms | **0.092 ms** | **~480×** |
+| 300 × pass a 20k list to a function that only reads it | 659 ms | **98 ms** | 6.7× |
+| 20 × loop over a 5 000-string list | 101 ms | **25 ms** | 4.0× |
+
+### Why `len` was slow
+Arguments are passed by value, so `len(bigList)` **cloned the whole list just to
+count it** — 127 µs for 20 000 items, and `len`/`has_key` are everywhere in real
+code (`len(bot.commands)`, `has_key bot "user"`, …). Both now have a read-only fast
+path that borrows the container instead of copying it (`ExecContext::get_var_ref`),
+used only when the argument is a bare variable, the value has the right type, and
+the builtin has not been redefined — so shadowing still wins and every error
+message still comes from the builtin.
+
+This is a targeted fix, not the general one: `get_var` still clones containers, so
+the remaining `myFunc(bigList)` cost (6.7× better but still O(n)) needs
+copy-on-write values. That refactor is planned out — `tools/arc_rewrite.py` is its
+audited first stage (it wraps the 146 container *constructions* and reports the 137
+destructuring sites), but it leaves ~138 compile errors that each need a
+clone-vs-move decision, so it is a dedicated pass with its own verification, not a
+rush at the end of a session.
+
+**Verification:** 51/51 language tests.
+
 ## 2.5.0 — 2026-10-14 (no more hidden copies) 🧹
 
 Third performance release of the day. This one is about the copies the

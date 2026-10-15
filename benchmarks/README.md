@@ -16,6 +16,7 @@ cargo build --release --manifest-path indent-native/Cargo.toml
 | `bench_calls.ind` | Per-operation cost in ns of the individual constructs (call, assign, compare, concat) |
 | `bench_deep_calls.ind` | Whether per-call cost scales with the SIZE of the function body |
 | `bench_loops.ind` | Iterating: ranges, large int lists, string lists, nested loops |
+| `bench_container_reads.ind` | The cost of READING a container (`len`, `has_key`, passing it to a function) |
 | `bench_append_scaling.ind` | Whether `l is append l x` grows linearly or quadratically |
 | `bench_list_building.ind` | Fastest way to build a large list (append vs comprehension vs whole-list concat) |
 | `bench_index_writes.ind` | Whether `d[k] is v` / `l[i] is v` grow linearly or quadratically |
@@ -49,6 +50,21 @@ Helper scripts:
   when it is in fact 4% faster.
 
 ## Reference results
+
+### 2.2.2 → now, container reads (best of 3)
+
+| Case | 2.2.2 | now | gain |
+|---|---|---|---|
+| 300 × `len(20k list)` | 59.0 ms | **0.057 ms** | ~1000× |
+| 300 × `len(5k dict)` | 44.4 ms | **0.054 ms** | ~820× |
+| 300 × `has_key(5k dict, k)` | 44.3 ms | **0.092 ms** | ~480× |
+| 300 × pass a 20k list to a reader function | 659 ms | **98 ms** | 6.7× |
+| 20 × loop over a 5k string list | 101 ms | **25 ms** | 4.0× |
+
+`len` and `has_key` take a read-only fast path for bare-variable arguments, so
+they no longer copy the container. Everything else still clones on read — passing
+a container to a user function is the remaining O(n) case (copy-on-write values
+would fix it).
 
 ### 2.4.0 → 2.5.0 (best of N, interleaved where it matters)
 

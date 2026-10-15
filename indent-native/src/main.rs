@@ -1604,6 +1604,17 @@ impl<'a> ExecContext<'a> {
         self.rt.vars.get(name).cloned()
     }
 
+    /// Borrow a variable's value, for read-only fast paths that must not pay the
+    /// O(n) clone `get_var` performs for containers.
+    fn get_var_ref(&self, name: &str) -> Option<&Value> {
+        for frame in self.frames.iter().rev() {
+            if let Some(v) = frame.vars.get(name) {
+                return Some(v);
+            }
+        }
+        self.rt.vars.get(name)
+    }
+
     /// Remove and return a variable's value (allowing a move instead of a
     /// copy). Mirrors `set_var`'s scope search: innermost frame first.
     fn take_var(&mut self, name: &str) -> Option<Value> {
@@ -10881,6 +10892,53 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             slice_builtin(&target_val, start_bound, end_bound, step_value)
         }
         Expr::Call { callee, args } => {
+            // Fast path: `len <bare variable>`.
+            //
+            // Arguments are passed by value, so `len(bigList)` used to clone the
+            // whole container just to read its length — 127 µs for a 20 000-item
+            // list, and `len` is everywhere. Counting it in place is O(1). Only
+            // taken when `len` has not been redefined, so shadowing still wins,
+            // and the semantics match the builtin exactly (chars for a string).
+            if callee.len() == 1 && callee[0] == "len" && args.len() == 1 {
+                if let Expr::Var(parts) = &args[0] {
+                    if parts.len() == 1
+                        && !ctx.rt.callables.contains_key("len")
+                        && !ctx.rt.funcs.contains_key("len")
+                    {
+                        if let Some(v) = ctx.get_var_ref(&parts[0]) {
+                            match v {
+                                Value::Str(s) => {
+                                    return Ok(Value::Int(s.chars().count() as i64))
+                                }
+                                Value::List(v) => return Ok(Value::Int(v.len() as i64)),
+                                Value::Set(v) => return Ok(Value::Int(v.len() as i64)),
+                                Value::Dict(v) => return Ok(Value::Int(v.len() as i64)),
+                                _ => {} // other types: normal path reports the error
+                            }
+                        }
+                    }
+                }
+            }
+            // Fast path: `has_key <bare variable> <key>` — same reasoning as
+            // `len`: the dictionary was cloned (117 µs for 5 000 entries) purely
+            // to run one lookup. Only taken when arg 0 really is a dictionary, so
+            // the builtin still reports every error message itself.
+            if callee.len() == 1 && callee[0] == "has_key" && args.len() == 2 {
+                if !ctx.rt.callables.contains_key("has_key")
+                    && !ctx.rt.funcs.contains_key("has_key")
+                {
+                    if let Expr::Var(parts) = &args[0] {
+                        if parts.len() == 1
+                            && matches!(ctx.get_var_ref(&parts[0]), Some(Value::Dict(_)))
+                        {
+                            let key_val = eval_ast(&args[1], ctx)?;
+                            if let Some(Value::Dict(map)) = ctx.get_var_ref(&parts[0]) {
+                                return Ok(Value::Bool(map.contains_key(&key_val.to_string())));
+                            }
+                        }
+                    }
+                }
+            }
             let name = callee.join(".");
             invoke_callable_expr(&name, args, ctx)
         }
