@@ -3518,10 +3518,12 @@ fn invoke_function(
         let has_varargs = f.params.last().map_or(false, |p| p.is_varargs);
         if !has_varargs && positional.len() > f.params.len() {
             ctx.pop_frame();
+            let expected: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
             return Err(format!(
-                "Too many positional arguments: expected at most {}, got {}",
+                "Too many positional arguments: expected at most {}, got {} (parameters: {})",
                 f.params.len(),
-                positional.len()
+                positional.len(),
+                expected.join(", ")
             ));
         }
 

@@ -1359,14 +1359,28 @@ fun _bot_error
 #!   Command bot "greet" "Greet someone" "onGreet"
 #!   fun onGreet ctx
 #!       CtxSend ctx "Hello " + CtxUserName ctx
-fun Command
-    bot
-    name
-    desc
-    handlerName
-    bot is BotHandler bot name desc handlerName
-    bot is AddSlash bot name desc handlerName empty
-    give bot
+#!
+#! Accepts the legacy 6.0 shapes too, so the same code works whether this module
+#! or a compatibility shim is the one that resolves:
+#!   Command bot prefix name desc handler          (5 args)
+#!   Command bot prefix name desc handler options  (6 args)
+#!
+#! Taking `...args` rather than fixed parameters is deliberate: the two shapes are
+#! indistinguishable positionally, and picking one meant that whichever `discord`
+#! module the loader found first decided whether a bot started at all — a 5-arg
+#! call against the 4-param version failed with "Too many positional arguments"
+#! depending on module search order.
+fun Command ...args
+    var n int = len(args)
+    if n == 4
+        give CommandCtx args[0] args[1] args[2] args[3] empty
+    if n == 5
+        #! [bot, prefix, name, desc, handler] — the prefix is ignored: routing
+        #! uses the bot's own prefix.
+        give CommandCtx args[0] args[2] args[3] args[4] empty
+    if n == 6
+        give CommandCtx args[0] args[2] args[3] args[4] args[5]
+    give empty
 
 #! Register a prefix+slash command whose handler receives `(ctx, args)`.
 #! This is the simplest command API in the package — no event plumbing:

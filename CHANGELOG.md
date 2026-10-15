@@ -173,6 +173,21 @@ with its own verification rather than a rushed change.
 ## Unreleased — language & package parity
 
 ### 🌐 Networking, WebSocket, AI and parser fixes
+- **`discord.Command` only accepted one argument shape, and which `discord` module
+  the loader found decided whether a bot started at all.** The core definition took
+  `(bot, name, desc, handlerName)` while the compatibility shim — and every legacy
+  call site — pass the 6.0 shape with a `prefix` first (`Command bot prefix name desc
+  handler`) or with trailing options, so a 5-argument call blew up with *"Too many
+  positional arguments: expected at most 4"*. Because both the full library and a shim
+  can be named `discord`, the failure came and went with module search order, which
+  made it look like a heisenbug. `Command` now takes `...args` and dispatches on the
+  count, supporting all three shapes (the prefix stays ignored, as the shim
+  documented), so it behaves identically no matter which module resolves.
+- **The "too many positional arguments" error now names the parameters it expected**
+  (`… expected at most 4, got 5 (parameters: bot, name, desc, handlerName)`). Without
+  that, this bug was unidentifiable from the message alone; with it, the culprit was
+  obvious in one run.
+
 Found by a new offline parity suite (`tests/run_net_tests.sh` against
 `tools/mock_fixture_server.py`, which serves HTTP, WebSocket and an
 OpenAI-compatible mock): **103 assertions** across `net_http_parity`,
