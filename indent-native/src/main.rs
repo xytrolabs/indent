@@ -3232,19 +3232,43 @@ const VM_STACK: usize = 16;
 enum VmInstr {
     /// Push a value fixed at compile time.
     Const(Value),
-    /// Push a variable's current value.
-    LoadName(String),
-    /// Pop a value and assign it to a variable (plain names only).
-    StoreName(String),
+    /// Push the value in frame slot `n`.
+    LoadSlot(u16),
+    /// Pop a value into frame slot `n`.
+    StoreSlot(u16),
     /// Pop two operands and push `eval_binary(op, a, b)`.
     Bin(String),
     /// Pop and discard an expression statement's result.
     Pop,
 }
 
+/// A compiled loop body: instructions plus the names of the frame slots they
+/// address.
+///
+/// Slots are the point of this stage. A compiled loop used to reach back into the
+/// interpreter for every variable: `get_var`/`set_var` search the frame stack
+/// innermost-first and hash a `String` on every access, once per iteration. Now
+/// the body's variables are read into a `Vec<Value>` on entry and written back on
+/// exit, and the instruction stream only indexes that vector.
+struct VmProgram {
+    instrs: Vec<VmInstr>,
+    slots: Vec<String>,
+    /// Slot holding the loop counter, when the body reads `Reps`.
+    reps_slot: Option<u16>,
+}
+
+/// Slot index for `name`, adding it if this body has not used it yet.
+fn vm_slot(slots: &mut Vec<String>, name: &str) -> u16 {
+    if let Some(i) = slots.iter().position(|s| s == name) {
+        return i as u16;
+    }
+    slots.push(name.to_string());
+    (slots.len() - 1) as u16
+}
+
 /// Compile an expression, postfix. Returns false for anything unsupported, in
 /// which case the caller must discard `out`.
-fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>) -> bool {
+fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>, slots: &mut Vec<String>) -> bool {
     match e {
         Expr::Int(v) => out.push(VmInstr::Const(Value::Int(*v))),
         Expr::Float(v) => out.push(VmInstr::Const(Value::Float(*v))),
@@ -3253,12 +3277,21 @@ fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>) -> bool {
         // `eval_ast` interpolates only when the literal contains `%`; matching
         // that gate is what keeps the value identical.
         Expr::Str(v) if !v.contains('%') => out.push(VmInstr::Const(Value::Str(v.clone()))),
-        Expr::Var(names) if names.len() == 1 => out.push(VmInstr::LoadName(names[0].clone())),
-        Expr::Binary { op, lhs, rhs } => {
-            if !vm_compile_expr(lhs, out) {
+        Expr::Var(names) if names.len() == 1 => {
+            // `argument`/`argument2` resolve from `frame.args`, not `frame.vars`,
+            // so they are not slot-able; a body that uses them goes back to the
+            // tree-walker rather than risk resolving them differently.
+            if positional_alias_index(&names[0]).is_some() {
                 return false;
             }
-            if !vm_compile_expr(rhs, out) {
+            let s = vm_slot(slots, &names[0]);
+            out.push(VmInstr::LoadSlot(s));
+        }
+        Expr::Binary { op, lhs, rhs } => {
+            if !vm_compile_expr(lhs, out, slots) {
+                return false;
+            }
+            if !vm_compile_expr(rhs, out, slots) {
                 return false;
             }
             out.push(VmInstr::Bin(op.clone()));
@@ -3272,95 +3305,135 @@ fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>) -> bool {
 /// a plain-name assignment, or a bare expression. Anything that can produce
 /// control flow (`stop`, `next`, `give`, nested loops, `if`) is refused, so a
 /// compiled body always runs to completion and yields `Control::None`.
-fn vm_compile_body(body: &[Stmt], out: &mut Vec<VmInstr>, rt: &Runtime) -> bool {
+fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
+    let mut prog = VmProgram {
+        instrs: Vec::new(),
+        slots: Vec::new(),
+        reps_slot: None,
+    };
     for stmt in body {
         match stmt {
             Stmt::Assign { name, value, .. } => {
-                if name.contains('.') {
-                    return false;
+                if name.contains('.') || positional_alias_index(name).is_some() {
+                    return None;
                 }
                 match value {
                     // `cached_expr` is the same parse path `eval_expr` uses, so
                     // preprocessing and parsing cannot diverge between engines.
                     ValueSource::Expr(text) => {
-                        let Ok(ast) = rt.cached_expr(text) else {
-                            return false;
-                        };
-                        if !vm_compile_expr(&ast, out) {
-                            return false;
+                        let ast = rt.cached_expr(text).ok()?;
+                        if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
+                            return None;
+                        }
+                        if !vm_compile_expr(&ast, &mut prog.instrs, &mut prog.slots) {
+                            return None;
                         }
                     }
-                    ValueSource::Call { .. } => return false,
+                    ValueSource::Call { .. } => return None,
                 }
-                out.push(VmInstr::StoreName(name.clone()));
+                let s = vm_slot(&mut prog.slots, name);
+                prog.instrs.push(VmInstr::StoreSlot(s));
             }
             Stmt::BareExpr { expr, .. } => {
-                let Ok(ast) = rt.cached_expr(expr) else {
-                    return false;
-                };
-                if !vm_compile_expr(&ast, out) {
-                    return false;
+                let ast = rt.cached_expr(expr).ok()?;
+                if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
+                    return None;
                 }
-                out.push(VmInstr::Pop);
+                if !vm_compile_expr(&ast, &mut prog.instrs, &mut prog.slots) {
+                    return None;
+                }
+                prog.instrs.push(VmInstr::Pop);
             }
-            _ => return false,
+            _ => return None,
         }
     }
-    true
+    prog.reps_slot = prog
+        .slots
+        .iter()
+        .position(|s| s == "Reps")
+        .map(|i| i as u16);
+    Some(prog)
 }
 
 /// Check every name the body reads before running it. A name that is unbound is
 /// the tree-walker's business (it owns the error message), and a body that
-/// assigns a name it later reads must also be left to it, so this is done once
-/// up front rather than mid-loop where a bail-out could leave half a loop's
-/// assignments behind.
-fn vm_names_bound(instrs: &[VmInstr], ctx: &ExecContext<'_>) -> bool {
-    instrs.iter().all(|ins| match ins {
-        VmInstr::LoadName(name) => ctx.has_var(name),
-        _ => true,
-    })
+/// assigns a name it later reads must also be left to it, so this is done once up
+/// front rather than mid-loop where a bail-out could leave half a loop's
+/// assignments behind. `Reps` is excluded: the loop binds it itself.
+fn vm_names_bound(prog: &VmProgram, ctx: &ExecContext<'_>) -> bool {
+    prog.slots
+        .iter()
+        .enumerate()
+        .all(|(i, name)| Some(i as u16) == prog.reps_slot || ctx.has_var(name))
 }
 
 /// Run a compiled `repeat N` body in the frame `exec_repeat` already pushed.
-fn vm_run_loop(n: usize, instrs: &[VmInstr], ctx: &mut ExecContext<'_>) -> Result<(), String> {
-    // Fixed-size operand stack: a heap stack here would cost more than the loop
-    // body saves (measured: it turned an 8.7% loss into a 12.6% loss).
+fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<(), String> {
+    // Read the body's variables once. Slots are then just a `Vec` index, so the
+    // loop body never hashes a name again.
+    let mut values: Vec<Value> = prog
+        .slots
+        .iter()
+        .map(|name| ctx.get_var(name).unwrap_or(Value::Empty))
+        .collect();
+    // `Reps` belongs to the loop frame in the tree-walker (`define_local`), so
+    // create it there too: otherwise the write-back below would treat it as a new
+    // name and insert it into the globals.
+    if prog.reps_slot.is_some() {
+        ctx.define_local("Reps", Value::Empty);
+    }
     let mut stack: [Value; VM_STACK] = std::array::from_fn(|_| Value::Empty);
-    for reps in 0..n {
-        ctx.define_local("Reps", Value::Int(reps as i64));
-        let mut sp = 0usize;
-        for ins in instrs {
-            match ins {
-                VmInstr::Const(v) => {
-                    *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v.clone();
-                    sp += 1;
-                }
-                VmInstr::LoadName(name) => {
-                    let v = ctx
-                        .get_var(name)
-                        .ok_or_else(|| format!("Undefined variable '{name}'"))?;
-                    *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
-                    sp += 1;
-                }
-                VmInstr::StoreName(name) => {
-                    sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
-                    ctx.set_var(name, stack[sp].clone());
-                }
-                VmInstr::Bin(op) => {
-                    sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
-                    let a = stack[sp].clone();
-                    let b = stack[sp + 1].clone();
-                    let v = eval_binary(op, a, b, ctx)?;
-                    *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
-                    sp += 1;
-                }
-                VmInstr::Pop => {
-                    sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+    let outcome = (|| -> Result<(), String> {
+        for reps in 0..n {
+            if let Some(s) = prog.reps_slot {
+                values[s as usize] = Value::Int(reps as i64);
+            }
+            let mut sp = 0usize;
+            for ins in &prog.instrs {
+                match ins {
+                    VmInstr::Const(v) => {
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v.clone();
+                        sp += 1;
+                    }
+                    VmInstr::LoadSlot(s) => {
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? =
+                            values[*s as usize].clone();
+                        sp += 1;
+                    }
+                    VmInstr::StoreSlot(s) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        values[*s as usize] = stack[sp].clone();
+                    }
+                    VmInstr::Bin(op) => {
+                        sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
+                        let a = stack[sp].clone();
+                        let b = stack[sp + 1].clone();
+                        let v = eval_binary(op, a, b, ctx)?;
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
+                        sp += 1;
+                    }
+                    VmInstr::Pop => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                    }
                 }
             }
         }
+        Ok(())
+    })();
+    // Write back even when the loop failed part-way: the tree-walker applies each
+    // assignment as it goes, so iterations that completed must keep their effect.
+    // `set_var` is the same call a plain assignment makes, so scope resolution
+    // (nearest frame, else globals) is identical.
+    for (i, name) in prog.slots.iter().enumerate() {
+        if Some(i as u16) == prog.reps_slot {
+            continue;
+        }
+        ctx.set_var(name, values[i].clone());
     }
-    Ok(())
+    if let Some(s) = prog.reps_slot {
+        ctx.set_var("Reps", values[s as usize].clone());
+    }
+    outcome
 }
 
 fn vm_overflow() -> String {
@@ -3426,28 +3499,15 @@ fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_
             let n = total
                 .as_number()
                 .ok_or_else(|| format!("Repeat count must be a number, got {}: {}", total.type_name(), total))? as usize;
-            // Stage 1: if the body compiles and every name it reads is bound, run
-            // the whole loop as instructions. `None` from any of these puts the
-            // loop back on the tree-walker, which is the behaviour above.
+            // Stage 1/2: if the body compiles and every name it reads is bound,
+            // run the whole loop as instructions over slot indices. `None` from
+            // any of these puts the loop back on the tree-walker below.
             if vm_enabled() {
-                let mut instrs = Vec::new();
-                let deepest = body.iter().all(|s| match s {
-                    Stmt::Assign { value: ValueSource::Expr(text), .. } => {
-                        match ctx.rt.cached_expr(text) {
-                            Ok(ast) => vm_stack_depth(&ast).is_some_and(|d| d <= VM_STACK),
-                            Err(_) => false,
-                        }
+                if let Some(prog) = vm_compile_body(body, ctx.rt) {
+                    if vm_names_bound(&prog, ctx) {
+                        vm_run_loop(n, &prog, ctx)?;
+                        return Ok(Control::None);
                     }
-                    Stmt::BareExpr { expr, .. } => match ctx.rt.cached_expr(expr) {
-                        Ok(ast) => vm_stack_depth(&ast).is_some_and(|d| d <= VM_STACK),
-                        Err(_) => false,
-                    },
-                    _ => false,
-                });
-                if deepest && vm_compile_body(body, &mut instrs, ctx.rt) && vm_names_bound(&instrs, ctx)
-                {
-                    vm_run_loop(n, &instrs, ctx)?;
-                    return Ok(Control::None);
                 }
             }
             let mut reps = 0usize;
