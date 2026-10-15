@@ -1,0 +1,155 @@
+#! Language A/B: Indent vs Python on the interpreter's hottest constructs.
+#!
+#! Mirror of benchmarks/ab_lang_bench.py — keep the two in sync. Each line
+#! printed is "<name> <microseconds per op>"; ab_lang.sh runs both and prints
+#! the ratio so optimization work is driven by measurements, not hunches.
+#!
+#! Run the whole comparison:  benchmarks/ab_lang.sh
+
+var N int = 200000
+
+fun noop
+    give 0
+
+fun one a
+    give a
+
+fun two a b
+    give a + b
+
+#! ---------- calls ----------
+var t0 float = time_perf_counter
+repeat N
+    noop
+var t1 float = time_perf_counter
+say "call_0arg " + string((t1 - t0) * 1000000.0 / float(N))
+
+var t2 float = time_perf_counter
+var acc int = 0
+repeat N
+    acc is one 1
+var t3 float = time_perf_counter
+say "call_1arg " + string((t3 - t2) * 1000000.0 / float(N))
+
+var t4 float = time_perf_counter
+var acc2 int = 0
+repeat N
+    acc2 is two 1 2
+var t5 float = time_perf_counter
+say "call_2arg " + string((t5 - t4) * 1000000.0 / float(N))
+
+#! ---------- arithmetic + control ----------
+var t6 float = time_perf_counter
+var a int = 0
+repeat N
+    a is a + 1
+var t7 float = time_perf_counter
+say "add_assign " + string((t7 - t6) * 1000000.0 / float(N))
+
+var t8 float = time_perf_counter
+var f float = 1.0
+repeat N
+    f is f * 1.0000001
+var t9 float = time_perf_counter
+say "float_mul " + string((t9 - t8) * 1000000.0 / float(N))
+
+var t10 float = time_perf_counter
+var c int = 0
+repeat N
+    if a > 0
+        c is c + 1
+var t11 float = time_perf_counter
+say "if_compare " + string((t11 - t10) * 1000000.0 / float(N))
+
+#! ---------- strings ----------
+var nm dynamic = "a"
+var t12 float = time_perf_counter
+repeat N
+    var s1 string = "hi " + nm
+var t13 float = time_perf_counter
+say "str_concat " + string((t13 - t12) * 1000000.0 / float(N))
+
+var t14 float = time_perf_counter
+var i int = 0
+repeat N
+    var s2 string = string(i)
+    i is i + 1
+var t15 float = time_perf_counter
+say "int_to_str " + string((t15 - t14) * 1000000.0 / float(N))
+
+var t16 float = time_perf_counter
+var tot2 int = 0
+repeat N
+    var n int = int("12345")
+    tot2 is tot2 + n
+var t17 float = time_perf_counter
+say "str_to_int " + string((t17 - t16) * 1000000.0 / float(N))
+
+#! ---------- dicts ----------
+var d2 dynamic = {}
+var i2 int = 0
+repeat 100
+    d2["k" + string(i2)] is i2
+    i2 is i2 + 1
+
+var t18 float = time_perf_counter
+var s3 int = 0
+repeat N
+    s3 is s3 + d2["k50"]
+var t19 float = time_perf_counter
+say "dict_read_hit " + string((t19 - t18) * 1000000.0 / float(N))
+
+var t20 float = time_perf_counter
+var d3 dynamic = {}
+var i3 int = 0
+repeat N
+    d3[string(i3)] is i3
+    i3 is i3 + 1
+var t21 float = time_perf_counter
+say "dict_insert " + string((t21 - t20) * 1000000.0 / float(N))
+
+var t22 float = time_perf_counter
+var i4 int = 0
+repeat N
+    d2[string(i4)] is i4
+    i4 is i4 + 1
+var t23 float = time_perf_counter
+say "dict_insert_small " + string((t23 - t22) * 1000000.0 / float(N))
+
+#! ---------- lists ----------
+var t24 float = time_perf_counter
+var l dynamic = []
+var i5 int = 0
+repeat N
+    l is append l i5
+    i5 is i5 + 1
+var t25 float = time_perf_counter
+say "list_append " + string((t25 - t24) * 1000000.0 / float(N))
+
+var t26 float = time_perf_counter
+var tot3 int = 0
+var i6 int = 0
+repeat N
+    tot3 is tot3 + l[i6]
+    i6 is i6 + 1
+var t27 float = time_perf_counter
+say "list_index_read " + string((t27 - t26) * 1000000.0 / float(N))
+
+#! ---------- allocation ----------
+var t28 float = time_perf_counter
+var i7 int = 0
+repeat N
+    var tmp dynamic = [i7, i7 + 1, i7 + 2]
+    i7 is i7 + 1
+var t29 float = time_perf_counter
+say "list_alloc_small " + string((t29 - t28) * 1000000.0 / float(N))
+
+var t30 float = time_perf_counter
+var i8 int = 0
+repeat N
+    var tmpd dynamic = {"a": i8, "b": i8 + 1}
+    i8 is i8 + 1
+var t31 float = time_perf_counter
+say "dict_alloc_small " + string((t31 - t30) * 1000000.0 / float(N))
+
+say "checks " + string(a) + " " + string(c) + " " + string(s3) + " " + string(tot3)

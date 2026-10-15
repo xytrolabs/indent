@@ -10,9 +10,111 @@ use std::process;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::{connect as ws_connect_blocking, Message as WsMessage};
+
+// ── Hashing ─────────────────────────────────────────────────
+//
+// Every variable read, variable write, dict lookup and dict insert hashes a
+// `String` key. std's default hasher is SipHash-1-3, chosen to be
+// DoS-resistant: it costs roughly 20-25 ns for a short key, and the interpreter
+// pays it several times per operation (a 2-argument call hashes six or more
+// names). Measured against CPython, that single cost is a large part of why
+// every operation sat at 3-8x — it is spread evenly across the whole language
+// rather than concentrated in one slow builtin.
+//
+// FxHash is the hash used by rustc itself for its own interner: a rotate-xor-
+// multiply over machine words, a few cycles for a short key and no quality
+// claim beyond good distribution for strings. It is not collision-resistant,
+// but nothing here needs that — these maps are keyed by names that come from
+// the program being interpreted, not from an attacker's network input. (The
+// hashes that do guard against hostile input, like `source_hash` for the AST
+// cache, are separate and unchanged.)
+//
+// Implemented locally rather than pulling in the `rustc-hash` crate: the
+// interpreter must build offline, and this is ~40 lines.
+const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+#[derive(Default, Clone, Copy)]
+struct FxHasher {
+    hash: u64,
+}
+
+impl FxHasher {
+    #[inline(always)]
+    fn add(&mut self, word: u64) {
+        self.hash = (self.hash.rotate_left(5) ^ word).wrapping_mul(FX_SEED);
+    }
+}
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut b = bytes;
+        while b.len() >= 8 {
+            let (head, rest) = b.split_at(8);
+            self.add(u64::from_le_bytes(head.try_into().unwrap()));
+            b = rest;
+        }
+        if b.len() >= 4 {
+            let (head, rest) = b.split_at(4);
+            self.add(u32::from_le_bytes(head.try_into().unwrap()) as u64);
+            b = rest;
+        }
+        for &byte in b {
+            self.add(byte as u64);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(i as u64)
+    }
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.add(i as u64)
+    }
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.add(i as u64)
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.add(i)
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64)
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+}
+
+type FxBuildHasher = std::hash::BuildHasherDefault<FxHasher>;
+
+/// Copy an ordinary (std-hashed) name→value map into a `Map`. Used where a
+/// `Value::Dict` or object field set becomes a temporary runtime's variables.
+/// Those paths already deep-copied the map, so this is the same cost plus a
+/// cheaper hash for the lookups that follow.
+#[inline]
+fn to_map(src: &HashMap<String, Value>) -> Map<String, Value> {
+    src.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// The map type for anything keyed by a variable, field or property name — the
+/// maps on the interpreter's hot path. See the note on `FxHasher` above.
+///
+/// Deliberately *not* used for `Value::Dict`: measured against CPython, dict
+/// indexing was already the closest operation (~3.4-4.5x) because Python's dict
+/// is also a hash table, while the worst offenders (`call_2arg` at 7.9x,
+/// `list_append` at 7.2x, `list_index_read` at 6.8x) are all dominated by
+/// `get_var`/`set_var` — one or more name lookups per operation, taken every
+/// single time. Converting the variable maps attacks those directly; converting
+/// `Dict` as well would mean threading a new type through ~40 dict-construction
+/// sites for the operation that needed it least.
+type Map<K, V> = HashMap<K, V, FxBuildHasher>;
 
 const DEBUGGER_STOP_MSG: &str = "Execution stopped by debugger";
 
@@ -381,7 +483,7 @@ enum Callable {
 
 #[derive(Debug, Clone)]
 struct ModuleInstance {
-    vars: HashMap<String, Value>,
+    vars: Map<String, Value>,
     funcs: HashMap<String, Arc<FunctionDef>>,
     // Functions this module imported from other modules (via `get X from Y`).
     // Preserved so a module's functions can call its own imports.
@@ -412,7 +514,7 @@ enum Value {
     Empty,
 }
 
-fn default_color_vars() -> HashMap<String, Value> {
+fn default_color_vars() -> Map<String, Value> {
     let palette = [
         ("RED", "#ff4d4d"),
         ("GREEN", "#32c671"),
@@ -427,7 +529,7 @@ fn default_color_vars() -> HashMap<String, Value> {
         ("WHITE", "#f8fafc"),
     ];
 
-    let mut out = HashMap::new();
+    let mut out = Map::default();
     for (name, hex) in palette {
         out.insert(name.to_string(), Value::Str(hex.to_string()));
     }
@@ -1012,7 +1114,7 @@ fn to_f64_value(value: &Value) -> Result<f64, String> {
 
 struct Runtime {
     module_dir: PathBuf,
-    vars: HashMap<String, Value>,
+    vars: Map<String, Value>,
     funcs: HashMap<String, Arc<FunctionDef>>,
     callables: HashMap<String, Callable>,
     modules: HashMap<String, Arc<ModuleInstance>>,
@@ -1028,7 +1130,7 @@ struct Runtime {
     /// times a second. Parsing is context-free, so the AST is cached here and
     /// reused. Shared across module runtimes (like `module_cache`), so a
     /// std-library expression is parsed once per process.
-    expr_cache: Arc<Mutex<HashMap<String, Arc<Expr>>>>,
+    expr_cache: Arc<RwLock<HashMap<String, Arc<Expr>>>>,
     debugger: Option<Debugger>,
     async_funcs: HashSet<String>,
 }
@@ -1050,7 +1152,7 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
-            expr_cache: Arc::new(Mutex::new(HashMap::new())),
+            expr_cache: Arc::new(RwLock::new(HashMap::new())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1066,7 +1168,7 @@ impl Runtime {
             classes: HashMap::new(),
             module_cache: cache,
             module_loading: Arc::new(Mutex::new(HashSet::new())),
-            expr_cache: Arc::new(Mutex::new(HashMap::new())),
+            expr_cache: Arc::new(RwLock::new(HashMap::new())),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -1078,7 +1180,7 @@ impl Runtime {
         module_dir: PathBuf,
         cache: Arc<Mutex<HashMap<PathBuf, Arc<ModuleInstance>>>>,
         loading: Arc<Mutex<HashSet<PathBuf>>>,
-        exprs: Arc<Mutex<HashMap<String, Arc<Expr>>>>,
+        exprs: Arc<RwLock<HashMap<String, Arc<Expr>>>>,
     ) -> Self {
         Self {
             module_dir,
@@ -1098,12 +1200,17 @@ impl Runtime {
     /// Parse `expr` once and remember the AST. Parsing is context-free, so the
     /// result is valid for every later evaluation of the same text.
     fn cached_expr(&self, expr: &str) -> Result<Arc<Expr>, String> {
-        if let Some(hit) = self.expr_cache.lock().unwrap().get(expr) {
+        // `RwLock`, not `Mutex`: this is a read-mostly cache and `spawn` /
+        // `parallel` / `coop` run code on other threads, all sharing this one
+        // map. With a `Mutex` every expression evaluation on every thread
+        // serialised against every other thread, even though the lookup is a
+        // pure read after the first parse.
+        if let Some(hit) = self.expr_cache.read().unwrap().get(expr) {
             return Ok(hit.clone());
         }
         let parsed = Arc::new(parse_expr_ast(expr)?);
         self.expr_cache
-            .lock()
+            .write()
             .unwrap()
             .insert(expr.to_string(), parsed.clone());
         Ok(parsed)
@@ -1515,7 +1622,7 @@ fn arrow_style_empty() -> String {
 /// allocations per call.
 #[derive(Default, Clone)]
 struct Frame {
-    vars: HashMap<String, Value>,
+    vars: Map<String, Value>,
     args: Vec<Value>,
 }
 
@@ -1542,6 +1649,16 @@ struct ExecContext<'a> {
     /// an allocation optimisation: contents are always cleared before reuse, so
     /// a recycled frame can never leak a variable or a positional argument.
     frame_pool: Vec<Frame>,
+    /// One-entry memo in front of the shared expression cache.
+    ///
+    /// A loop re-evaluates the *same* expression text on every iteration, and
+    /// `Runtime::cached_expr` costs a lock and a hash of that text on each
+    /// lookup. Remembering the last text → AST pair turns the repeated case
+    /// into a short string compare (`"a + b"` against `"a + b"`) plus an
+    /// `Arc` clone. Only one entry: loop bodies alternate between a handful of
+    /// expressions, and a bigger table would cost more to search than the
+    /// compare it saves.
+    last_expr: Option<(String, Arc<Expr>)>,
     collect_yields: bool,
     yielded_values: Vec<Value>,
 }
@@ -1556,9 +1673,25 @@ impl<'a> ExecContext<'a> {
             rt,
             frames: vec![],
             frame_pool: vec![],
+            last_expr: None,
             collect_yields: false,
             yielded_values: vec![],
         }
+    }
+
+    /// Resolve an expression's text to its parsed AST, preferring the one-entry
+    /// memo over the shared cache (see `last_expr`).
+    fn cached_expr(&mut self, expr: &str) -> Result<Arc<Expr>, String> {
+        if let Some((text, ast)) = &self.last_expr {
+            if text == expr {
+                return Ok(ast.clone());
+            }
+        }
+        let ast = self.rt.cached_expr(expr)?;
+        if self.last_expr.as_ref().map_or(true, |(t, _)| t != expr) {
+            self.last_expr = Some((expr.to_string(), ast.clone()));
+        }
+        Ok(ast)
     }
 
     fn push_frame(&mut self) {
@@ -3099,7 +3232,7 @@ fn invoke_object_method(
     // Inherit classes/functions from the caller so methods can instantiate
     // classes and call other functions.
     let mut temp_rt = Runtime::new(PathBuf::from("."));
-    temp_rt.vars = fields.clone();
+    temp_rt.vars = to_map(fields);
     temp_rt.classes = ctx.rt.classes.clone();
     temp_rt.funcs = ctx.rt.funcs.clone();
     temp_rt.callables = ctx.rt.callables.clone();
@@ -3253,7 +3386,7 @@ fn invoke_method_on_value(
                 _ => Expr::Str(v.to_string()),
             }).collect();
             let mut temp_rt = Runtime::new(PathBuf::from("."));
-            temp_rt.vars = (**fields).clone();
+            temp_rt.vars = to_map(fields);
             temp_rt.classes = ctx.rt.classes.clone();
             temp_rt.funcs = ctx.rt.funcs.clone();
             temp_rt.callables = ctx.rt.callables.clone();
@@ -3279,7 +3412,7 @@ fn invoke_method_on_value(
                 _ => Expr::Str(v.to_string()),
             }).collect();
             let mut temp_rt = Runtime::new(PathBuf::from("."));
-            temp_rt.vars = map.clone();
+            temp_rt.vars = to_map(map);
             temp_rt.classes = ctx.rt.classes.clone();
             temp_rt.funcs = ctx.rt.funcs.clone();
             temp_rt.callables = ctx.rt.callables.clone();
@@ -9190,7 +9323,7 @@ fn spawn_builtin_future(builtin_name: &str, args: Vec<Value>) -> Result<Value, S
 struct Coro {
     body: Vec<Stmt>,
     ip: usize,
-    locals: HashMap<String, Value>,
+    locals: Map<String, Value>,
     result: Value,
     done: bool,
     awaiting: Option<i64>,
@@ -9201,7 +9334,7 @@ impl Coro {
         Self {
             body,
             ip: 0,
-            locals: HashMap::new(),
+            locals: Map::default(),
             result: Value::Empty,
             done: false,
             awaiting: None,
@@ -10876,8 +11009,9 @@ fn eval_expr(expr: &str, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     }
 
     // Otherwise use the cached AST. Parsing used to happen here on *every*
-    // evaluation; now it happens once per distinct expression string.
-    let ast = ctx.rt.cached_expr(expr)?;
+    // evaluation; now it happens once per distinct expression string, and the
+    // repeat case is served by the context's one-entry memo.
+    let ast = ctx.cached_expr(expr)?;
     eval_ast(&ast, ctx)
 }
 
