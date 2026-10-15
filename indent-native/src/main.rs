@@ -1142,6 +1142,57 @@ struct Debugger {
 }
 
 impl Runtime {
+    /// A runtime with empty tables.
+    ///
+    /// `Runtime::new` also builds the 11-entry colour palette, which is pure
+    /// waste for the temporary runtimes that method dispatch used to create on
+    /// every call and then immediately overwrite `vars` on.
+    fn bare(module_dir: PathBuf) -> Self {
+        Self {
+            module_dir,
+            vars: Map::default(),
+            funcs: Map::default(),
+            callables: Map::default(),
+            modules: Map::default(),
+            classes: Map::default(),
+            module_cache: Arc::new(Mutex::new(HashMap::new())),
+            module_loading: Arc::new(Mutex::new(HashSet::new())),
+            expr_cache: Arc::new(RwLock::new(Map::default())),
+            debugger: None,
+            async_funcs: HashSet::new(),
+        }
+    }
+
+    /// Hand a temporary runtime the tables and caches it must share with the
+    /// caller, then give them back afterwards.
+    ///
+    /// Dispatch used to `clone()` the class, function, callable and module
+    /// tables on **every** method call — O(program) per call, which dominates
+    /// OOP-heavy code — and to give the temporary runtime a fresh, empty
+    /// `expr_cache`, so every expression in a method body was re-parsed on every
+    /// call. Moving the tables and sharing the caches makes both O(1).
+    ///
+    /// Nothing can observe the move: the body runs to completion before the
+    /// tables are put back, `ctx` is not usable during that window, and a panic
+    /// aborts the process rather than unwinding out of it.
+    fn lend_tables_to(&mut self, temp: &mut Runtime) {
+        temp.classes = std::mem::take(&mut self.classes);
+        temp.funcs = std::mem::take(&mut self.funcs);
+        temp.callables = std::mem::take(&mut self.callables);
+        temp.modules = std::mem::take(&mut self.modules);
+        temp.module_dir = self.module_dir.clone();
+        temp.expr_cache = Arc::clone(&self.expr_cache);
+        temp.module_cache = Arc::clone(&self.module_cache);
+        temp.module_loading = Arc::clone(&self.module_loading);
+    }
+
+    fn reclaim_tables_from(&mut self, temp: Runtime) {
+        self.classes = temp.classes;
+        self.funcs = temp.funcs;
+        self.callables = temp.callables;
+        self.modules = temp.modules;
+    }
+
     fn new(module_dir: PathBuf) -> Self {
         Self {
             module_dir,
@@ -3737,37 +3788,40 @@ fn invoke_object_method(
     method_def: &FunctionDef,
     fields: &HashMap<String, Value>,
     args: &[Value],
-    ctx: &ExecContext<'_>,
+    ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
-    // We need a mutable context for exec_block. Create a temporary runtime wrapper.
-    // The method body executes with fields as local variables.
-    // Inherit classes/functions from the caller so methods can instantiate
-    // classes and call other functions.
-    let mut temp_rt = Runtime::new(PathBuf::from("."));
+    // A method body runs in its own runtime so that it sees its fields as
+    // globals and does *not* see the caller's locals.
+    //
+    // Building that runtime used to deep-copy the whole program's class,
+    // function, callable and module tables on every call, and to give it an
+    // empty `expr_cache` so every expression in the body was re-parsed on every
+    // call. Both are now O(1): the tables are lent and reclaimed, and the caches
+    // are shared.
+    let mut temp_rt = Runtime::bare(PathBuf::from("."));
     temp_rt.vars = to_map(fields);
-    temp_rt.classes = ctx.rt.classes.clone();
-    temp_rt.funcs = ctx.rt.funcs.clone();
-    temp_rt.callables = ctx.rt.callables.clone();
-    let mut temp_ctx = ExecContext::new(&mut temp_rt);
-    temp_ctx.push_frame();
-    
-    // Set up positional params
-    let params = &method_def.params;
-    for (i, param) in params.iter().enumerate() {
-        let val = if i < args.len() {
-            args[i].clone()
-        } else {
-            Value::Empty
-        };
-        temp_ctx.define_local(&param.name, val);
-    }
-    
-    match exec_block(&method_def.body, &mut temp_ctx)? {
-        Control::Return(v) => Ok(v),
-        Control::Yield(v) => Ok(Value::List(vec![v])),
-        Control::None => Ok(Value::Empty),
-        _ => Err("STOP/NEXT/RESET cannot be used in a method".to_string()),
-    }
+    ctx.rt.lend_tables_to(&mut temp_rt);
+
+    let out = {
+        let mut temp_ctx = ExecContext::new(&mut temp_rt);
+        temp_ctx.push_frame();
+
+        for (i, param) in method_def.params.iter().enumerate() {
+            let val = args.get(i).cloned().unwrap_or(Value::Empty);
+            temp_ctx.define_local(&param.name, val);
+        }
+
+        match exec_block(&method_def.body, &mut temp_ctx) {
+            Ok(Control::Return(v)) => Ok(v),
+            Ok(Control::Yield(v)) => Ok(Value::List(vec![v])),
+            Ok(Control::None) => Ok(Value::Empty),
+            Ok(_) => Err("STOP/NEXT/RESET cannot be used in a method".to_string()),
+            Err(e) => Err(e),
+        }
+    };
+
+    ctx.rt.reclaim_tables_from(temp_rt);
+    out
 }
 
 /// Call an object's method by its natural-language name, if defined.
@@ -3778,7 +3832,7 @@ fn call_object_method_value(
     receiver: &Value,
     method: &str,
     args: &[Value],
-    ctx: &ExecContext<'_>,
+    ctx: &mut ExecContext<'_>,
 ) -> Option<Result<Value, String>> {
     if let Value::Object {
         fields,
@@ -3839,7 +3893,7 @@ fn invoke_object_method_call(
     callee: &str,
     positional: &[Value],
     named: &HashMap<String, Value>,
-    ctx: &ExecContext<'_>,
+    ctx: &mut ExecContext<'_>,
 ) -> Option<Result<Value, String>> {
     let (receiver_name, method_name) = callee.split_once('.')?;
     if receiver_name.is_empty() || method_name.is_empty() || method_name.contains('.') {
@@ -3873,7 +3927,7 @@ fn invoke_method_on_value(
     target_val: Value,
     method: &str,
     args: &[Value],
-    ctx: &ExecContext<'_>,
+    ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
     let method_lc = method.to_ascii_lowercase();
 
@@ -3897,15 +3951,12 @@ fn invoke_method_on_value(
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
-            let mut temp_rt = Runtime::new(PathBuf::from("."));
+            let mut temp_rt = Runtime::bare(PathBuf::from("."));
             temp_rt.vars = to_map(fields);
-            temp_rt.classes = ctx.rt.classes.clone();
-            temp_rt.funcs = ctx.rt.funcs.clone();
-            temp_rt.callables = ctx.rt.callables.clone();
-            temp_rt.modules = ctx.rt.modules.clone();
-            temp_rt.module_dir = ctx.rt.module_dir.clone();
-            let mut temp_ctx = ExecContext::new(&mut temp_rt);
-            return invoke_callable_expr(fn_name, &exprs, &mut temp_ctx);
+            ctx.rt.lend_tables_to(&mut temp_rt);
+            let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
+            ctx.rt.reclaim_tables_from(temp_rt);
+            return out;
         }
         return Err(format!(
             "Object of class '{class_name}' has no method '{method}'"
@@ -3923,30 +3974,29 @@ fn invoke_method_on_value(
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
-            let mut temp_rt = Runtime::new(PathBuf::from("."));
+            let mut temp_rt = Runtime::bare(PathBuf::from("."));
             temp_rt.vars = to_map(map);
-            temp_rt.classes = ctx.rt.classes.clone();
-            temp_rt.funcs = ctx.rt.funcs.clone();
-            temp_rt.callables = ctx.rt.callables.clone();
-            temp_rt.modules = ctx.rt.modules.clone();
-            temp_rt.module_dir = ctx.rt.module_dir.clone();
-            let mut temp_ctx = ExecContext::new(&mut temp_rt);
-            return invoke_callable_expr(fn_name, &exprs, &mut temp_ctx);
+            ctx.rt.lend_tables_to(&mut temp_rt);
+            let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
+            ctx.rt.reclaim_tables_from(temp_rt);
+            return out;
         }
     }
 
     // 2b. Module function invocation
     if let Value::Module(ref m) = target_val {
         if let Some(func_def) = m.funcs.get(method) {
-            let mut temp_rt = Runtime::new(PathBuf::from("."));
+            let mut temp_rt = Runtime::bare(PathBuf::from("."));
             temp_rt.vars = m.vars.clone();
-            temp_rt.classes = ctx.rt.classes.clone();
-            temp_rt.funcs = ctx.rt.funcs.clone();
-            temp_rt.callables = ctx.rt.callables.clone();
-            temp_rt.modules = ctx.rt.modules.clone();
-            temp_rt.module_dir = ctx.rt.module_dir.clone();
-            let mut temp_ctx = ExecContext::new(&mut temp_rt);
-            return invoke_function(func_def, args, &HashMap::new(), &mut temp_ctx);
+            ctx.rt.lend_tables_to(&mut temp_rt);
+            let out = invoke_function(
+                func_def,
+                args,
+                &HashMap::new(),
+                &mut ExecContext::new(&mut temp_rt),
+            );
+            ctx.rt.reclaim_tables_from(temp_rt);
+            return out;
         }
         return Err(format!("Module has no function '{method}'"));
     }

@@ -1,0 +1,70 @@
+#! Cost probe for object method dispatch.
+#!
+#! `+`, `==` and `string()` on an object all route through
+#! `invoke_object_method`, which used to build a temporary runtime on every
+#! call — deep-copying the whole program's class, function, callable and module
+#! tables, and giving that runtime an EMPTY expression cache, so every
+#! expression in a method body was re-parsed on every single call.
+#!
+#! The filler functions below exist so the table-copy half of that cost is
+#! actually present to be measured; without them the tables are nearly empty and
+#! the copy looks free.
+
+#! ---- filler: give the program some functions to copy ----
+fun filler1
+    give 1
+fun filler2
+    give 2
+fun filler3
+    give 3
+fun filler4
+    give 4
+fun filler5
+    give 5
+fun filler6
+    give 6
+fun filler7
+    give 7
+fun filler8
+    give 8
+fun filler9
+    give 9
+fun filler10
+    give 10
+
+class Vec2
+    var x int
+    var y int
+
+    fun add other
+        give Vec2(x + other.x, y + other.y)
+
+    fun to_string
+        give "Vec2(" + string(x) + ", " + string(y) + ")"
+
+var a dynamic = Vec2(1, 2)
+var b dynamic = Vec2(3, 4)
+var N int = 20000
+
+var t0 float = time_perf_counter
+var last dynamic = 0
+repeat N
+    last is a + b
+var t1 float = time_perf_counter
+say "object add:       " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+var t2 float = time_perf_counter
+var same boolean = FALSE
+repeat N
+    same is a == a
+var t3 float = time_perf_counter
+say "object equals:    " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+var t4 float = time_perf_counter
+var text string = ""
+repeat N
+    text is string(a)
+var t5 float = time_perf_counter
+say "object to_string: " + string((t5 - t4) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(same) + " " + string(len(text)) + " " + string(last)
