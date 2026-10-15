@@ -51,6 +51,25 @@ Helper scripts:
 
 ## Reference results
 
+### `bench_hot_paths.ind` — the same file, both binaries (best of 3)
+
+The cleanest comparison available: one benchmark file, run against the released
+2.2.2 binary and the current build.
+
+| Case | 2.2.2 | **2.6.0** | Gain |
+|---|---|---|---|
+| 100 000 function calls | 0.1238 s | **0.0365 s** | 3.4× |
+| 50 000 `call_func` (dynamic) | 0.0707 s | **0.0184 s** | 3.8× |
+| 50 000 `call_func_lenient` | *n/a — added in 2.3* | **0.0206 s** | — |
+| 50 000 list `append`s | **52.5 s** | **0.0071 s** | **~7 400×** |
+| 50 000 dict writes | 0.0226 s | **0.0087 s** | 2.6× |
+| 10 000 string concatenations | 0.00745 s | **0.00378 s** | 2.0× |
+| 5 000 JSON round-trips | 0.00757 s | **0.00559 s** | 1.35× |
+
+The append row is the quadratic bug: `l is append l x` copied the whole list on
+every step. The old binary also cannot run `call_func_lenient` at all — it did not
+exist before 2.3 — which is why that row is empty for 2.2.2.
+
 ### 2.2.2 → now, container reads (best of 3)
 
 | Case | 2.2.2 | now | gain |
