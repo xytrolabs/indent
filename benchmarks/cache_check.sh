@@ -27,8 +27,7 @@ S=$(date +%s%N); seq 30 | xargs -I@ "$IND" benchmarks/bench_startup_imports.ind 
 echo "5 std imports:  $(( (E-S)/30/1000 )) us/run" >> "$OUT"
 
 echo "" >> "$OUT"
-echo "=== 5. startup: 30 runs with cache DISABLED ===" >> "$OUT"
-S=$(date +%s%N); seq 30 | xargs -I@ env INDENT_NO_AST_CACHE=1 "$IND" /tmp/imp_discord.ind > /dev/null 2>&1; E=$(date +%s%N)
+echo "=== 5. startup: 30 runs with cache DISABLED ===" >> "$OUT"S=$(date +%s%N); seq 30 | xargs -I@ env INDENT_NO_AST_CACHE=1 "$IND" /tmp/imp_discord.ind > /dev/null 2>&1; E=$(date +%s%N)
 echo "discord import: $(( (E-S)/30/1000 )) us/run" >> "$OUT"
 
 S=$(date +%s%N); seq 30 | xargs -I@ env INDENT_NO_AST_CACHE=1 "$IND" benchmarks/bench_startup_imports.ind > /dev/null 2>&1; E=$(date +%s%N)

@@ -397,10 +397,14 @@ enum Value {
     List(Vec<Value>),
     Set(Vec<Value>),  // ordered set — unique values, insertion order
     Dict(HashMap<String, Value>),
+    /// Class instance. The two maps are `Box`ed purely to keep `Value` small:
+    /// an inline `HashMap` is 48 bytes each, which made `Value` 128 bytes and
+    /// charged every variable read, argument pass and list element a 128-byte
+    /// move. Boxing them takes `Value` to 56 bytes.
     Object {
         class_name: String,
-        fields: HashMap<String, Value>,
-        methods: HashMap<String, Arc<FunctionDef>>,
+        fields: Box<HashMap<String, Value>>,
+        methods: Box<HashMap<String, Arc<FunctionDef>>>,
         is_dataclass: bool,
     },
     Func(String),
@@ -774,8 +778,8 @@ fn instantiate_class(class_def: &ClassDef, args: &[Value], classes: &HashMap<Str
 
     Value::Object {
         class_name: class_def.name.clone(),
-        fields,
-        methods,
+        fields: Box::new(fields),
+        methods: Box::new(methods),
         is_dataclass: class_def.is_dataclass,
     }
 }
@@ -842,6 +846,27 @@ fn stmt_contain_yield(s: &Stmt) -> bool {
 
 fn stmts_contain_yield(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_contain_yield)
+}
+
+/// Convert an *owned* iterable into its items without copying it again.
+///
+/// `iterable_items` takes a reference and clones the whole list/set, and loops
+/// call it on a value they already own — so every `repeat x in xs` copied the
+/// collection twice per execution (once reading the variable, once here). The
+/// loop now consumes the value it evaluated, which is the same snapshot with one
+/// fewer O(n) copy.
+fn iterable_items_owned(value: Value) -> Option<Vec<Value>> {
+    match value {
+        Value::List(v) => Some(v),
+        Value::Set(v) => Some(v),
+        Value::Dict(mut m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
+            match m.remove("__gen_values__") {
+                Some(Value::List(v)) => Some(v),
+                _ => Some(Vec::new()),
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Convert an iterable (list, set, or generator) into its items.
@@ -1474,26 +1499,47 @@ fn positional_alias_index(name: &str) -> Option<usize> {
 struct ExecContext<'a> {
     rt: &'a mut Runtime,
     frames: Vec<Frame>,
+    /// Recycled call frames. A call binds its parameters into a fresh
+    /// `HashMap` and collects its positional arguments into a fresh `Vec`, so
+    /// every call with arguments allocated twice. Returning the frame to this
+    /// pool instead (cleared) keeps the allocations for the next call. Purely
+    /// an allocation optimisation: contents are always cleared before reuse, so
+    /// a recycled frame can never leak a variable or a positional argument.
+    frame_pool: Vec<Frame>,
     collect_yields: bool,
     yielded_values: Vec<Value>,
 }
 
 impl<'a> ExecContext<'a> {
+    /// Frames kept for reuse. Deep recursion is bounded so a pathological call
+    /// depth does not retain an unbounded amount of memory.
+    const FRAME_POOL_MAX: usize = 64;
+
     fn new(rt: &'a mut Runtime) -> Self {
         Self {
             rt,
             frames: vec![],
+            frame_pool: vec![],
             collect_yields: false,
             yielded_values: vec![],
         }
     }
 
     fn push_frame(&mut self) {
-        self.frames.push(Frame::default());
+        let mut frame = self.frame_pool.pop().unwrap_or_default();
+        frame.vars.clear();
+        frame.args.clear();
+        self.frames.push(frame);
     }
 
     fn pop_frame(&mut self) {
-        let _ = self.frames.pop();
+        if let Some(mut frame) = self.frames.pop() {
+            frame.vars.clear();
+            frame.args.clear();
+            if self.frame_pool.len() < Self::FRAME_POOL_MAX {
+                self.frame_pool.push(frame);
+            }
+        }
     }
 
     fn define_local(&mut self, name: &str, value: Value) {
@@ -2353,7 +2399,7 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
         }
         RepeatMode::ForEach(expr) => {
             let iterable = eval_expr(expr, ctx)?;
-            let items = match iterable_items(&iterable) {
+            let items = match iterable_items_owned(iterable) {
                 Some(v) => v,
                 None => return Err("Repeat for expects a list, set, or generator".to_string()),
             };
@@ -2373,7 +2419,7 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
             iterable_expr,
         } => {
             let iterable = eval_expr(iterable_expr, ctx)?;
-            let items = match iterable_items(&iterable) {
+            let items = match iterable_items_owned(iterable) {
                 Some(v) => v,
                 None => return Err("Repeat for <Item> in expects a list, set, or generator".to_string()),
             };
@@ -3050,7 +3096,7 @@ fn call_object_method_value(
     } = receiver
     {
         let lc = method.to_ascii_lowercase();
-        for (name, mdef) in methods {
+        for (name, mdef) in methods.iter() {
             if name.to_ascii_lowercase() == lc {
                 return Some(invoke_object_method(mdef, fields, args, ctx));
             }
@@ -3078,7 +3124,7 @@ fn call_object_method_value(
                             return Some(Ok(Value::Bool(false)));
                         }
                         let mut eq = true;
-                        for (k, v) in fields {
+                        for (k, v) in fields.iter() {
                             match f2.get(k) {
                                 Some(v2) if eq_values(v, v2) => {}
                                 _ => {
@@ -3160,7 +3206,7 @@ fn invoke_method_on_value(
                 _ => Expr::Str(v.to_string()),
             }).collect();
             let mut temp_rt = Runtime::new(PathBuf::from("."));
-            temp_rt.vars = fields.clone();
+            temp_rt.vars = (**fields).clone();
             temp_rt.classes = ctx.rt.classes.clone();
             temp_rt.funcs = ctx.rt.funcs.clone();
             temp_rt.callables = ctx.rt.callables.clone();
@@ -3488,9 +3534,13 @@ fn invoke_function(
 
     // Bind the positional arguments once, as a list. `argument` / `argument2` …
     // are resolved from this list on demand (see `get_var`), which avoids a
-    // String allocation and a map insert per argument per call.
+    // String allocation and a map insert per argument per call. The list comes
+    // from the recycled frame, so this normally allocates nothing.
     if let Some(frame) = ctx.frames.last_mut() {
-        frame.args = positional.to_vec();
+        frame.args.clear();
+        frame
+            .args
+            .extend(positional.iter().cloned());
     }
 
     for (k, v) in named {
@@ -9846,7 +9896,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::Object { fields, class_name, .. } => {
             let mut out = JsonMap::new();
             out.insert("__class__".to_string(), JsonValue::from(class_name.clone()));
-            for (k, v) in fields {
+            for (k, v) in fields.iter() {
                 out.insert(k.clone(), value_to_json(v));
             }
             JsonValue::Object(out)
@@ -10784,9 +10834,18 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
         Expr::Index { target, index } => {
             let target_val = eval_ast(target, ctx)?;
             let index_val = eval_ast(index, ctx)?;
-            // Object `get_item` special method (natural name).
-            if let Some(r) = call_object_method_value(&target_val, "get_item", &[index_val.clone()], ctx) {
-                return r;
+            // Object `get_item` special method (natural name). Only an Object can
+            // define it, so test the discriminant before handing over the index
+            // (passing it eagerly cloned the index for every plain `xs[i]`).
+            if matches!(&target_val, Value::Object { .. }) {
+                if let Some(r) = call_object_method_value(
+                    &target_val,
+                    "get_item",
+                    std::slice::from_ref(&index_val),
+                    ctx,
+                ) {
+                    return r;
+                }
             }
             resolve_index(target_val, index_val)
         }
@@ -11280,54 +11339,100 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
     // Object special-method dispatch using natural-language names. If either
     // operand is an Object that defines the matching method, call it and use
     // its result instead of the built-in behavior.
+    //
+    // The `matches!` guards matter a lot: only a `Value::Object` can have these
+    // methods, but passing the other operand as an argument used to clone it
+    // *eagerly* — so every `+`, `==` and `in` deep-copied both operands (a fresh
+    // String or a whole list/dict) purely to discover there was no method to
+    // call. A discriminant test replaces those copies.
     match op {
         "+" => {
-            if let Some(r) = call_object_method_value(&a, "add", &[b.clone()], ctx) {
-                return r;
+            if matches!(&a, Value::Object { .. }) {
+                if let Some(r) = call_object_method_value(&a, "add", std::slice::from_ref(&b), ctx) {
+                    return r;
+                }
             }
-            if let Some(r) = call_object_method_value(&b, "add", &[a.clone()], ctx) {
-                return r;
+            if matches!(&b, Value::Object { .. }) {
+                if let Some(r) = call_object_method_value(&b, "add", std::slice::from_ref(&a), ctx) {
+                    return r;
+                }
             }
         }
         "-" => {
-            if let Some(r) = call_object_method_value(&a, "subtract", &[b.clone()], ctx) {
-                return r;
+            if matches!(&a, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&a, "subtract", std::slice::from_ref(&b), ctx)
+                {
+                    return r;
+                }
             }
         }
         "*" => {
-            if let Some(r) = call_object_method_value(&a, "multiply", &[b.clone()], ctx) {
-                return r;
+            if matches!(&a, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&a, "multiply", std::slice::from_ref(&b), ctx)
+                {
+                    return r;
+                }
             }
         }
         "/" => {
-            if let Some(r) = call_object_method_value(&a, "divide", &[b.clone()], ctx) {
-                return r;
+            if matches!(&a, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&a, "divide", std::slice::from_ref(&b), ctx)
+                {
+                    return r;
+                }
             }
         }
         "==" => {
-            if let Some(r) = call_object_method_value(&a, "equals", &[b.clone()], ctx) {
-                return r.map(|v| Value::Bool(v.to_bool()));
+            if matches!(&a, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&a, "equals", std::slice::from_ref(&b), ctx)
+                {
+                    return r.map(|v| Value::Bool(v.to_bool()));
+                }
             }
-            if let Some(r) = call_object_method_value(&b, "equals", &[a.clone()], ctx) {
-                return r.map(|v| Value::Bool(v.to_bool()));
+            if matches!(&b, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&b, "equals", std::slice::from_ref(&a), ctx)
+                {
+                    return r.map(|v| Value::Bool(v.to_bool()));
+                }
             }
         }
         "!=" => {
-            if let Some(r) = call_object_method_value(&a, "equals", &[b.clone()], ctx) {
-                return r.map(|v| Value::Bool(!v.to_bool()));
+            if matches!(&a, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&a, "equals", std::slice::from_ref(&b), ctx)
+                {
+                    return r.map(|v| Value::Bool(!v.to_bool()));
+                }
             }
-            if let Some(r) = call_object_method_value(&b, "equals", &[a.clone()], ctx) {
-                return r.map(|v| Value::Bool(!v.to_bool()));
+            if matches!(&b, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&b, "equals", std::slice::from_ref(&a), ctx)
+                {
+                    return r.map(|v| Value::Bool(!v.to_bool()));
+                }
             }
         }
         "in" => {
-            if let Some(r) = call_object_method_value(&b, "contains", &[a.clone()], ctx) {
-                return r.map(|v| Value::Bool(v.to_bool()));
+            if matches!(&b, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&b, "contains", std::slice::from_ref(&a), ctx)
+                {
+                    return r.map(|v| Value::Bool(v.to_bool()));
+                }
             }
         }
         "not in" => {
-            if let Some(r) = call_object_method_value(&b, "contains", &[a.clone()], ctx) {
-                return r.map(|v| Value::Bool(!v.to_bool()));
+            if matches!(&b, Value::Object { .. }) {
+                if let Some(r) =
+                    call_object_method_value(&b, "contains", std::slice::from_ref(&a), ctx)
+                {
+                    return r.map(|v| Value::Bool(!v.to_bool()));
+                }
             }
         }
         _ => {}
@@ -16126,6 +16231,29 @@ mod tests {
         assert!(
             rt2.callables.contains_key("Triple"),
             "function from a cached module was not imported"
+        );
+    }
+
+    /// Perf guardrail: `Value` is moved constantly — every variable read, every
+    /// argument, every list element and every map entry. It was 128 bytes until
+    /// the `Object` maps were boxed; anything that pushes it back up is a silent
+    /// tax on the whole interpreter, so fail loudly instead.
+    #[test]
+    fn value_size_guardrail() {
+        let value = std::mem::size_of::<Value>();
+        println!(
+            "SIZEOF Value={} Stmt={} Expr={} Callable={} FunctionDef={} Frame={}",
+            value,
+            std::mem::size_of::<Stmt>(),
+            std::mem::size_of::<Expr>(),
+            std::mem::size_of::<Callable>(),
+            std::mem::size_of::<FunctionDef>(),
+            std::mem::size_of::<Frame>(),
+        );
+        assert!(
+            value <= 64,
+            "Value grew to {value} bytes (was 56). Box large variants — every \
+             variable read, argument and list element moves this."
         );
     }
 

@@ -1,5 +1,63 @@
 # Indent Changelog
 
+## 2.5.0 — 2026-10-14 (no more hidden copies) 🧹
+
+Third performance release of the day. This one is about the copies the
+interpreter was making for no reason. All numbers are best-of-N, measured
+against the shipped 2.4.0 build (`benchmarks/ab_current.sh`).
+
+### 🧵 Loops no longer copy their iterable twice
+`repeat x in xs` evaluated `xs` (one copy) and then handed it to a helper that
+**cloned it again** — so every list loop copied the whole collection twice per
+execution. The loop now consumes the value it already owns.
+
+| Benchmark | 2.4.0 | **2.5.0** |
+|---|---|---|
+| `bench_loops` (ranges, 50k lists, 10k strings, nested) | 56.5 ms | **44.5 ms** (**−21%**) |
+| `bench_hot_paths` | 122.1 ms | **108.8 ms** (**−11%**) |
+| `bench_calls` | 317.4 ms | **292.5 ms** (**−8%**) |
+| `bench_deep_calls` | 14.3 ms | **13.7 ms** (−4%) |
+| Startup, 5 std imports (interleaved, best of 5) | 3489 µs | **3350 µs** (−4%) |
+
+### 🔢 Operators no longer copy their operands to ask a question
+`eval_binary` checked for object `add`/`equals`/`contains` methods by *passing the
+other operand in*, and the argument was cloned **eagerly** — so every `+`, `==`,
+`in` and list index deep-copied both operands (a fresh `String`, or a whole list)
+purely to find out there was no method to call. A discriminant test
+(`matches!(&x, Value::Object { .. })`) replaces those copies; `Index` had the same
+shape with the subscript.
+
+| Per-operation cost | 2.4.0 | **2.5.0** |
+|---|---|---|
+| 1-argument call | 0.2375 µs | **0.2131 µs** (−10%) |
+| 2-argument call | 0.3548 µs | **0.3383 µs** (−5%) |
+| String concatenation | 0.2229 µs | **0.2108 µs** (−5%) |
+
+### 🧊 `Value` is 56 bytes instead of 128
+The `Object` variant held two inline `HashMap`s, which made `Value` 128 bytes —
+and every variable read, argument and list element moves a `Value`. Boxing them
+brings it to 56. (Honest note: this alone barely moved the micro-benchmarks — the
+remaining cost is per-operation dispatch and allocation, not value size — but it
+is 2.3× less memory traffic on large collections.)
+
+### ♻️ Call frames are recycled
+A call with arguments allocated a fresh `HashMap` (for its parameters) and a fresh
+`Vec` (for its positional arguments) every time. Frames now come from
+`ExecContext.frame_pool` and are cleared before reuse, so those allocations happen
+once per call depth instead of once per call.
+
+### 🧪 Method, and a guardrail
+- `benchmarks/best_of.sh` reports the **best of N** runs, because single runs on a
+  loaded machine vary by ±15%.
+- `benchmarks/startup_ab.sh` compares startup **interleaved**: an earlier
+  sequential A/B showed 2.5.0 as 7% *slower* when in fact it is 4% faster —
+  whichever build ran second was penalised.
+- `benchmarks/ab_current.sh` A/Bs the working build against the installed release;
+  `cache_write_check.sh` proves a run *reuses* the AST cache rather than rewriting it.
+- New `value_size_guardrail` test fails the build if `Value` grows past 64 bytes.
+
+**Verification:** 51/51 language tests, 28/28 Rust tests.
+
 ## 2.4.0 — 2026-10-14 (parsed-program cache + call cost fix) 🚀
 
 Second performance release in a row, and the biggest single win so far.

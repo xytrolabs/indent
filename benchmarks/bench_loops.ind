@@ -1,0 +1,48 @@
+#! How much does iterating cost?
+#!
+#! `repeat x in <expression>` used to copy the collection twice: once when the
+#! expression was read and once more inside the loop helper. The second copy is
+#! gone, so a loop over a *temporary* (range, call result, literal) now copies
+#! nothing, and a loop over a named variable copies once (its snapshot).
+#!
+#! Run:  indent benchmarks/bench_loops.ind
+
+var N int = 50000
+
+#! (a) temporary iterable — nothing needs to be copied at all
+var t0 float = time_perf_counter
+var acc int = 0
+repeat x in range(N)
+    acc is acc + 1
+var t1 float = time_perf_counter
+say "range " + string(N) + " (temporary):   " + string(t1 - t0) + "s"
+
+#! (b) named list of ints — one snapshot copy is all that should happen
+var ints dynamic = [1 for i in range(N)]
+var t2 float = time_perf_counter
+var acc2 int = 0
+repeat x in ints
+    acc2 is acc2 + 1
+var t3 float = time_perf_counter
+say "list of " + string(N) + " ints:       " + string(t3 - t2) + "s"
+
+#! (c) named list of strings — copies here are O(length of each string)
+#! NOTE: "word%d" would be read as an interpolation marker, so build with +
+var words dynamic = ["word" + string(i) for i in range(10000)]
+var t4 float = time_perf_counter
+var n int = 0
+repeat w in words
+    n is n + len(w)
+var t5 float = time_perf_counter
+say "list of 10000 strings:     " + string(t5 - t4) + "s"
+
+#! (d) nested loop over a temporary — the inner iterable must not be rebuilt
+var t6 float = time_perf_counter
+var total int = 0
+repeat a in range(500)
+    repeat b in range(100)
+        total is total + 1
+var t7 float = time_perf_counter
+say "nested range 500x100:      " + string(t7 - t6) + "s"
+
+say "checks: " + string(acc) + " " + string(acc2) + " " + string(n) + " " + string(total)

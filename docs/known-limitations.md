@@ -67,12 +67,19 @@ you know what to expect (and what not to fight).
     or collect items and `extend` once at the end.
   - `l is l + [x]` in a loop is **always** O(n²) — measured 6.5 s for 20 000
     items. Never build a list that way; see `benchmarks/`.
-- Measured reference numbers (release build, Indent 2.4; run `benchmarks/`
-  yourself): a function call ≈ 0.25 µs for one argument regardless of how big the
+- Measured reference numbers (release build, Indent 2.5; run `benchmarks/`
+  yourself): a function call ≈ 0.21 µs for one argument regardless of how big the
   function is, `i is i + 1` ≈ 0.16 µs, `if` + comparison ≈ 0.25 µs, 100 000 calls
-  ≈ 0.05 s, 20 000 `append`s ≈ 0.007 s, 20 000 index writes ≈ 0.015 s. Loading the
-  whole `discord` + `ai` package stack plus all puzzle modules costs ≈ 48 ms, so
-  **startup is not the bottleneck for a bot — network round-trips are**.
+  ≈ 0.05 s, 20 000 `append`s ≈ 0.007 s, 20 000 index writes ≈ 0.015 s. Iterating a
+  collection is linear and copies it once, so prefer `repeat x in xs` over
+  rebuilding lists in a loop. Loading the whole `discord` + `ai` package stack plus
+  all puzzle modules costs ≈ 48 ms, so **startup is not the bottleneck for a bot —
+  network round-trips are**.
+- **Reading a container still copies it.** Because arguments are by value,
+  `get_var` clones a whole list or dict, so `len(bigList)`, `key in bigDict` and
+  passing a container to a function are O(n) even when the callee only reads them.
+  Copy-on-write values (`Arc<Vec<Value>>`) would make reads O(1); it is the next
+  planned step, and it touches ~280 call sites.
 
 ## The `__incache__` parsed-program cache
 

@@ -15,6 +15,7 @@ cargo build --release --manifest-path indent-native/Cargo.toml
 | `bench_hot_paths.ind` | Call overhead, string concat, list append, dict writes, JSON round-trips, dynamic dispatch |
 | `bench_calls.ind` | Per-operation cost in ns of the individual constructs (call, assign, compare, concat) |
 | `bench_deep_calls.ind` | Whether per-call cost scales with the SIZE of the function body |
+| `bench_loops.ind` | Iterating: ranges, large int lists, string lists, nested loops |
 | `bench_append_scaling.ind` | Whether `l is append l x` grows linearly or quadratically |
 | `bench_list_building.ind` | Fastest way to build a large list (append vs comprehension vs whole-list concat) |
 | `bench_index_writes.ind` | Whether `d[k] is v` / `l[i] is v` grow linearly or quadratically |
@@ -25,15 +26,46 @@ Helper scripts:
 | Script | Purpose |
 |---|---|
 | `sh benchmarks/verify.sh` | Performance **and** both test suites, in one go |
-| `sh benchmarks/ab_compare.sh` | A/B the current build against a previous binary |
+| `sh benchmarks/best_of.sh <bench.ind> [n]` | Best of N runs — **use this**, single runs vary ±15% |
+| `sh benchmarks/startup_ab.sh [file] [n]` | Interleaved startup A/B vs the installed release |
+| `sh benchmarks/ab_current.sh` | A/B the working build vs the installed release |
+| `sh benchmarks/ab_compare.sh` | A/B against an older binary (`indent-2.2.2.bak`) |
+| `sh benchmarks/size_probe.sh` | Core type sizes + the `Value` size guardrail |
 | `sh benchmarks/cache_check.sh` | Prove the `__incache__` cache is used, and measure it |
 | `sh benchmarks/cache_flags_check.sh` | `--no-cache`, `--clear-cache`, invalidation on edit |
+| `sh benchmarks/cache_write_check.sh` | Prove a run *reuses* the cache instead of rewriting it |
 | `sh benchmarks/measure.sh [binary] [outfile]` | Startup + hot-path timings |
 | `sh benchmarks/unit_tests.sh` | Rust unit tests, compact output |
 | `sh benchmarks/run_suite.sh` | Run the `.ind` test suite (avoids shell autocorrect of `test`) |
 | `sh benchmarks/build.sh` | Release build, printing only compile errors |
 
+### Measurement method
+
+- Always use a **release** build; a debug build is 10–50× slower.
+- Report the **best of several runs** (`best_of.sh`) — a loaded machine moves a
+  single run by ±15%, which is larger than most of the wins below.
+- A/B **interleaved**, not sequentially: whichever build runs second inherits any
+  drift in machine load. A sequential run showed 2.5.0 as 7% slower on startup
+  when it is in fact 4% faster.
+
 ## Reference results
+
+### 2.4.0 → 2.5.0 (best of N, interleaved where it matters)
+
+| Case | 2.4.0 | **2.5.0** |
+|---|---|---|
+| `bench_loops` | 56.5 ms | **44.5 ms** (−21%) |
+| `bench_hot_paths` | 122.1 ms | **108.8 ms** (−11%) |
+| `bench_calls` | 317.4 ms | **292.5 ms** (−8%) |
+| `bench_deep_calls` | 14.3 ms | **13.7 ms** (−4%) |
+| Startup, 5 std imports | 3489 µs | **3350 µs** (−4%) |
+| `size_of::<Value>()` | 128 B | **56 B** |
+
+What produced it: loops stopped copying their iterable twice; `eval_binary`/
+`Index` stopped deep-copying operands to test for object methods; the `Object`
+variant's maps were boxed; call frames are recycled instead of reallocated.
+
+### 2.2.2 → 2.4.0
 
 Machine: Linux, `--release` (fat LTO), Indent 2.3.0.
 

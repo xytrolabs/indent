@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.4.0
+# Indent Language (.ind) v2.5.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,7 +7,38 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
-> ## 🚀 Indent 2.4 — a parsed-program cache and a 45× call fix
+> ## 🚀 Indent 2.5 — no more hidden copies
+>
+> Third performance release in a row, this one hunting the copies the interpreter
+> made for no reason. Best-of-N, measured against the shipped 2.4.0 build:
+>
+> | Benchmark | 2.4.0 | **2.5.0** |
+> |---|---|---|
+> | Loops (ranges, 50k lists, 10k strings, nested) | 56.5 ms | **44.5 ms** (**−21%**) |
+> | Hot-path suite | 122.1 ms | **108.8 ms** (**−11%**) |
+> | Call-heavy suite | 317.4 ms | **292.5 ms** (**−8%**) |
+> | Startup, 5 std imports (interleaved) | 3489 µs | **3350 µs** (−4%) |
+> | 1-argument function call | 0.2375 µs | **0.2131 µs** (−10%) |
+>
+> - 🔁 **Loops copied their iterable twice** — `repeat x in xs` cloned the whole
+>   collection once to read it and again inside the loop helper. Now once.
+> - ➗ **`+`, `==` and `in` deep-copied both operands** just to check for object
+>   methods that almost never exist. A discriminant test replaces the copies.
+> - 🧊 **`Value` is 56 bytes, not 128** (the `Object` maps are boxed) — every
+>   variable read, argument and list element moves 2.3× less memory.
+> - ♻️ **Call frames are recycled**, so a call with arguments no longer allocates
+>   a `HashMap` and a `Vec` every time.
+>
+> **Verification:** 51/51 language tests, 28/28 Rust tests.
+>
+> ### What's still slow, honestly
+> Reading a container still copies it: `get_var` clones a whole list or dict, so
+> `len(bigList)`, `key in bigDict` and passing any container to a function are
+> O(n). Fixing that properly means copy-on-write values (`Arc<Vec<Value>>`), which
+> touches ~280 call sites and needs its own verification pass — it is the next big
+> lever, not something to slip in quietly.
+>
+> ### 🎉 What's New in 2.4.0
 >
 > ### `__incache__/` — Indent's `__pycache__`
 > The first run of a file writes its **parsed program** to `__incache__/<name>.inc`
