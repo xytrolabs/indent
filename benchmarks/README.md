@@ -20,6 +20,7 @@ cargo build --release --manifest-path indent-native/Cargo.toml
 | `bench_append_scaling.ind` | Whether `l is append l x` grows linearly or quadratically |
 | `bench_list_building.ind` | Fastest way to build a large list (append vs comprehension vs whole-list concat) |
 | `bench_index_writes.ind` | Whether `d[k] is v` / `l[i] is v` grow linearly or quadratically |
+| `bench_index_reads.ind` | Whether `xs[i]` / `d[k]` / `xs[a:b]` on a variable read in O(1) or clone the container (was O(n²)) |
 | `bench_startup_empty.ind` / `bench_startup_imports.ind` | Cold process startup, with and without std imports |
 
 Helper scripts:

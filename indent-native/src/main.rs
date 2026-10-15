@@ -10843,6 +10843,29 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
         }
         Expr::Var(parts) => resolve_var_chain(parts, ctx),
         Expr::Index { target, index } => {
+            // Fast path: `container[i]` where the container is a bare variable.
+            //
+            // Reading a variable clones its value, so indexing a 20 000-item
+            // list cloned the whole list to hand back one element — O(n) per
+            // access, O(n²) for a loop over the list. Borrow the container and
+            // clone only the element. Objects are excluded because their
+            // `get_item` method needs a mutable context, and positional aliases
+            // are excluded because `get_var` reads those from the frame's
+            // argument list, not from its variables.
+            if let Expr::Var(parts) = target.as_ref() {
+                let borrowable = parts.len() == 1
+                    && borrowable_var(&parts[0])
+                    && matches!(
+                        ctx.get_var_ref(&parts[0]),
+                        Some(Value::List(_) | Value::Str(_) | Value::Dict(_))
+                    );
+                if borrowable {
+                    let index_val = eval_ast(index, ctx)?;
+                    if let Some(base) = ctx.get_var_ref(&parts[0]) {
+                        return resolve_index_ref(base, index_val);
+                    }
+                }
+            }
             let target_val = eval_ast(target, ctx)?;
             let index_val = eval_ast(index, ctx)?;
             // Object `get_item` special method (natural name). Only an Object can
@@ -10866,8 +10889,6 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             end,
             step,
         } => {
-            let target_val = eval_ast(target, ctx)?;
-
             let start_bound = if let Some(expr) = start {
                 let value = eval_ast(expr, ctx)?;
                 parse_optional_slice_bound(&value, "slice start")?
@@ -10889,6 +10910,24 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                 1
             };
 
+            // Borrowing fast path: slicing a bare container variable cloned the
+            // whole container only to build the slice from it. The slice itself
+            // is still a fresh value, so this is purely the clone that goes away.
+            if let Expr::Var(parts) = target.as_ref() {
+                let borrowable = parts.len() == 1
+                    && borrowable_var(&parts[0])
+                    && matches!(
+                        ctx.get_var_ref(&parts[0]),
+                        Some(Value::List(_) | Value::Str(_))
+                    );
+                if borrowable {
+                    if let Some(base) = ctx.get_var_ref(&parts[0]) {
+                        return slice_builtin(base, start_bound, end_bound, step_value);
+                    }
+                }
+            }
+
+            let target_val = eval_ast(target, ctx)?;
             slice_builtin(&target_val, start_bound, end_bound, step_value)
         }
         Expr::Call { callee, args } => {
@@ -11306,6 +11345,58 @@ fn resolve_index(target: Value, index: Value) -> Result<Value, String> {
         }
         _ => Err(format!("Indexing is not supported for {} values", target.type_name())),
     }
+}
+
+/// Borrowing counterpart of `resolve_index`, for callers that already hold the
+/// container (see the `Expr::Index` fast path). The messages and the accepted
+/// types are identical to `resolve_index` — only the selected element is
+/// cloned instead of the whole container.
+fn resolve_index_ref(target: &Value, index: Value) -> Result<Value, String> {
+    match target {
+        Value::List(items) => {
+            let raw = match index {
+                Value::Int(i) => i,
+                _ => return Err(format!("List index must be an int, got {}: {}", index.type_name(), index)),
+            };
+            let idx = normalize_index(items.len(), raw)
+                .ok_or_else(|| format!("List index out of range: {raw}"))?;
+            items
+                .get(idx)
+                .cloned()
+                .ok_or_else(|| format!("List index out of range: {idx}"))
+        }
+        Value::Str(s) => {
+            let raw = match index {
+                Value::Int(i) => i,
+                _ => return Err(format!("String index must be an int, got {}: {}", index.type_name(), index)),
+            };
+            let idx = normalize_index(s.chars().count(), raw)
+                .ok_or_else(|| format!("String index out of range: {raw}"))?;
+            let ch = s
+                .chars()
+                .nth(idx)
+                .ok_or_else(|| format!("String index out of range: {idx}"))?;
+            Ok(Value::Str(ch.to_string()))
+        }
+        Value::Dict(map) => {
+            let key = match index {
+                Value::Str(s) => s,
+                _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
+            };
+            map.get(&key)
+                .cloned()
+                .ok_or_else(|| format!("Dictionary key not found: {key}"))
+        }
+        _ => Err(format!("Indexing is not supported for {} values", target.type_name())),
+    }
+}
+
+/// Can `name` be read through `get_var_ref` with exactly the same result that
+/// `get_var` would produce? False for the positional aliases
+/// (`argument`, `argument2`, …), because those are resolved from the frame's
+/// argument list and would otherwise be shadowed by same-named variables.
+fn borrowable_var(name: &str) -> bool {
+    positional_alias_index(name).is_none()
 }
 
 fn assign_index_value(target: Value, index: Value, replacement: Value) -> Result<Value, String> {

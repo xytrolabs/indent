@@ -20,6 +20,9 @@ say "Hello " + name + "!"
 > | 50 000 list `append`s | **52.5 s** | **0.0071 s** | **~7 400×** |
 > | `len()` of a 20 000-item list | 59.0 ms / 300 | **0.057 ms** | **~1000×** |
 > | `has_key()` on a 5 000-key dict | 44.3 ms / 300 | **0.092 ms** | **~480×** |
+> | Summing a 20 000-item list with `xs[i]` | 2.497 s | **0.00545 s** | **~458×** |
+> | Walking a 20 000-key dict with `d[k]` | 9.684 s | **0.00897 s** | **~1080×** |
+> | 2 000 × slicing a 20 000-item list | 0.2468 s | **0.000697 s** | **354×** |
 > | Call into a 302-statement function | 16.36 µs | **0.33 µs** | **50×** |
 > | 50 000 `call_func` | 0.0707 s | **0.0184 s** | 3.8× |
 > | 50 000 dict writes | 0.0226 s | **0.0087 s** | 2.6× |
@@ -27,7 +30,7 @@ say "Hello " + name + "!"
 > | 1-argument / 2-argument call | 402 / 700 ns | **213 / 338 ns** | 1.9× / 2.1× |
 > | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 > | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-> | `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold | 1.4× |
+> | `.ind` test suite (52 files) | 5.55 s | **3.96 s** cold | 1.4× |
 >
 > ### What made it faster
 > - 🧠 **Expressions are parsed once, not on every evaluation.** Every statement
@@ -47,17 +50,31 @@ say "Hello " + name + "!"
 >   copying their iterable twice**.
 > - ♻️ **`len()`/`has_key()` on a container are O(1)** — they used to copy it to
 >   measure it — and call frames are recycled instead of reallocated.
+> - 🔎 **`xs[i]`, `d["k"]` and slices borrow the container too.** Reading one
+>   element cloned the whole list or dict, so a loop reading every element was
+>   **O(n²)** — summing a 20 000-item list took 2.5 s and walking a 20 000-key
+>   dictionary 9.7 s. Both are now linear (458× and 1080× faster).
 > - 🧊 **`Value` is 56 bytes, not 128**, and ⚙️ the release profile is tuned for
 >   an interpreter (fat LTO, one codegen unit, no unwind tables, stripped).
 >
+> ### On “values should only be as big as they need to be”
+> A value cannot start at 1 byte and grow, because a list, a call argument list
+> and a frame slot all share one compile-time element stride — there is no
+> per-value size to grow. The real lever is the *smallest* size for all values,
+> and 56 bytes is already close to it except for the `Object` variant; getting to
+> the 8–16 bytes Lua/CPython/V8 use means boxing every string, list, set and dict
+> (an extra allocation and pointer-chase on the most common types). The measured
+> 128 → 56 byte change moved memory, not time, so that trade only pays off as a
+> side-effect of the copy-on-write migration below.
+>
 > ### Still O(n), honestly
-> Reading a container still copies it: `get_var` clones a whole list or dict, so
-> passing one to a *user* function is 6.7× faster than 2.2.2 but the copy remains.
-> `len`/`has_key` were given targeted borrowed fast paths. The general fix is
-> copy-on-write values (`Arc<Vec<Value>>` + `Arc::make_mut`), which makes reads
-> O(1) and keeps the in-place writes O(1); the plan, its audited first stage
-> (`tools/arc_rewrite.py`) and the measured cost of its first attempt are recorded
-> in the changelog.
+> `len`, `has_key`, `xs[i]` and slices are now O(1), but the underlying rule is
+> unchanged: `get_var` returns a **copy**, so *passing* a container to a *user*
+> function is still a full clone (6.7× faster than 2.2.2 only because calls got
+> cheap). The general fix is copy-on-write values (`Arc<Vec<Value>>` +
+> `Arc::make_mut`), which makes reads O(1) and keeps the in-place writes O(1); the
+> plan, its audited first stage (`tools/arc_rewrite.py`) and the measured cost of
+> its first attempt are recorded in the changelog.
 >
 > ### 🎉 What's New in 2.2.2
 > - 🐛 **Module functions can use their own imports** — a function exported by a

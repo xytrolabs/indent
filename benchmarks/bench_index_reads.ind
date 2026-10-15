@@ -1,0 +1,47 @@
+#! How expensive is ONE element read from a big container?
+#!
+#! `get_var` returns a copy, so `xs[i]` used to clone the entire list just to
+#! hand back a single element: O(n) per access, which makes a loop that reads
+#! every element O(n²). The same shape applied to `d["k"]` and to slicing
+#! (`xs[0:2]` cloned the source before building the slice).
+#!
+#! Run:  indent benchmarks/bench_index_reads.ind
+
+var N int = 20000
+var xs dynamic = [i for i in range(N)]
+var d dynamic = {}
+repeat i in range(N)
+    d[string(i)] is i
+
+#! (a) read every element of a 20k list — n reads
+var t0 float = time_perf_counter
+var total int = 0
+repeat i in range(N)
+    total is total + xs[i]
+var t1 float = time_perf_counter
+say "n reads of 20k list:     " + string(t1 - t0) + "s"
+
+#! (b) read every value of a 20k dict — n reads
+var t2 float = time_perf_counter
+var total2 int = 0
+repeat i in range(N)
+    total2 is total2 + d[string(i)]
+var t3 float = time_perf_counter
+say "n reads of 20k dict:     " + string(t3 - t2) + "s"
+
+#! (c) slice a big list repeatedly (the slice is new; the source clone is not)
+var t4 float = time_perf_counter
+var n int = 0
+repeat 2000
+    n is n + len(xs[0:2])
+var t5 float = time_perf_counter
+say "2000 x slice of 20k list:" + string(t5 - t4) + "s"
+
+#! (d) index a string
+var s string = "abcdefghij"
+var t6 float = time_perf_counter
+var acc string = ""
+repeat 100000
+    acc is s[3]
+var t7 float = time_perf_counter
+say "100k x s[3]:             " + string(t7 - t6) + "s"

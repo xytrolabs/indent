@@ -61,25 +61,40 @@ you know what to expect (and what not to fight).
   optimised shapes only cover direct variable targets:
   - `l is append l x` and `d[k] is v` / `l[i] is v` where the target is a plain
     variable are **linear** (the container is moved, not copied).
+  - `d[k]` / `l[i]` **reads** on a plain variable are also linear now (borrowed).
   - `l is append l x` inside **a function that took `l` as a parameter**, or
     `obj.items is append obj.items x`, still copies each time — O(n²) over a
     loop. Build such lists with a comprehension (`[f x for x in xs]`) or `map`,
     or collect items and `extend` once at the end.
   - `l is l + [x]` in a loop is **always** O(n²) — measured 6.5 s for 20 000
     items. Never build a list that way; see `benchmarks/`.
-- Measured reference numbers (release build, Indent 2.5; run `benchmarks/`
+- Measured reference numbers (release build, Indent 2.3; run `benchmarks/`
   yourself): a function call ≈ 0.21 µs for one argument regardless of how big the
   function is, `i is i + 1` ≈ 0.16 µs, `if` + comparison ≈ 0.25 µs, 100 000 calls
-  ≈ 0.05 s, 20 000 `append`s ≈ 0.007 s, 20 000 index writes ≈ 0.015 s. Iterating a
-  collection is linear and copies it once, so prefer `repeat x in xs` over
-  rebuilding lists in a loop. Loading the whole `discord` + `ai` package stack plus
-  all puzzle modules costs ≈ 48 ms, so **startup is not the bottleneck for a bot —
-  network round-trips are**.
-- **Reading a container still copies it.** Because arguments are by value,
-  `get_var` clones a whole list or dict, so `len(bigList)`, `key in bigDict` and
-  passing a container to a function are O(n) even when the callee only reads them.
-  Copy-on-write values (`Arc<Vec<Value>>`) would make reads O(1); it is the next
-  planned step, and it touches ~280 call sites.
+  ≈ 0.05 s, 20 000 `append`s ≈ 0.007 s, 20 000 index writes ≈ 0.015 s, 20 000 index
+  *reads* ≈ 0.005 s. Iterating a collection is linear and copies it once, so prefer
+  `repeat x in xs` over rebuilding lists in a loop. Loading the whole `discord` +
+  `ai` package stack plus all puzzle modules costs ≈ 48 ms, so **startup is not the
+  bottleneck for a bot — network round-trips are**.
+- **Reading a variable copies it, but the hot reads no longer do.** `get_var`
+  returns a copy, so a container handed to a *user* function is still cloned in
+  full. The reads that are safe to borrow have targeted fast paths that are O(1):
+  `len(c)`, `has_key d k`, `c[i]` and `c[a:b]` on a **bare variable** no longer copy
+  the container. Before this, `xs[i]` in a loop was O(n²) — summing a 20 000-item
+  list cost 2.5 s and walking a 20 000-key dictionary 9.7 s; both are now ~5 ms.
+  Objects (`get_item`) and the positional aliases `argument`/`argument2` keep the
+  copying path. Copy-on-write values (`Arc<Vec<Value>>`) would make *every* read
+  O(1); it is the next planned step and touches ~280 call sites.
+- **A value's size is fixed, not proportional to its contents.** Every list
+  element, call argument and frame slot shares one compile-time stride, so a value
+  cannot be 1 byte for a small number and grow from there. The lever is the
+  smallest size for *all* values: `size_of::<Value>()` is 56 bytes, and the only
+  variant forcing it is the class instance (`String` + two boxed maps + flag).
+  The 8–16 byte values CPython, Lua, LuaJIT and V8 use require boxing every
+  string, list, set and dict, which adds an allocation and indirection to the most
+  common types; shrinking `Value` from 128 to 56 bytes measurably saved memory but
+  not time, so this is recorded as a trade to take only alongside copy-on-write
+  values.
 
 ## The `__incache__` parsed-program cache
 

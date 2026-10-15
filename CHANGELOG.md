@@ -23,12 +23,15 @@ build (`benchmarks/`, best-of-N — run `sh benchmarks/verify.sh` yourself).
 | 300 × `len(20 000-item list)` | 59.0 ms | **0.057 ms** | **~1000×** |
 | 300 × `len(5 000-key dict)` | 44.4 ms | **0.054 ms** | **~820×** |
 | 300 × `has_key(5 000-key dict, k)` | 44.3 ms | **0.092 ms** | **~480×** |
+| Summing a 20 000-item list with `xs[i]` | 2.497 s | **0.00545 s** | **~458×** |
+| Walking a 20 000-key dict with `d[k]` | 9.684 s | **0.00897 s** | **~1080×** |
+| 2 000 × slicing a 20 000-item list | 0.2468 s | **0.000697 s** | **354×** |
 | Call into a 302-statement function | 16.36 µs | **0.33 µs** | **50×** |
 | 1-argument / 2-argument call | 402 / 700 ns | **213 / 338 ns** | 1.9× / 2.1× |
 | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
 | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-| `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
+| `.ind` test suite (52 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
 | `size_of::<Value>()` | 128 B | **56 B** | 2.3× less memory traffic |
 
 `call_func_lenient` has no 2.2.2 figure because it did not exist yet.
@@ -78,7 +81,7 @@ other operand in*, and that argument was cloned eagerly — so every `+`, `==`, 
 and list index deep-copied **both** operands (a fresh `String`, or a whole list)
 just to discover there was no method. A discriminant test replaces those copies.
 
-### ♻️ Reading: `len`/`has_key` are O(1), and call frames are recycled
+### ♻️ Reading: `len`, `has_key`, `xs[i]` and slices borrow the container
 Arguments are passed by value, so `len(bigList)` cloned the entire list to count
 it (127 µs for 20 000 items) and `has_key(d, k)` cloned the dictionary. Both now
 have a read-only fast path that borrows the container (`ExecContext::get_var_ref`),
@@ -87,12 +90,37 @@ been redefined — so shadowing still wins and the builtin still reports every e
 Call frames are also recycled from a pool, so a call with arguments no longer
 allocates a `HashMap` and a `Vec` every time.
 
+Indexing and slicing had the same shape and were the **worst** of them: reading a
+20 000-item list one element at a time cloned the whole list to hand back each
+element, so a loop over a list was O(n²) — 2.5 s just to sum 20 000 items, 9.7 s to
+walk a 20 000-key dictionary, 0.25 s for 2 000 slices. A bare-variable target now
+borrows the container (`resolve_index_ref`) and clones only the element, which makes
+them linear: **458×, 1080× and 354×**. Objects and the `argument`/`argument2`
+positional aliases deliberately keep the old path, so `get_item` dispatch and alias
+resolution are bit-for-bit unchanged — both are asserted in
+`tests/index_read_semantics.ind`, which passes identically on this build and on the
+pre-fix binary.
+
 ### 🧊 `Value` is 56 bytes, not 128
 The `Object` variant held two inline `HashMap`s, which made every variable read,
 argument and list element move 128 bytes. Boxing them brings `Value` to 56 (2.3×
 less memory traffic on large collections). Honest note: this alone barely moved the
 micro-benchmarks — the remaining cost is per-operation dispatch and allocation, not
 value size — and a `value_size_guardrail` test now fails the build if it grows.
+
+### 📏 Why a value cannot “start at 1 byte”
+A value that is 1 byte when it holds a small number and grows with its contents
+sounds ideal, but a `Vec<Value>` cannot express it: every element of a list, every
+call argument and every frame slot shares one compile-time stride, so there is no
+per-value size to grow — the only lever is a *smallest* fixed size for all values.
+What is realisable is two tiers (an inline immediate vs. a boxed payload), which is
+how the fast runtimes do it: Lua 16 B, LuaJIT 8 B via NaN-boxing, CPython 8 B
+(`PyObject*`, everything heap-allocated), V8 8 B (Smi or pointer). Reaching 16 B
+here means boxing `Str`, `List`, `Set`, `Dict`, `Func` and `Object` — an extra
+allocation and indirection on the *most common* types. The measured 128 → 56 byte
+change says size is a memory win, not a speed win, so that trade is not worth taking
+on its own; it earns its keep as a by-product of the copy-on-write migration below,
+which has to change exactly those variants anyway.
 
 ### ⚙️ Release profile
 `[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` (nothing
@@ -108,14 +136,16 @@ across many functions, so cross-crate inlining matters. Build time increases —
 - Benchmarks report the **best of N** and A/B **interleaved**: a loaded machine
   moves a single run by ±15%, and a sequential startup comparison once showed this
   build as 7% slower when it is in fact 4% faster.
-- New tests: `append_semantics`, `index_write_semantics`, `module_dispatch`,
-  `value_size_guardrail`, and six `ast_cache_*` tests covering round-trip,
-  same-length-edit invalidation, corruption, a deleted source and the disable switch.
+- New tests: `append_semantics`, `index_write_semantics`, `index_read_semantics`,
+  `module_dispatch`, `value_size_guardrail`, and six `ast_cache_*` tests covering
+  round-trip, same-length-edit invalidation, corruption, a deleted source and the
+  disable switch.
 
 ### Still O(n), honestly
-Reading a container still copies it: `get_var` clones a whole list or dict, so
-passing one to a user function is 6.7× faster than 2.2.2 but the copy remains
-(`len`/`has_key` were given targeted borrowed fast paths instead). The general fix
+`len`, `has_key`, `xs[i]` and slices are now O(1) reads, but the underlying rule is
+unchanged: `get_var` returns a **copy**, so *passing* a container to a user function
+is still a full clone (it is 6.7× faster than 2.2.2 only because calls themselves
+got cheap). The general fix
 is copy-on-write values — `Value::List(Arc<Vec<Value>>)` with `Arc::make_mut`, which
 makes reads O(1) and keeps the in-place write paths O(1). That migration touches
 ~280 sites; `tools/arc_rewrite.py` is its audited first stage (146 constructions
@@ -123,7 +153,7 @@ wrapped, 137 destructuring sites reported) and a full attempt produced **138
 compile errors** each needing a clone-vs-move decision, so it is a dedicated pass
 with its own verification rather than a rushed change.
 
-**Verification:** 51/51 language tests, 28/28 Rust tests.
+**Verification:** 52/52 language tests, 28/28 Rust tests.
 
 
 ## Unreleased — language & package parity

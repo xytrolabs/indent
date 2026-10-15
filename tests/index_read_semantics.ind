@@ -1,0 +1,140 @@
+#! Guard the optimised container-READ paths: `xs[i]`, `d["k"]` and `xs[a:b]` on a
+#! bare variable now borrow the container instead of cloning it. Results, error
+#! messages and dispatch must be exactly what the copying path produced.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. reading a list, positive and negative ----
+var xs dynamic = [10, 20, 30]
+var ok1a boolean = xs[0] == 10
+var ok1b boolean = xs[-1] == 30
+var idx int = 1
+var ok1c boolean = xs[idx + 1] == 30
+assert ok1a "list read by index"
+assert ok1b "list read by negative index"
+assert ok1c "list read by computed index"
+
+#! ---- 2. reading a dict ----
+var d dynamic = {"a": 1, "b": 2}
+var ok2a boolean = d["b"] == 2
+var keyName string = "a"
+var ok2b boolean = d[keyName] == 1
+assert ok2a "dict read by literal key"
+assert ok2b "dict read by variable key"
+
+#! ---- 3. reading a string ----
+var s string = "hello"
+var ok3a boolean = s[0] == "h"
+var ok3b boolean = s[-1] == "o"
+assert ok3a "string read by index"
+assert ok3b "string read by negative index"
+
+#! ---- 4. a read must not consume or alter the container ----
+var before int = len(xs)
+var got dynamic = xs[2]
+var after int = len(xs)
+var ok4a boolean = before == 3
+var ok4b boolean = after == 3
+var ok4c boolean = got == 30
+assert ok4a "container intact before a read"
+assert ok4b "container intact after a read"
+assert ok4c "read returned the element"
+
+#! ---- 5. errors are unchanged ----
+var caughtSame boolean = false
+do:
+    var bad dynamic = xs[9]
+catch as err1:
+    caughtSame is true
+assert caughtSame "out-of-range list read still raises"
+
+var caughtMissing boolean = false
+do:
+    var missing dynamic = d["nope"]
+catch as err2:
+    caughtMissing is true
+assert caughtMissing "missing dict key still raises"
+
+var caughtBadKey boolean = false
+do:
+    var wrong dynamic = d[0]
+catch as err3:
+    caughtBadKey is true
+assert caughtBadKey "non-string dict key still raises"
+
+var caughtNonContainer boolean = false
+var n int = 5
+do:
+    var wrong2 dynamic = n[0]
+catch as err4:
+    caughtNonContainer is true
+assert caughtNonContainer "indexing a non-container still raises"
+
+#! ---- 6. an Object in a variable still reaches its get_item method ----
+class Box
+    var items dynamic
+
+    fun get_item i
+        give "boxed:" + string(items[i])
+
+var b dynamic = Box(["x", "y"])
+var ok6 boolean = b[1] == "boxed:y"
+assert ok6 "object get_item still dispatches through a variable"
+
+#! ---- 7. a function parameter works the same way ----
+fun secondOf ys
+    give ys[1]
+
+var ok7 boolean = secondOf(xs) == 20
+assert ok7 "read from a parameter-bound list"
+
+#! ---- 8. a bare read through a local that aliases a parameter ----
+fun thirdOf ys
+    var local dynamic = ys
+    give local[2]
+
+var ok8 boolean = thirdOf(xs) == 30
+assert ok8 "read through a local that aliases a parameter"
+
+#! ---- 9. a non-variable target still evaluates normally ----
+fun makeList
+    give [3, 4, 5]
+
+var ok9 boolean = makeList()[0] == 3
+assert ok9 "read from a call result"
+
+#! ---- 10. slices ----
+var ok10a boolean = len(xs[0:2]) == 2
+var ok10b boolean = xs[1:][0] == 20
+var ok10c boolean = s[1:3] == "el"
+assert ok10a "slice of a list variable"
+assert ok10b "open-ended slice of a list variable"
+assert ok10c "slice of a string variable"
+
+var caughtSliceDict boolean = false
+do:
+    var wrongSlice dynamic = d[0:1]
+catch as err5:
+    caughtSliceDict is true
+assert caughtSliceDict "slicing a dict still raises"
+
+#! ---- 11. a slice is a copy, not a view ----
+var sl dynamic = xs[0:2]
+sl[0] is 999
+var ok11a boolean = sl[0] == 999
+var ok11b boolean = xs[0] == 10
+assert ok11a "slice can be written"
+assert ok11b "writing a slice does not touch the source"
+
+#! ---- 12. a real parameter that happens to be named `argument` ----
+fun takesArgument argument
+    give argument[1]
+
+var ok12 boolean = takesArgument([5, 6, 7]) == 6
+assert ok12 "a real parameter named 'argument' still works"
+
+say "index read semantics: all assertions passed"
