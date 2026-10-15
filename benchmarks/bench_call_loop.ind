@@ -1,0 +1,29 @@
+#! Cost probe: a `repeat` loop that calls a function each iteration.
+#!
+#! The body reads `counter`, which `bump` also writes, so a compiled body that
+#! failed to re-read its variables after the call would show up as a wrong total
+#! rather than as a slow one. The expected checks are 20000100000 and 200000.
+
+var N int = 200000
+var counter int = 0
+var acc int = 0
+
+fun bump amount
+    counter is counter + amount
+
+var t0 float = time_perf_counter
+repeat N
+    bump(1)
+    acc is acc + counter
+var t1 float = time_perf_counter
+say "call in loop  " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+#! Same loop with the call hoisted out, to separate call cost from loop cost.
+var t2 float = time_perf_counter
+repeat N
+    counter is counter + 1
+    acc is acc + counter
+var t3 float = time_perf_counter
+say "no call       " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(acc) + " " + string(counter)

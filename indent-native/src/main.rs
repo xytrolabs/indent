@@ -3244,6 +3244,13 @@ enum VmInstr {
     JumpIfFalse(usize),
     /// Jump to the given instruction.
     Jump(usize),
+    /// Pop `argc` arguments, call `callee` with them, push the result.
+    Call { callee: String, argc: u16 },
+    /// Pop a value and append it to frame slot `slot` in place, under `callee`'s
+    /// rule (`append`/`push`/`extend`.
+    AppendSlot { slot: u16, callee: String },
+    /// Pop a value and concatenate it onto frame slot `slot` in place.
+    ConcatSlot(u16),
 }
 
 /// A compiled loop body: instructions plus the names of the frame slots they
@@ -3268,6 +3275,55 @@ fn vm_slot(slots: &mut Vec<String>, name: &str) -> u16 {
     }
     slots.push(name.to_string());
     (slots.len() - 1) as u16
+}
+
+/// Whether `callee` may be compiled into a `Call` instruction in an expression.
+///
+/// A compiled call hands its arguments to `invoke_callable_values`, which is the
+/// expression engine's own dispatcher, so nothing about dispatch has to be
+/// restated here. Safe mode is the exception: `exec_call_inner` enforces it and
+/// the expression dispatcher does not, so rather than duplicate the deny-list
+/// the whole body is left to the tree-walker while safe mode is on.
+fn vm_call_compilable(callee: &[String]) -> bool {
+    callee.len() == 1 && !safe_mode()
+}
+
+/// Whether a *statement* call — `f(x)` on its own line, or `y is f(x)` — may be
+/// compiled.
+///
+/// These go through `exec_call_inner`, not the expression dispatcher, so the two
+/// differences have to be ruled out: the builtins it intercepts before falling
+/// through (`call_func` and friends are not reachable from the expression
+/// dispatcher), and its order — it instantiates a class *before* it looks for a
+/// function of that name, while the expression dispatcher does the reverse. A
+/// name that is already a class is therefore left alone.
+fn vm_stmt_call_ok(callee: &str, args: &[ArgItem], rt: &Runtime) -> bool {
+    if safe_mode() {
+        return false;
+    }
+    if matches!(callee, "call_func" | "call_func_lenient" | "dispatch") {
+        return false;
+    }
+    if rt.classes.contains_key(callee) {
+        return false;
+    }
+    args.iter()
+        .all(|a| matches!(a, ArgItem::Positional(_)))
+}
+
+/// Compile a call's positional arguments, left to right.
+fn vm_compile_args(args: &[ArgItem], prog: &mut VmProgram, rt: &Runtime) -> bool {
+    for arg in args {
+        match arg {
+            ArgItem::Positional(text) => {
+                if !vm_compile_text(text, prog, rt) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Compile an expression, postfix. Returns false for anything unsupported, in
@@ -3300,6 +3356,19 @@ fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>, slots: &mut Vec<String>) ->
             }
             out.push(VmInstr::Bin(op.clone()));
         }
+        // Arguments are pushed left to right, so the instruction pops `argc`
+        // values and passes them on in source order.
+        Expr::Call { callee, args } if vm_call_compilable(callee) => {
+            for arg in args {
+                if !vm_compile_expr(arg, out, slots) {
+                    return false;
+                }
+            }
+            out.push(VmInstr::Call {
+                callee: callee[0].clone(),
+                argc: args.len() as u16,
+            });
+        }
         _ => return false,
     }
     true
@@ -3324,6 +3393,34 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
         .position(|s| s == "Reps")
         .map(|i| i as u16);
     Some(prog)
+}
+
+/// The shape `try_inplace_list_append` takes: `name is append name x`.
+///
+/// Reproducing it matters more than it looks: `exec_stmt` grows the list in
+/// place for exactly this shape, so a compiled loop that ran the builtin instead
+/// would copy the whole list on every iteration and build an n-element list in
+/// O(n²) — slower than the tree-walker it replaced.
+fn vm_append_self(name: &str, callee: &str, args: &[ArgItem]) -> bool {
+    matches!(callee, "append" | "push" | "extend")
+        && args.len() == 2
+        && matches!(&args[0], ArgItem::Positional(t) if t.trim() == name)
+        && matches!(&args[1], ArgItem::Positional(_))
+}
+
+/// The shape `try_inplace_string_concat` and `try_inplace_container_concat` take:
+/// `name is name + <rest>`. Returns `<rest>`, the text the compiler must compile.
+fn vm_concat_self<'a>(name: &str, text: &'a str) -> Option<&'a str> {
+    if !is_bare_identifier(name) {
+        return None;
+    }
+    match text
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix(" + "))
+    {
+        Some(rhs) if !rhs.is_empty() => Some(rhs),
+        _ => None,
+    }
 }
 
 /// Compile one expression from its text: the same parse cache `eval_expr` uses,
@@ -3355,11 +3452,52 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 if name.contains('.') || positional_alias_index(name).is_some() {
                     return false;
                 }
+                // The two assignments `exec_stmt` grows in place get instructions
+                // that mutate the slot directly, for the same reason: the general
+                // path copies the container or the accumulated string on every
+                // iteration.
+                if let ValueSource::Call { callee, args } = value {
+                    if vm_append_self(name, callee, args) {
+                        if !vm_compile_args(&args[1..], prog, rt) {
+                            return false;
+                        }
+                        let s = vm_slot(&mut prog.slots, name);
+                        prog.instrs.push(VmInstr::AppendSlot {
+                            slot: s,
+                            callee: callee.clone(),
+                        });
+                        continue;
+                    }
+                }
+                if let ValueSource::Expr(text) = value {
+                    if let Some(rest) = vm_concat_self(name, text) {
+                        if !vm_compile_text(rest, prog, rt) {
+                            return false;
+                        }
+                        let s = vm_slot(&mut prog.slots, name);
+                        prog.instrs.push(VmInstr::ConcatSlot(s));
+                        continue;
+                    }
+                }
                 match value {
                     ValueSource::Expr(text) => {
                         if !vm_compile_text(text, prog, rt) {
                             return false;
                         }
+                    }
+                    // `eval_value_source` reads a zero-argument source as a
+                    // variable before it tries a call, so only the form with
+                    // explicit arguments is compiled.
+                    ValueSource::Call { callee, args }
+                        if !args.is_empty() && vm_stmt_call_ok(callee, args, rt) =>
+                    {
+                        if !vm_compile_args(args, prog, rt) {
+                            return false;
+                        }
+                        prog.instrs.push(VmInstr::Call {
+                            callee: callee.clone(),
+                            argc: args.len() as u16,
+                        });
                     }
                     ValueSource::Call { .. } => return false,
                 }
@@ -3370,6 +3508,18 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 if !vm_compile_text(expr, prog, rt) {
                     return false;
                 }
+                prog.instrs.push(VmInstr::Pop);
+            }
+            // A call standing on its own line: the result is discarded, as
+            // `exec_stmt` does.
+            Stmt::Call { callee, args, .. } if vm_stmt_call_ok(callee, args, rt) => {
+                if !vm_compile_args(args, prog, rt) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::Call {
+                    callee: callee.clone(),
+                    argc: args.len() as u16,
+                });
                 prog.instrs.push(VmInstr::Pop);
             }
             Stmt::IfChain { branches, .. } => {
@@ -3423,6 +3573,108 @@ fn vm_names_bound(prog: &VmProgram, ctx: &ExecContext<'_>) -> bool {
         .all(|(i, name)| Some(i as u16) == prog.reps_slot || ctx.has_var(name))
 }
 
+/// Whether reaching `callee` can run Indent code against the current frames.
+///
+/// Only three things can: a user function or an imported module function (which
+/// `resolve_callable` reports), a class constructor, and an object method. Every
+/// builtin — `append`, `len`, `string`, `dict_set`, … — runs in Rust and cannot
+/// name a frame variable, so it needs no hand-over at all. That matters because
+/// the hand-over copies each mirrored value: skipping it keeps a loop that calls
+/// a builtin on a container from copying the whole container twice per call.
+fn vm_call_runs_user_code(callee: &str, args: &[Value], ctx: &ExecContext<'_>) -> bool {
+    if ctx.rt.classes.contains_key(callee) {
+        return true;
+    }
+    if args.iter().any(|a| matches!(a, Value::Object { .. })) {
+        return true;
+    }
+    matches!(
+        resolve_callable(callee, ctx),
+        Ok(Callable::Local(_)) | Ok(Callable::External { .. })
+    )
+}
+
+/// `name is name + <rhs>` against `values[idx]`, in place where the tree-walker
+/// is in place.
+///
+/// Growing a string or a list in a loop is how accumulation is spelled in this
+/// language, and `eval_binary` copies its left operand — so a compiled loop that
+/// used it would copy everything accumulated so far on every pass. The first
+/// three arms mutate the slot instead; anything else falls back to `eval_binary`
+/// with the value moved out, which is exactly what the ordinary path decides.
+fn vm_concat_slot(
+    values: &mut [Value],
+    idx: usize,
+    rhs: Value,
+    ctx: &mut ExecContext<'_>,
+) -> Result<(), String> {
+    use std::fmt::Write as _;
+    match (&mut values[idx], rhs) {
+        (Value::Str(buf), rhs) => {
+            // Appending through `Display` is byte-for-byte what
+            // `format!("{}{}", buf, rhs)` produced, without the second copy of
+            // the accumulated prefix. Writing into a `String` cannot fail.
+            let _ = write!(buf, "{}", rhs);
+            Ok(())
+        }
+        (Value::List(list), Value::List(extra)) => {
+            list.extend(extra);
+            Ok(())
+        }
+        (Value::Dict(dict), Value::Dict(extra)) => {
+            dict.extend(extra);
+            Ok(())
+        }
+        (slot, rhs) => {
+            let lhs = std::mem::replace(slot, Value::Empty);
+            *slot = eval_binary("+", lhs, rhs, ctx)?;
+            Ok(())
+        }
+    }
+}
+
+/// Copy the slot mirrors into the frame stack.
+///
+/// A compiled body keeps its variables in `values` and only writes them back when
+/// the loop ends, so without this a callee would read the values from *before* the
+/// loop and, worse, a pull-back afterwards would undo the iterations that already
+/// ran. Every slot except `Reps` — which belongs to the loop, not to the frame — is
+/// handed over before any user code runs.
+fn vm_flush_slots(
+    slots: &[String],
+    reps_slot: Option<u16>,
+    values: &[Value],
+    ctx: &mut ExecContext<'_>,
+) {
+    for (i, name) in slots.iter().enumerate() {
+        if Some(i as u16) == reps_slot {
+            continue;
+        }
+        ctx.set_var(name, values[i].clone());
+    }
+}
+
+/// Re-read the slot mirrors from the frame stack after user code has run.
+///
+/// A call — or an object operator method — assigns variables the ordinary way,
+/// through frames, and those writes have to come back into the loop's cache or
+/// the body would keep reading the values it had before the call. Paired with
+/// `vm_flush_slots`, this keeps the two engines' view identical across a call.
+fn vm_pull_slots(
+    slots: &[String],
+    reps_slot: Option<u16>,
+    values: &mut [Value],
+    ctx: &ExecContext<'_>,
+) {
+    for (i, name) in slots.iter().enumerate() {
+        // `Reps` is the loop's own counter; user code cannot have touched it.
+        if Some(i as u16) == reps_slot {
+            continue;
+        }
+        values[i] = ctx.get_var(name).unwrap_or(Value::Empty);
+    }
+}
+
 /// Run a compiled `repeat N` body in the frame `exec_repeat` already pushed.
 fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<(), String> {
     // Read the body's variables once. Slots are then just a `Vec` index, so the
@@ -3468,9 +3720,75 @@ fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<
                         sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
                         let a = stack[sp].clone();
                         let b = stack[sp + 1].clone();
-                        let v = eval_binary(op, a, b, ctx)?;
+                        // Only an Object operand can reach user code (through one
+                        // of its operator methods).
+                        let object_operand =
+                            matches!(a, Value::Object { .. }) || matches!(b, Value::Object { .. });
+                        if object_operand {
+                            vm_flush_slots(&prog.slots, prog.reps_slot, &values, ctx);
+                        }
+                        let result = eval_binary(op, a, b, ctx);
+                        if object_operand {
+                            vm_pull_slots(&prog.slots, prog.reps_slot, &mut values, ctx);
+                        }
+                        let v = result?;
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
                         sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::Call { callee, argc } => {
+                        let n = *argc as usize;
+                        sp = sp.checked_sub(n).ok_or_else(vm_underflow)?;
+                        let args: Vec<Value> = stack[sp..sp + n].to_vec();
+                        // Hand the loop's variables over before user code can look
+                        // at them, and read its writes back afterwards — including
+                        // when it fails, so the write-back below cannot put a value
+                        // the callee replaced back into the frame.
+                        let user_code = vm_call_runs_user_code(callee, &args, ctx);
+                        if user_code {
+                            vm_flush_slots(&prog.slots, prog.reps_slot, &values, ctx);
+                        }
+                        let result = invoke_callable_values(callee, args, ctx);
+                        if user_code {
+                            vm_pull_slots(&prog.slots, prog.reps_slot, &mut values, ctx);
+                        }
+                        let v = result?;
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::AppendSlot { slot, callee } => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let item = stack[sp].clone();
+                        let idx = *slot as usize;
+                        match &mut values[idx] {
+                            Value::List(list) => append_items_into(list, item, callee)?,
+                            // Not a list: `try_inplace_list_append` reports the
+                            // error the builtin itself would have produced.
+                            other => {
+                                return Err(format!(
+                                    "{callee} expects a list, got {}",
+                                    other.type_name()
+                                ))
+                            }
+                        }
+                        ip += 1;
+                    }
+                    VmInstr::ConcatSlot(slot) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let rhs = stack[sp].clone();
+                        let idx = *slot as usize;
+                        if matches!(values[idx], Value::Object { .. }) {
+                            // An operator method is user code, so this one case
+                            // takes the hand-over a call takes.
+                            vm_flush_slots(&prog.slots, prog.reps_slot, &values, ctx);
+                            let lhs = std::mem::replace(&mut values[idx], Value::Empty);
+                            let result = eval_binary("+", lhs, rhs, ctx);
+                            vm_pull_slots(&prog.slots, prog.reps_slot, &mut values, ctx);
+                            result?;
+                        } else {
+                            vm_concat_slot(&mut values, idx, rhs, ctx)?;
+                        }
                         ip += 1;
                     }
                     VmInstr::Pop => {
@@ -3532,6 +3850,16 @@ fn vm_stack_depth(e: &Expr) -> Option<usize> {
             } else {
                 None
             }
+        }
+        // Argument `i` is evaluated with `i` values already on the stack, and the
+        // call itself briefly holds all `argc` of them. Unlike a binary node the
+        // arguments are independent, so their depths need not match.
+        Expr::Call { callee, args } if vm_call_compilable(callee) => {
+            let mut peak = args.len().max(1);
+            for (i, arg) in args.iter().enumerate() {
+                peak = peak.max(i + vm_stack_depth(arg)?);
+            }
+            Some(peak)
         }
         _ => None,
     }
@@ -4808,7 +5136,20 @@ fn invoke_callable_expr(
     for arg in args {
         positional.push(eval_ast(arg, ctx)?);
     }
+    invoke_callable_values(callee, positional, ctx)
+}
 
+/// Invoke `callee` with already-evaluated positional arguments.
+///
+/// Split out of `invoke_callable_expr` so a compiled expression reaches exactly
+/// the same dispatch — the same prefixes, the same shadowing order, the same
+/// error messages — without re-walking its argument expressions. Both engines
+/// therefore agree on what a call means by construction.
+fn invoke_callable_values(
+    callee: &str,
+    positional: Vec<Value>,
+    ctx: &mut ExecContext<'_>,
+) -> Result<Value, String> {
     // Object `len` special method (natural name).
     if callee == "len" && positional.len() == 1 {
         if let Some(r) = call_object_method_value(&positional[0], "len", &[], ctx) {
