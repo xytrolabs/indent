@@ -2,14 +2,24 @@
 # Indent Language — Universal Installer for Windows
 # =============================================================================
 #
-# One-command install:
-#   powershell -c "irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex"
+# One-command install (installs the latest release, e.g. 2.4):
+#   irm https://indent.xytro.site/install.ps1 | iex
 #
-# Specific version:
-#   powershell -c "`$v='v2.1.0'; irm ... | iex"
+#   # ...or straight from the repo:
+#   irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex
 #
-# Local install:
+# Specific version (params work when you save-and-run rather than pipe):
+#   irm https://indent.xytro.site/install.ps1 -OutFile install.ps1
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -Version v2.4.0
+#
+# Local install (from a local cargo build):
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Local
+#
+# Build from source without a prebuilt binary:
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -BuildFromSource
+#
+# Requires PowerShell 5.1+ (ships with Windows 10/11). Works in Windows
+# PowerShell and PowerShell 7+.
 # =============================================================================
 
 param(
@@ -25,6 +35,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+# GitHub requires TLS 1.2+. Windows PowerShell 5.1 (the `powershell.exe` that
+# ships with Windows) still negotiates SSL3/TLS 1.0 by default on many systems,
+# which makes every download fail with a vague "Could not create SSL/TLS secure
+# channel" error. Opt in to TLS 1.2 before any network call.
+try {
+    $tls12 = [System.Net.SecurityProtocolType]::Tls12
+    [System.Net.ServicePointManager]::SecurityProtocol =
+        [System.Net.ServicePointManager]::SecurityProtocol -bor $tls12
+} catch {
+    # Very old .NET without Tls12 — nothing we can do here; the download will
+    # surface its own error if the connection cannot be secured.
+}
 
 Write-Host ""
 Write-Host "⚡ Indent Installer for Windows — Xytro Labs" -ForegroundColor Cyan
@@ -102,7 +125,7 @@ function Ensure-Rust {
     Write-Host "→ Rust not found - installing via rustup (this downloads a few hundred MB)..." -ForegroundColor Yellow
     $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
     $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
-    try { Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupInit -TimeoutSec 180 }
+    try { Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupInit -TimeoutSec 180 -UserAgent "indent-installer" }
     catch {
         Write-Host "✗ Could not download rustup (https://win.rustup.rs). Install Rust manually from https://rustup.rs" -ForegroundColor Red
         return $false
@@ -202,13 +225,16 @@ if ($Local) {
         } else {
             $api = "https://api.github.com/repos/$Repo/releases/tags/$Version"
         }
-        # The GitHub API rejects requests without a User-Agent, and PowerShell has
-        # historically sent none — that alone has broken installers like this one.
+        # The GitHub API rejects requests without a User-Agent. Pass it with the
+        # dedicated -UserAgent parameter rather than a "User-Agent" entry in
+        # -Headers: Windows PowerShell 5.1 throws
+        # "The 'User-Agent' header must be modified using the appropriate
+        # property or method" for the latter, which made every install fail
+        # before a single byte was downloaded.
         $apiHeaders = @{
-            "User-Agent" = "indent-installer"
-            "Accept"     = "application/vnd.github+json"
+            "Accept" = "application/vnd.github+json"
         }
-        $release = Invoke-RestMethod -Uri $api -TimeoutSec 60 -Headers $apiHeaders
+        $release = Invoke-RestMethod -Uri $api -TimeoutSec 60 -Headers $apiHeaders -UserAgent "indent-installer"
         # Windows releases are .zip archives containing indent.exe. Match by
         # exact target first, then fall back to any windows/arch .zip so naming
         # variants (pc-windows-msvc vs windows) both work.
@@ -233,7 +259,7 @@ if ($Local) {
             $tmp = Join-Path $env:TEMP "indent-install-$([guid]::NewGuid())"
             New-Item -ItemType Directory -Path $tmp | Out-Null
             $zipPath = Join-Path $tmp "indent.zip"
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -TimeoutSec 120
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -TimeoutSec 120 -UserAgent "indent-installer"
             Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
             $exe = Get-ChildItem -Path $tmp -Recurse -Filter "indent.exe" | Select-Object -First 1
             if ($exe) {
@@ -319,7 +345,7 @@ if ($stdInstalled) {
     $stdFiles = @()
     try {
         $listing = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/contents/std?ref=main" `
-            -TimeoutSec 60 -Headers @{ "User-Agent" = "indent-installer"; "Accept" = "application/vnd.github+json" }
+            -TimeoutSec 60 -Headers @{ "Accept" = "application/vnd.github+json" } -UserAgent "indent-installer"
         $stdFiles = @($listing | Where-Object { $_.name -like "*.ind" } | ForEach-Object { $_.name })
     } catch {
         Write-Host "  (could not list std/ - falling back to a short list)" -ForegroundColor Yellow
@@ -330,7 +356,7 @@ if ($stdInstalled) {
     $downloaded = 0
     foreach ($file in $stdFiles) {
         try {
-            Invoke-WebRequest -Uri "$StdBase/$file" -OutFile (Join-Path $StdDir $file) -TimeoutSec 30
+            Invoke-WebRequest -Uri "$StdBase/$file" -OutFile (Join-Path $StdDir $file) -TimeoutSec 30 -UserAgent "indent-installer"
             $downloaded++
         } catch { Write-Host "  (skipping $file)" }
     }

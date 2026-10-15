@@ -5,14 +5,17 @@ set -euo pipefail
 # Indent Language — Universal Installer for Linux & macOS
 # =============================================================================
 #
-# One-command install:
+# One-command install (installs the latest release, e.g. 2.4):
+#   curl -fsSL https://indent.xytro.site/install.sh | bash
+#
+#   # ...or from the repo / a checked-out copy:
 #   curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.sh | bash
 #
 # Local install (from build):
 #   bash scripts/install.sh --local
 #
 # Specific version:
-#   curl -fsSL ... | bash -s -- --version v2.1.0
+#   curl -fsSL https://indent.xytro.site/install.sh | bash -s -- --version v2.4.0
 # =============================================================================
 
 DEFAULT_REPO="xytrolabs/indent"
