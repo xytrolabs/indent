@@ -1,0 +1,85 @@
+#! field_write_semantics.ind — `obj.field is value` on a class instance.
+#!
+#! A dotted assignment resolved its root only when the root was a dict, so an
+#! instance swallowed the write: `p.x is 9` left `p.x` at its old value, and the
+#! `Object has no field` complaint came from the *read* afterwards — for a field
+#! the class does declare. These assertions pin the instance case, the rule that
+#! a field has to be declared, and the two fast paths that already worked.
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check cond label
+    if not cond
+        fail label
+    say "  ok: " + label
+
+class Point
+    var x int
+    var y int
+    var tag string
+    var xs dynamic = []
+
+    fun get_x
+        give x
+
+#! ---- 1. a declared field takes the value written ----
+var p dynamic = Point(1, 2, "t", [])
+p.x is 9
+check (p.x == 9) "an int field takes the value written"
+p.tag is "changed"
+check (p.tag == "changed") "a string field takes the value written"
+p.y is "text"
+check (p.y == "text") "a field can be reassigned to another type"
+
+#! ---- 2. instances stay independent ----
+var q dynamic = Point(3, 4, "q", [])
+check (q.x == 3) "another instance keeps its own field"
+check (p.x == 9) "and the written instance keeps its own"
+
+#! ---- 3. the dict case still works ----
+var d dynamic = {"x": 1}
+d.x is 8
+check (d.x == 8) "a dict key still takes the value written"
+
+#! ---- 4. an undeclared field is refused, as reads refuse it ----
+var refused boolean = false
+do:
+    p.zz is 1
+catch as e:
+    refused is true
+check refused "writing an undeclared field is an error"
+check (p.get_x() == 9) "the refused write left the instance alone"
+
+#! ---- 5. a write through a parameter stays with the copy ----
+#! Indent passes by value, so a function gets its own object, exactly as it gets
+#! its own list. A write inside the callee is visible on what it gives back and
+#! not on the caller's instance.
+fun set_x target v
+    target.x is v
+    give target
+
+var copy dynamic = set_x(p, 42)
+check (copy.x == 42) "a write through a parameter reaches that copy"
+check (p.x == 9) "and leaves the caller's instance alone"
+
+var seen dynamic = 0
+var i int = 0
+repeat 5
+    seen is set_x(p, i)
+    i is i + 1
+check (seen.x == 4) "the copy carries the last value a loop wrote"
+check (p.x == 9) "and the instance is still untouched afterwards"
+
+#! ---- 6. the in-place shapes checked before the general path ----
+p.xs is append p.xs 7
+check (len(p.xs) == 1) "append through a field grows the same list"
+p.xs is p.xs + [8]
+check (len(p.xs) == 2) "field concat grows the same list"
+
+#! ---- 7. a method reads the fields the instance was built with ----
+p.x is 10
+check (p.get_x() == 10) "a method reads its own field"
+
+say "field_write_semantics: all checks passed"

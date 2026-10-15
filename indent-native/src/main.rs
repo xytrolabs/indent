@@ -2690,7 +2690,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 return result;
             }
             let v = eval_value_source(value, ctx)?;
-            assign_var_chain(name, v, ctx);
+            assign_var_chain(name, v, ctx)?;
             Ok(Control::None)
         }
         Stmt::AssignOp { line, name, op, value } => {
@@ -2726,7 +2726,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 .ok_or_else(|| format!("Line {}: variable '{}' is not defined", line, name))?;
             let result = eval_binary(&op[..op.len()-1], lhs, rhs, ctx)
                 .map_err(|e| format!("Line {}: {}", line, e))?;
-            assign_var_chain(name, result, ctx);
+            assign_var_chain(name, result, ctx).map_err(|e| format!("Line {}: {}", line, e))?;
             Ok(Control::None)
         }
         Stmt::AssignIndex {
@@ -13654,26 +13654,58 @@ fn resolve_var_chain(parts: &[String], ctx: &mut ExecContext<'_>) -> Result<Valu
 /// Assign a value to a dotted variable chain like `bot.commands`.
 /// For simple names (no dots), works like ctx.set_var.
 /// For dotted chains, resolves the parent dict and sets the key on it.
-fn assign_var_chain(name: &str, value: Value, ctx: &mut ExecContext<'_>) {
+fn assign_var_chain(name: &str, value: Value, ctx: &mut ExecContext<'_>) -> Result<(), String> {
     // Plain names (no dots) are the overwhelming majority, and this runs for
     // every assignment — including every iteration of `i is i + 1` in a loop.
     // `split('.').collect()` allocated a `Vec` for each one, only to find it had
     // a single element and take the trivial branch.
     if !name.contains('.') {
         ctx.set_var(name, value);
-        return;
+        return Ok(());
     }
     let parts: Vec<&str> = name.split('.').collect();
     if parts.len() == 1 {
         ctx.set_var(name, value);
-        return;
+        return Ok(());
     }
 
     // 2-part case: bot.commands — get bot dict, set commands key, write back
     let root_name = parts[0];
-    if let Some(Value::Dict(mut map)) = ctx.get_var(root_name) {
-        map.insert(parts[1].to_string(), value);
-        ctx.set_var(root_name, Value::Dict(map));
+    let field = parts[1];
+    match ctx.get_var(root_name) {
+        Some(Value::Dict(mut map)) => {
+            map.insert(field.to_string(), value);
+            ctx.set_var(root_name, Value::Dict(map));
+            Ok(())
+        }
+        // An instance. The field has to be one the class declared, which is the
+        // rule reads already follow, so an unknown one is an error rather than a
+        // silent drop. Before this arm existed the write went nowhere at all:
+        // `p.x is 9` left `p.x` at its old value and only the read afterwards
+        // complained, which made a declared field look read-only.
+        Some(Value::Object {
+            class_name,
+            mut fields,
+            methods,
+            is_dataclass,
+        }) => {
+            if !fields.contains_key(field) {
+                return Err(format!("Object of class '{class_name}' has no field '{field}'"));
+            }
+            fields.insert(field.to_string(), value);
+            ctx.set_var(
+                root_name,
+                Value::Object {
+                    class_name,
+                    fields,
+                    methods,
+                    is_dataclass,
+                },
+            );
+            Ok(())
+        }
+        // Anything else keeps the old behaviour of leaving the chain alone.
+        _ => Ok(()),
     }
 }
 
