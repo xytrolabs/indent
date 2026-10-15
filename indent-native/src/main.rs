@@ -142,6 +142,66 @@ static TASKS: LazyLock<Mutex<HashMap<i64, TaskState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static TASK_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
+/// Stack sizes for background threads.
+///
+/// `std::thread::spawn` uses the platform default — 8 MB of *reserved* address
+/// space on Linux — for every task, including one that only sleeps. A bot with a
+/// few hundred live futures therefore reserves gigabytes of address space it
+/// never touches. These are a deliberate compromise rather than the 256 KB a
+/// minimum-size task could get away with: a user task can recurse arbitrarily
+/// deeply, and a small stack would turn user recursion that works on the main
+/// thread into a hard crash inside `spawn`. 2 MB keeps the reservation 4x
+/// smaller while still leaving thousands of frames; the timer thread runs no user
+/// code at all, so it can be tiny.
+const USER_TASK_STACK: usize = 2 * 1024 * 1024;
+const BUILTIN_TASK_STACK: usize = 512 * 1024;
+const TIMER_TASK_STACK: usize = 64 * 1024;
+
+/// Spawn a background thread with an explicit stack size.
+fn spawn_task_thread<F>(
+    name: &str,
+    stack: usize,
+    body: F,
+) -> Result<std::thread::JoinHandle<()>, String>
+where
+    F: FnOnce() + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(stack)
+        .spawn(body)
+        .map_err(|e| format!("could not start background task: {e}"))
+}
+
+/// How many finished tasks to keep around for `task_result`.
+const TASK_HISTORY_MAX: usize = 256;
+
+/// Record a task, evicting the oldest *completed* entries once the history gets
+/// long.
+///
+/// Nothing removed entries from `TASKS` except an explicit `future_cancel`, and
+/// `task_wait` only took the `JoinHandle`, so every `spawn`/`future`/`sleep`/
+/// `*_async` leaked its entry (and the result `Value` inside it) for the life of
+/// the program — a bot spawning 10 futures a second grows this map without bound.
+/// Live tasks are never evicted; only finished ones, oldest first, and only past
+/// the cap.
+fn register_task(id: i64, state: TaskState) {
+    let mut tasks = TASKS.lock().unwrap();
+    tasks.insert(id, state);
+    if tasks.len() > TASK_HISTORY_MAX {
+        let mut finished: Vec<i64> = tasks
+            .iter()
+            .filter(|(_, t)| t.done.load(Ordering::SeqCst))
+            .map(|(id, _)| *id)
+            .collect();
+        finished.sort_unstable();
+        let excess = tasks.len() - TASK_HISTORY_MAX;
+        for id in finished.into_iter().take(excess) {
+            tasks.remove(&id);
+        }
+    }
+}
+
 // ── Event loop (async/await) ────────────────────────────────
 /// A future representing an async computation.
 enum FutureState {
@@ -1018,6 +1078,12 @@ fn resolve_context_value(name: &str, ctx: &ExecContext<'_>) -> Option<Value> {
 /// Interpolate placeholders (%var%, ${var}, or {var}) in a string with values
 /// from the execution context. Supports dotted names (e.g. `%user.name%`).
 fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
+    // Most strings a program prints have nothing to interpolate, and every `say`
+    // of a literal goes through here: copy once instead of walking the text a
+    // byte at a time.
+    if !s.as_bytes().iter().any(|b| *b == b'%' || *b == b'$' || *b == b'{') {
+        return s.to_string();
+    }
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -1080,8 +1146,22 @@ fn interpolate_string(s: &str, ctx: &ExecContext<'_>) -> String {
                 }
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // Ordinary text: copy the run in a single slice push.  This used to push
+        // `bytes[i] as char` one byte at a time, which (a) paid a bounds check
+        // and a char encode per byte and (b) mangled any multi-byte UTF-8
+        // character into its separate Latin-1 stand-ins ("é" came out as "Ã©").
+        let run_start = i;
+        while i < bytes.len() && bytes[i] != b'%' && bytes[i] != b'$' && bytes[i] != b'{' {
+            i += 1;
+        }
+        if i > run_start {
+            out.push_str(&s[run_start..i]);
+        } else {
+            // A lone '%', '$' or '{' that did not open a placeholder: keep it.
+            // (These three are ASCII, so the byte is a char boundary.)
+            out.push_str(&s[i..i + 1]);
+            i += 1;
+        }
     }
     out
 }
@@ -1820,6 +1900,20 @@ impl<'a> ExecContext<'a> {
         if let Some(mut frame) = self.frames.pop() {
             frame.vars.clear();
             frame.args.clear();
+            // `clear()` keeps the bucket array, so a frame that once belonged to
+            // a 200-local function would hold its slots for the life of the pool
+            // (64 frames). Give the memory back when a frame is wildly oversized
+            // for reuse — `shrink_to` rather than `shrink_to_fit` keeps a sensible
+            // working size, so the next small function does not realloc straight
+            // back into it. Measured cost of these two checks: below the noise
+            // floor (call_2arg ratio 1.033 without them, 1.039 with them, on a
+            // machine whose per-op noise is ~4%).
+            if frame.vars.capacity() > 32 {
+                frame.vars.shrink_to(32);
+            }
+            if frame.args.capacity() > 16 {
+                frame.args.shrink_to(16);
+            }
             if self.frame_pool.len() < Self::FRAME_POOL_MAX {
                 self.frame_pool.push(frame);
             }
@@ -9621,7 +9715,7 @@ fn spawn_task_builtin(
     let result2 = result.clone();
 
     let id = TASK_NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let handle = std::thread::spawn(move || {
+    let handle = spawn_task_thread("indent-task", USER_TASK_STACK, move || {
         let mut rt = Runtime::new(module_dir);
         rt.funcs = funcs;
         rt.callables = callables;
@@ -9663,9 +9757,9 @@ fn spawn_task_builtin(
         };
         *result2.lock().unwrap() = Some(val);
         done2.store(true, Ordering::SeqCst);
-    });
+    })?;
 
-    TASKS.lock().unwrap().insert(
+    register_task(
         id,
         TaskState {
             handle: Some(handle),
@@ -9859,12 +9953,12 @@ fn sleep_builtin(seconds: f64) -> Result<Value, String> {
     let done2 = done.clone();
     let result2 = result.clone();
     let id = TASK_NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let handle = std::thread::spawn(move || {
+    let handle = spawn_task_thread("indent-sleep", TIMER_TASK_STACK, move || {
         std::thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
         *result2.lock().unwrap() = Some(Value::Empty);
         done2.store(true, Ordering::SeqCst);
-    });
-    TASKS.lock().unwrap().insert(
+    })?;
+    register_task(
         id,
         TaskState {
             handle: Some(handle),
@@ -9884,15 +9978,15 @@ fn spawn_builtin_future(builtin_name: &str, args: Vec<Value>) -> Result<Value, S
     let done2 = done.clone();
     let result2 = result.clone();
     let id = TASK_NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let handle = std::thread::spawn(move || {
+    let handle = spawn_task_thread("indent-async", BUILTIN_TASK_STACK, move || {
         let out = invoke_builtin(&builtin_name, &args).unwrap_or_else(|| {
             Err(format!("async {}: no such builtin", builtin_name))
         });
         let val = out.unwrap_or(Value::Empty);
         *result2.lock().unwrap() = Some(val);
         done2.store(true, Ordering::SeqCst);
-    });
-    TASKS.lock().unwrap().insert(
+    })?;
+    register_task(
         id,
         TaskState {
             handle: Some(handle),
@@ -12458,7 +12552,10 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
             _ => Err(format!("Cannot add {} and {} with '+'", a_type, b_type)),
             }
         },
-        "-" => numeric_bin(a, b, |x, y| x - y),
+        "-" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            Some((x, y)) => Ok(Value::Int(x.wrapping_sub(y))),
+            None => numeric_bin(a, b, |x, y| x - y),
+        },
         "*" => {
             match (&a, &b) {
                 (Value::Str(s), Value::Int(n)) | (Value::Int(n), Value::Str(s)) => {
@@ -12472,6 +12569,12 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
                         out.extend(l.iter().cloned());
                     }
                     Ok(Value::List(out))
+                }
+                (Value::Int(x), Value::Int(y))
+                    if x.unsigned_abs() <= EXACT_INT_MUL_MAG
+                        && y.unsigned_abs() <= EXACT_INT_MUL_MAG =>
+                {
+                    Ok(Value::Int(x.wrapping_mul(*y)))
                 }
                 _ => numeric_bin(a, b, |x, y| x * y),
             }
@@ -12490,14 +12593,36 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
                 Ok(Value::Float(x.powf(y)))
             }
         },
-        "/" => numeric_bin(a, b, |x, y| x / y),
-        "%" => numeric_bin(a, b, |x, y| x % y),
+        "/" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            // Only exact integer divisions: `7 / 2` is 3.5, and the float path is
+            // what decides that, so a non-exact quotient must fall through.
+            Some((x, y)) if y != 0 && x % y == 0 => Ok(Value::Int(x / y)),
+            _ => numeric_bin(a, b, |x, y| x / y),
+        },
+        "%" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            // `fmod` agrees with `%` for integer operands (both truncate toward
+            // zero), but a zero divisor gives NaN on the float path — fall through.
+            Some((x, y)) if y != 0 => Ok(Value::Int(x % y)),
+            _ => numeric_bin(a, b, |x, y| x % y),
+        },
         "==" => Ok(Value::Bool(eq_values(&a, &b))),
         "!=" => Ok(Value::Bool(!eq_values(&a, &b))),
-        ">" => cmp_bin(a, b, |x, y| x > y),
-        ">=" => cmp_bin(a, b, |x, y| x >= y),
-        "<" => cmp_bin(a, b, |x, y| x < y),
-        "<=" => cmp_bin(a, b, |x, y| x <= y),
+        ">" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            Some((x, y)) => Ok(Value::Bool(x > y)),
+            None => cmp_bin(a, b, |x, y| x > y),
+        },
+        ">=" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            Some((x, y)) => Ok(Value::Bool(x >= y)),
+            None => cmp_bin(a, b, |x, y| x >= y),
+        },
+        "<" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            Some((x, y)) => Ok(Value::Bool(x < y)),
+            None => cmp_bin(a, b, |x, y| x < y),
+        },
+        "<=" => match exact_int_pair(&a, &b, EXACT_INT_MAG) {
+            Some((x, y)) => Ok(Value::Bool(x <= y)),
+            None => cmp_bin(a, b, |x, y| x <= y),
+        },
         "in" => Ok(Value::Bool(contains_value(&b, &a)?)),
         "not in" => Ok(Value::Bool(!contains_value(&b, &a)?)),
         "is" => Ok(Value::Bool(is_identity_equal(&a, &b))),
@@ -12533,6 +12658,33 @@ fn contains_value(container: &Value, item: &Value) -> Result<bool, String> {
         }
         _ => Err(format!("'in' expects a list, set, dict, or string container, got {}", container.type_name())),
     }
+}
+
+/// Largest operand magnitude for which `f64` arithmetic on two integers is
+/// exactly equal to `i64` arithmetic on them, so an integer fast path cannot
+/// change a result (`2^52 + 2^52` is still exactly representable).
+const EXACT_INT_MAG: u64 = 1 << 52;
+/// For `*` the *product* has to stay exactly representable, hence the smaller bound.
+const EXACT_INT_MUL_MAG: u64 = 1 << 26;
+
+/// The `(i64, i64)` operands of an arithmetic binary op, when both are ints and
+/// both are small enough that `f64` arithmetic agrees with `i64` arithmetic.
+///
+/// `-`, `*`, `/`, `%` and the comparisons all funnel through `numeric_bin` /
+/// `cmp_bin`, which convert both operands to `f64`, apply the operation and
+/// convert the result back — a `cvtsi2sd`/`mulsd`/`cvttsd2si` round trip for what
+/// is a one-instruction integer operation, on *every* `-`, `*`, `/`, `%` and `<`
+/// in every program. Returning `None` for anything outside the exact range keeps
+/// the floating-point semantics (including `7 / 2 == 3.5` and `1 / 0 == inf`)
+/// untouched.
+#[inline]
+fn exact_int_pair(a: &Value, b: &Value, mag: u64) -> Option<(i64, i64)> {
+    if let (Value::Int(x), Value::Int(y)) = (a, b) {
+        if x.unsigned_abs() <= mag && y.unsigned_abs() <= mag {
+            return Some((*x, *y));
+        }
+    }
+    None
 }
 
 fn numeric_bin(a: Value, b: Value, op: fn(f64, f64) -> f64) -> Result<Value, String> {

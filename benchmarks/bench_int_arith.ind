@@ -1,0 +1,70 @@
+#! Probe: integer arithmetic and string-literal interpolation.
+#!
+#! Two things this measures:
+#!
+#! 1. `-`, `*`, `/`, `%` and `<` used to convert both operands to `f64`, apply the
+#!    operation and convert the result back (`numeric_bin`/`cmp_bin`) — a float
+#!    round trip per integer operation. They now take an exact-integer fast path.
+#! 2. Every string literal evaluated goes through `interpolate_string`, which used
+#!    to walk the text byte by byte pushing one `char` at a time. A literal with no
+#!    `%`/`$`/`{` in it now copies once.
+#!
+#! The "var copy" section is a body with no operator and no literal, so it shows
+#! how much of any movement is the loop machinery itself.
+
+var N int = 200000
+var x int = 1000
+var y int = 7
+var b boolean = TRUE
+var s string = ""
+
+var t0 float = time_perf_counter
+repeat N
+    x is x + 1
+var t1 float = time_perf_counter
+say "int +         " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+var t2 float = time_perf_counter
+repeat N
+    x is x - 1
+var t3 float = time_perf_counter
+say "int -         " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+var t4 float = time_perf_counter
+repeat N
+    x is x * 2
+var t5 float = time_perf_counter
+say "int *         " + string((t5 - t4) * 1000000000.0 / float(N)) + " ns/op"
+
+var t6 float = time_perf_counter
+repeat N
+    x is x / 2
+var t7 float = time_perf_counter
+say "int / (exact) " + string((t7 - t6) * 1000000000.0 / float(N)) + " ns/op"
+
+var t8 float = time_perf_counter
+repeat N
+    x is x % 7
+var t9 float = time_perf_counter
+say "int %         " + string((t9 - t8) * 1000000000.0 / float(N)) + " ns/op"
+
+var t10 float = time_perf_counter
+repeat N
+    b is x < 100
+var t11 float = time_perf_counter
+say "int <         " + string((t11 - t10) * 1000000000.0 / float(N)) + " ns/op"
+
+var t12 float = time_perf_counter
+repeat N
+    s is "a plain literal with no interpolation at all"
+var t13 float = time_perf_counter
+say "str literal   " + string((t13 - t12) * 1000000000.0 / float(N)) + " ns/op"
+
+var word string = "a plain literal with no interpolation at all"
+var t14 float = time_perf_counter
+repeat N
+    s is word
+var t15 float = time_perf_counter
+say "var copy      " + string((t15 - t14) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(x) + " " + string(len(s)) + " " + string(b) + " " + string(y)
