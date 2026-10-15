@@ -472,7 +472,7 @@ enum Value {
     /// class definition and shared by refcount.
     Object {
         class_name: String,
-        fields: Box<HashMap<String, Value>>,
+        fields: Box<Map<String, Value>>,
         methods: Arc<HashMap<String, Arc<FunctionDef>>>,
         is_dataclass: bool,
     },
@@ -857,7 +857,7 @@ fn instantiate_class(class_def: &ClassDef, args: &[Value], rt: &mut Runtime) -> 
     }
     all_fields.extend(class_def.fields.clone());
 
-    let mut fields = HashMap::new();
+    let mut fields = Map::default();
     for (i, field) in all_fields.iter().enumerate() {
         let value = if i < args.len() {
             args[i].clone()
@@ -5395,10 +5395,10 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
 
 fn invoke_object_method(
     method_def: &FunctionDef,
-    fields: &HashMap<String, Value>,
+    fields: &Map<String, Value>,
     args: &[Value],
     ctx: &mut ExecContext<'_>,
-) -> Result<(Value, HashMap<String, Value>), String> {
+) -> Result<(Value, Map<String, Value>), String> {
     // A method body runs in its own runtime so that it sees its fields as
     // globals and does *not* see the caller's locals.
     //
@@ -5408,7 +5408,7 @@ fn invoke_object_method(
     // call. Both are now O(1): the tables are lent and reclaimed, and the caches
     // are shared.
     let mut temp_rt = Runtime::bare(PathBuf::from("."));
-    temp_rt.vars = to_map(fields);
+    temp_rt.vars = fields.clone();
     ctx.rt.lend_tables_to(&mut temp_rt);
 
     let out = {
@@ -5431,14 +5431,13 @@ fn invoke_object_method(
 
     // The body reads and writes its fields as globals of that runtime, so the
     // fields as they stand afterwards are what the caller has to put back on the
-    // instance. Only the names the class declares are read back: a write to
-    // anything else stays what it was inside the method, which is the same rule
-    // a write from outside follows.
-    let mut after = HashMap::new();
-    for (name, before) in fields.iter() {
-        let value = temp_rt.vars.get(name).cloned().unwrap_or_else(|| before.clone());
-        after.insert(name.clone(), value);
-    }
+    // instance. The map is filtered *in place* rather than rebuilt into a new
+    // one: a name the method invented is dropped — a write to something the
+    // class does not declare stays what it was inside the method, which is the
+    // same rule a write from outside follows — and the rest is then moved out.
+    // Rebuilding would allocate a map and clone every field on every call.
+    temp_rt.vars.retain(|name, _| fields.contains_key(name));
+    let after = std::mem::take(&mut temp_rt.vars);
 
     ctx.rt.reclaim_tables_from(temp_rt);
     out.map(|value| (value, after))
@@ -5678,7 +5677,7 @@ fn invoke_method_on_value(
                 _ => Expr::Str(v.to_string()),
             }).collect();
             let mut temp_rt = Runtime::bare(PathBuf::from("."));
-            temp_rt.vars = to_map(fields);
+            temp_rt.vars = (**fields).clone();
             ctx.rt.lend_tables_to(&mut temp_rt);
             let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
             ctx.rt.reclaim_tables_from(temp_rt);
