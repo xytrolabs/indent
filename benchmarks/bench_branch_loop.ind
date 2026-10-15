@@ -1,0 +1,29 @@
+#! Cost probe: a `repeat` loop whose body branches.
+#!
+#! A loop body containing an `if` used to fall back to the tree-walker whole, so
+#! nothing in this measurement was in the VM's scope before. Both branches run
+#! (the counter parks at 100 and the otherwise branch takes the rest), so the
+#! number covers the condition plus both arms.
+
+var N int = 200000
+var x int = 0
+var y int = 0
+
+var t0 float = time_perf_counter
+repeat N
+    if x < 100
+        x is x + 1
+    otherwise
+        y is y + 1
+var t1 float = time_perf_counter
+say "if in loop    " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+var t2 float = time_perf_counter
+var z int = 0
+repeat N
+    if x < 50
+        z is z + 1
+var t3 float = time_perf_counter
+say "if no else    " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(x) + " " + string(y) + " " + string(z)

@@ -3240,6 +3240,10 @@ enum VmInstr {
     Bin(String),
     /// Pop and discard an expression statement's result.
     Pop,
+    /// Pop a condition and jump to the given instruction when it is falsy.
+    JumpIfFalse(usize),
+    /// Jump to the given instruction.
+    Jump(usize),
 }
 
 /// A compiled loop body: instructions plus the names of the frame slots they
@@ -3311,41 +3315,8 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
         slots: Vec::new(),
         reps_slot: None,
     };
-    for stmt in body {
-        match stmt {
-            Stmt::Assign { name, value, .. } => {
-                if name.contains('.') || positional_alias_index(name).is_some() {
-                    return None;
-                }
-                match value {
-                    // `cached_expr` is the same parse path `eval_expr` uses, so
-                    // preprocessing and parsing cannot diverge between engines.
-                    ValueSource::Expr(text) => {
-                        let ast = rt.cached_expr(text).ok()?;
-                        if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
-                            return None;
-                        }
-                        if !vm_compile_expr(&ast, &mut prog.instrs, &mut prog.slots) {
-                            return None;
-                        }
-                    }
-                    ValueSource::Call { .. } => return None,
-                }
-                let s = vm_slot(&mut prog.slots, name);
-                prog.instrs.push(VmInstr::StoreSlot(s));
-            }
-            Stmt::BareExpr { expr, .. } => {
-                let ast = rt.cached_expr(expr).ok()?;
-                if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
-                    return None;
-                }
-                if !vm_compile_expr(&ast, &mut prog.instrs, &mut prog.slots) {
-                    return None;
-                }
-                prog.instrs.push(VmInstr::Pop);
-            }
-            _ => return None,
-        }
+    if !vm_compile_stmts(body, &mut prog, rt) {
+        return None;
     }
     prog.reps_slot = prog
         .slots
@@ -3353,6 +3324,91 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
         .position(|s| s == "Reps")
         .map(|i| i as u16);
     Some(prog)
+}
+
+/// Compile one expression from its text: the same parse cache `eval_expr` uses,
+/// so preprocessing and parsing cannot diverge between the two engines.
+fn vm_compile_text(text: &str, prog: &mut VmProgram, rt: &Runtime) -> bool {
+    let Ok(ast) = rt.cached_expr(text) else {
+        return false;
+    };
+    if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
+        return false;
+    }
+    vm_compile_expr(&ast, &mut prog.instrs, &mut prog.slots)
+}
+
+/// Compile a statement list, recursing into `if` branches.
+///
+/// An `if` becomes: each conditional branch emits its condition, a `JumpIfFalse`
+/// to the next branch, its body, then a `Jump` past every remaining branch; an
+/// `otherwise` branch emits its body unconditionally; and the false-targets of the
+/// last conditional fall past the whole chain. That is first-true-wins, exactly as
+/// `exec_stmt`'s `IfChain` arm reads. Branch bodies are compiled recursively, so
+/// nested `if`s work; anything else in a body (including `give`, `stop` and nested
+/// loops) refuses the whole loop, because those produce `Control` and a compiled
+/// body must yield `Control::None`.
+fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Assign { name, value, .. } => {
+                if name.contains('.') || positional_alias_index(name).is_some() {
+                    return false;
+                }
+                match value {
+                    ValueSource::Expr(text) => {
+                        if !vm_compile_text(text, prog, rt) {
+                            return false;
+                        }
+                    }
+                    ValueSource::Call { .. } => return false,
+                }
+                let s = vm_slot(&mut prog.slots, name);
+                prog.instrs.push(VmInstr::StoreSlot(s));
+            }
+            Stmt::BareExpr { expr, .. } => {
+                if !vm_compile_text(expr, prog, rt) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::Pop);
+            }
+            Stmt::IfChain { branches, .. } => {
+                // Indices of `JumpIfFalse`s still waiting for their target: the
+                // next branch's first instruction.
+                let mut pending_false: Vec<usize> = Vec::new();
+                // Indices of the `Jump`s that skip the rest of the chain.
+                let mut end_jumps: Vec<usize> = Vec::new();
+                for (cond, body) in branches {
+                    for j in pending_false.drain(..) {
+                        prog.instrs[j] = VmInstr::JumpIfFalse(prog.instrs.len());
+                    }
+                    if let Some(c) = cond {
+                        if !vm_compile_text(c, prog, rt) {
+                            return false;
+                        }
+                        prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
+                        pending_false.push(prog.instrs.len() - 1);
+                    }
+                    if !vm_compile_stmts(body, prog, rt) {
+                        return false;
+                    }
+                    if cond.is_some() {
+                        prog.instrs.push(VmInstr::Jump(usize::MAX));
+                        end_jumps.push(prog.instrs.len() - 1);
+                    }
+                }
+                // A chain whose last branch is conditional falls past the end.
+                for j in pending_false.drain(..) {
+                    prog.instrs[j] = VmInstr::JumpIfFalse(prog.instrs.len());
+                }
+                for j in end_jumps {
+                    prog.instrs[j] = VmInstr::Jump(prog.instrs.len());
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Check every name the body reads before running it. A name that is unbound is
@@ -3389,20 +3445,24 @@ fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<
                 values[s as usize] = Value::Int(reps as i64);
             }
             let mut sp = 0usize;
-            for ins in &prog.instrs {
-                match ins {
+            let mut ip = 0usize;
+            while ip < prog.instrs.len() {
+                match &prog.instrs[ip] {
                     VmInstr::Const(v) => {
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v.clone();
                         sp += 1;
+                        ip += 1;
                     }
                     VmInstr::LoadSlot(s) => {
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? =
                             values[*s as usize].clone();
                         sp += 1;
+                        ip += 1;
                     }
                     VmInstr::StoreSlot(s) => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
                         values[*s as usize] = stack[sp].clone();
+                        ip += 1;
                     }
                     VmInstr::Bin(op) => {
                         sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
@@ -3411,9 +3471,18 @@ fn vm_run_loop(n: usize, prog: &VmProgram, ctx: &mut ExecContext<'_>) -> Result<
                         let v = eval_binary(op, a, b, ctx)?;
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
                         sp += 1;
+                        ip += 1;
                     }
                     VmInstr::Pop => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        ip += 1;
+                    }
+                    VmInstr::JumpIfFalse(target) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        ip = if stack[sp].to_bool() { ip + 1 } else { *target };
+                    }
+                    VmInstr::Jump(target) => {
+                        ip = *target;
                     }
                 }
             }
