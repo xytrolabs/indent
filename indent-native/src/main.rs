@@ -10,7 +10,7 @@ use std::process;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::{connect as ws_connect_blocking, Message as WsMessage};
 
@@ -401,6 +401,17 @@ struct FunctionDef {
     return_type: Option<String>,
     body: Vec<Stmt>,
     is_generator: bool,
+    /// The body as instructions, compiled on the first call that needs it.
+    ///
+    /// `None` means "the VM cannot take this body" (or cannot pay for it), which is
+    /// as important to remember as a program: without this, every call re-ran the
+    /// whole compile — parse-cache lookups, slot allocation and instruction
+    /// building — and a small body's own work is less than that. The body never
+    /// changes, and neither does the answer, so one cell per function is enough.
+    ///
+    /// Nothing here is serialised (`FunctionDef` is built from `Stmt::DefFun` at
+    /// run time), so this cannot leak into the AST cache.
+    compiled: OnceLock<Option<Arc<VmProgram>>>,
 }
 
 // ---- Classes (OOP) ----
@@ -2624,6 +2635,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                             return_type: None,
                             body: body.clone(),
                             is_generator: stmts_contain_yield(body),
+                            compiled: OnceLock::new(),
                         }),
                     );
                 }
@@ -2784,6 +2796,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 return_type: return_type.clone(),
                 body: body.clone(),
                 is_generator: *is_generator,
+                compiled: OnceLock::new(),
             });
             ctx.rt.funcs.insert(name.clone(), f.clone());
             ctx.rt.callables.insert(name.clone(), Callable::Local(f));
@@ -3251,6 +3264,7 @@ fn vm_enabled() -> bool {
 /// Maximum operand-stack depth. Deeper bodies stay in the tree-walker.
 const VM_STACK: usize = 16;
 
+/// One instruction of a compiled program.
 #[derive(Debug, Clone)]
 enum VmInstr {
     /// Push a value fixed at compile time.
@@ -3315,6 +3329,7 @@ enum VmInstr {
 /// innermost-first and hash a `String` on every access, once per iteration. Now
 /// the body's variables are read into a `Vec<Value>` on entry and written back on
 /// exit, and the instruction stream only indexes that vector.
+#[derive(Debug)]
 struct VmProgram {
     instrs: Vec<VmInstr>,
     slots: Vec<String>,
@@ -5788,9 +5803,13 @@ fn resumed_body(
     ctx: &mut ExecContext<'_>,
 ) -> Result<Control, String> {
     if vm_enabled() {
-        if let Some(prog) = vm_compile_function(&f.body, f.return_type.is_some(), ctx.rt) {
-            if vm_names_bound(&prog, ctx) {
-                return vm_run_body(&prog, ctx);
+        let compiled = f.compiled.get_or_init(|| {
+            vm_compile_function(&f.body, f.return_type.is_some(), ctx.rt).map(Arc::new)
+        });
+        if let Some(prog) = compiled {
+            // Binding is per call: the body's names must exist *now*.
+            if vm_names_bound(prog, ctx) {
+                return vm_run_body(prog, ctx);
             }
         }
     }

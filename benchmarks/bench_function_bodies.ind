@@ -54,4 +54,13 @@ repeat 2
 var t5 float = time_perf_counter
 say "body loop     " + string((t5 - t4) * 1000000000.0 / float(100000)) + " ns/op"
 
+#! ---- the same loop body, called many times ----
+#! This is the shape the per-function compile cache exists for: compiling the body
+#! afresh on every one of these calls costs more than the loops it runs.
+var t6 float = time_perf_counter
+repeat 2000
+    add_range(50)
+var t7 float = time_perf_counter
+say "loop body 2k  " + string((t7 - t6) * 1000000000.0 / float(100000)) + " ns/op"
+
 say "checks " + string(acc) + " " + string(even) + " " + string(odd) + " " + string(total)
