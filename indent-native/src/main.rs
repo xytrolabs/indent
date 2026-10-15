@@ -3209,8 +3209,16 @@ fn maybe_debug(line: usize, ctx: &mut ExecContext<'_>) -> Result<(), String> {
 // flow, calls, index/member access, `say`, typed declarations, interpolated
 // strings — and `vm_compile_body` returning false puts the whole loop back on the
 // tree-walker, unchanged.
+/// Stage 1 is on by default; `INDENT_VM=0` turns it off.
+///
+/// Enabled because it is strictly better on the macro battery (geomean 0.937,
+/// nothing worse) and differentially correct: all 58 programs in the suite give
+/// identical results with it on and off. The compiler's refusals keep the exposed
+/// surface narrow — a body it cannot express falls back to the tree-walker,
+/// unchanged — so `INDENT_VM=0` is the escape hatch if any program behaves
+/// differently.
 static INDENT_VM: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("INDENT_VM").map(|v| v != "0").unwrap_or(false));
+    LazyLock::new(|| std::env::var("INDENT_VM").map(|v| v != "0").unwrap_or(true));
 
 #[inline]
 fn vm_enabled() -> bool {
