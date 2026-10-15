@@ -3250,6 +3250,16 @@ enum VmInstr {
     CheckLimit { slot: u16, msg: String },
     /// Add one to a loop counter.
     BumpSlot(u16),
+    /// Push a frame for a nested loop's own bindings.
+    PushFrame,
+    /// Pop it again, on the loop's every exit path.
+    PopFrame,
+    /// Define `name` in the current frame with the value in `slot`.
+    SetLocal { slot: u16, name: String },
+    /// Pop a `repeat` count, check it is a number, and store it as an integer.
+    CheckCount { slot: u16 },
+    /// Pop an iterable, materialise it for a nested `for`, or fail with `msg`.
+    IterPrepare { items: u16, index: u16, msg: String },
     /// Pop `argc` arguments, call `callee` with them, push the result.
     Call { callee: String, argc: u16 },
     /// Fetch the next item of a materialised iterable: bind it, advance the
@@ -3286,6 +3296,15 @@ struct VmProgram {
     item_slot: Option<u16>,
     /// Slot the iterable is materialised into, for the `for` forms.
     items_slot: Option<u16>,
+    /// Slots the loop owns: every `Reps` and every `for` item binding, at every
+    /// nesting level. They are not required to exist beforehand and are never read
+    /// back from the frames — the tree-walker's loop frames are popped too. They
+    /// *are* flushed, so a callee can name them.
+    owned: Vec<u16>,
+    /// The `Reps` slot of each loop level currently being compiled, innermost last.
+    /// An inner level shadows the outer one, which is what makes `Reps` inside a
+    /// nested body mean the inner counter.
+    reps_stack: Vec<u16>,
 }
 
 /// Slot index for `name`, adding it if this body has not used it yet.
@@ -3302,6 +3321,16 @@ fn vm_slot(slots: &mut Vec<String>, name: &str) -> u16 {
 /// the frames, and `vm_names_bound` does not require it to exist.
 fn vm_scratch(slots: &mut Vec<String>) -> u16 {
     slots.push(String::new());
+    (slots.len() - 1) as u16
+}
+
+/// A slot for `name` that shadows any slot already carrying that name.
+///
+/// Nested loops each need their own `Reps`, and both must keep the name `Reps` so
+/// the frames — and therefore a callee — see the counter under the name the
+/// tree-walker uses. The flush walks slots in order, so the innermost level wins.
+fn vm_slot_shadow(slots: &mut Vec<String>, name: &str) -> u16 {
+    slots.push(name.to_string());
     (slots.len() - 1) as u16
 }
 
@@ -3356,15 +3385,17 @@ fn vm_compile_args(args: &[ArgItem], prog: &mut VmProgram, rt: &Runtime) -> bool
 
 /// Compile an expression, postfix. Returns false for anything unsupported, in
 /// which case the caller must discard `out`.
-fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>, slots: &mut Vec<String>) -> bool {
+fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
     match e {
-        Expr::Int(v) => out.push(VmInstr::Const(Value::Int(*v))),
-        Expr::Float(v) => out.push(VmInstr::Const(Value::Float(*v))),
-        Expr::Bool(v) => out.push(VmInstr::Const(Value::Bool(*v))),
-        Expr::Empty => out.push(VmInstr::Const(Value::Empty)),
+        Expr::Int(v) => prog.instrs.push(VmInstr::Const(Value::Int(*v))),
+        Expr::Float(v) => prog.instrs.push(VmInstr::Const(Value::Float(*v))),
+        Expr::Bool(v) => prog.instrs.push(VmInstr::Const(Value::Bool(*v))),
+        Expr::Empty => prog.instrs.push(VmInstr::Const(Value::Empty)),
         // `eval_ast` interpolates only when the literal contains `%`; matching
         // that gate is what keeps the value identical.
-        Expr::Str(v) if !v.contains('%') => out.push(VmInstr::Const(Value::Str(v.clone()))),
+        Expr::Str(v) if !v.contains('%') => {
+            prog.instrs.push(VmInstr::Const(Value::Str(v.clone())))
+        }
         Expr::Var(names) if names.len() == 1 => {
             // `argument`/`argument2` resolve from `frame.args`, not `frame.vars`,
             // so they are not slot-able; a body that uses them goes back to the
@@ -3372,27 +3403,33 @@ fn vm_compile_expr(e: &Expr, out: &mut Vec<VmInstr>, slots: &mut Vec<String>) ->
             if positional_alias_index(&names[0]).is_some() {
                 return false;
             }
-            let s = vm_slot(slots, &names[0]);
-            out.push(VmInstr::LoadSlot(s));
+            // `Reps` is the innermost enclosing loop level, so a nested body reads
+            // its own counter — the same shadowing the tree-walker's loop frame
+            // gives it.
+            let s = match prog.reps_stack.last() {
+                Some(inner) if names[0] == "Reps" => *inner,
+                _ => vm_slot(&mut prog.slots, &names[0]),
+            };
+            prog.instrs.push(VmInstr::LoadSlot(s));
         }
         Expr::Binary { op, lhs, rhs } => {
-            if !vm_compile_expr(lhs, out, slots) {
+            if !vm_compile_expr(lhs, prog) {
                 return false;
             }
-            if !vm_compile_expr(rhs, out, slots) {
+            if !vm_compile_expr(rhs, prog) {
                 return false;
             }
-            out.push(VmInstr::Bin(op.clone()));
+            prog.instrs.push(VmInstr::Bin(op.clone()));
         }
         // Arguments are pushed left to right, so the instruction pops `argc`
         // values and passes them on in source order.
         Expr::Call { callee, args } if vm_call_compilable(callee) => {
             for arg in args {
-                if !vm_compile_expr(arg, out, slots) {
+                if !vm_compile_expr(arg, prog) {
                     return false;
                 }
             }
-            out.push(VmInstr::Call {
+            prog.instrs.push(VmInstr::Call {
                 callee: callee[0].clone(),
                 argc: args.len() as u16,
             });
@@ -3413,15 +3450,21 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
         reps_slot: None,
         item_slot: None,
         items_slot: None,
+        owned: Vec::new(),
+        reps_stack: Vec::new(),
     };
-    if !vm_compile_stmts(body, &mut prog, rt) {
+    // The counter is allocated up front rather than discovered in the body: the
+    // runner publishes it either way, and a nested loop's shadow slot of the same
+    // name can then never be mistaken for this one.
+    let reps = vm_slot(&mut prog.slots, "Reps");
+    prog.reps_slot = Some(reps);
+    prog.owned.push(reps);
+    prog.reps_stack.push(reps);
+    let compiled = vm_compile_stmts(body, &mut prog, rt);
+    prog.reps_stack.pop();
+    if !compiled {
         return None;
     }
-    prog.reps_slot = prog
-        .slots
-        .iter()
-        .position(|s| s == "Reps")
-        .map(|i| i as u16);
     Some(prog)
 }
 
@@ -3472,9 +3515,12 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
         reps_slot: None,
         item_slot: None,
         items_slot: None,
+        owned: Vec::new(),
+        reps_stack: Vec::new(),
     };
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
+    prog.owned.push(reps);
     prog.instrs.push(VmInstr::Const(Value::Int(0)));
     prog.instrs.push(VmInstr::StoreSlot(reps));
     let start = prog.instrs.len();
@@ -3493,7 +3539,10 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
     // first fails.
     let exit_jump = prog.instrs.len();
     prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
-    if !vm_compile_stmts(body, &mut prog, rt) {
+    prog.reps_stack.push(reps);
+    let compiled = vm_compile_stmts(body, &mut prog, rt);
+    prog.reps_stack.pop();
+    if !compiled {
         return None;
     }
     prog.instrs.push(VmInstr::BumpSlot(reps));
@@ -3530,11 +3579,15 @@ fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProg
         reps_slot: None,
         item_slot: None,
         items_slot: None,
+        owned: Vec::new(),
+        reps_stack: Vec::new(),
     };
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
+    prog.owned.push(reps);
     let item = vm_slot(&mut prog.slots, item_name);
     prog.item_slot = Some(item);
+    prog.owned.push(item);
     let items = vm_scratch(&mut prog.slots);
     prog.items_slot = Some(items);
     let index = vm_scratch(&mut prog.slots);
@@ -3548,7 +3601,10 @@ fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProg
         reps,
         end: usize::MAX,
     });
-    if !vm_compile_stmts(body, &mut prog, rt) {
+    prog.reps_stack.push(reps);
+    let compiled = vm_compile_stmts(body, &mut prog, rt);
+    prog.reps_stack.pop();
+    if !compiled {
         return None;
     }
     prog.instrs.push(VmInstr::Jump(start));
@@ -3557,6 +3613,168 @@ fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProg
         *target = end;
     }
     Some(prog)
+}
+
+/// Compile a loop that sits inside a body which is itself compiled.
+///
+/// The nested loop is a stream of its own, embedded in the enclosing one. It
+/// pushes a frame first — the tree-walker's `exec_repeat` pushes one per loop
+/// *execution*, so a callee reached from the inner body must find the inner
+/// `Reps`, and a `for` item, in a frame of that loop's own — binds them there once,
+/// and jumps back to its own start. Every exit goes through the `PopFrame`, and
+/// `vm_run` pops anything the stream left behind if an instruction failed.
+///
+/// Shape, for `repeat N`:
+///
+///     [count]  CheckCount(count)      count evaluated once, as the tree-walker does
+///     PushFrame
+///     Reps = 0;  SetLocal Reps
+///   start:
+///     LoadSlot(reps) LoadSlot(count) Bin("<") JumpIfFalse(exit)
+///     <body>
+///     BumpSlot(reps)
+///     Jump(start)
+///   exit:
+///     PopFrame
+///
+/// A nested `while`/`until` swaps the count test for `CheckLimit` plus the
+/// condition, and a nested `for` for `IterPrepare` plus `IterNext`.
+fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool {
+    // A nested loop's counter shadows the enclosing level's, and both keep the name
+    // `Reps` so the frames — and a callee reading it — stay faithful.
+    let reps = vm_slot_shadow(&mut prog.slots, "Reps");
+    prog.owned.push(reps);
+
+    let count = match mode {
+        RepeatMode::Count(text) => {
+            let slot = vm_scratch(&mut prog.slots);
+            if !vm_compile_text(text, prog, rt) {
+                return false;
+            }
+            // The tree-walker's own check, so a non-numeric count reports the same
+            // thing and a fractional or negative one truncates the same way.
+            prog.instrs.push(VmInstr::CheckCount { slot });
+            Some(slot)
+        }
+        _ => None,
+    };
+
+    // The `for` forms: the expression, the binding it creates, and the message the
+    // tree-walker reports when the value is not iterable.
+    let for_binding = match mode {
+        RepeatMode::ForEach(expr) => Some((
+            expr.as_str(),
+            "Item",
+            "Repeat for expects a list, set, or generator",
+        )),
+        RepeatMode::ForIn {
+            iterable_expr,
+            item_name,
+        } => Some((
+            iterable_expr.as_str(),
+            item_name.as_str(),
+            "Repeat for <Item> in expects a list, set, or generator",
+        )),
+        _ => None,
+    };
+    let mut for_slots = None;
+    if let Some((text, name, msg)) = for_binding {
+        let items = vm_scratch(&mut prog.slots);
+        let index = vm_scratch(&mut prog.slots);
+        let item = vm_slot_shadow(&mut prog.slots, name);
+        prog.owned.push(item);
+        // Evaluated once, before the frame is pushed, exactly where the
+        // tree-walker evaluates it.
+        if !vm_compile_text(text, prog, rt) {
+            return false;
+        }
+        prog.instrs.push(VmInstr::IterPrepare {
+            items,
+            index,
+            msg: msg.to_string(),
+        });
+        for_slots = Some((items, index, item, name));
+    }
+
+    prog.instrs.push(VmInstr::PushFrame);
+    prog.instrs.push(VmInstr::Const(Value::Int(0)));
+    prog.instrs.push(VmInstr::StoreSlot(reps));
+    prog.instrs.push(VmInstr::SetLocal {
+        slot: reps,
+        name: "Reps".to_string(),
+    });
+    if let Some((_, _, item, name)) = for_slots {
+        prog.instrs.push(VmInstr::SetLocal {
+            slot: item,
+            name: name.to_string(),
+        });
+    }
+
+    let start = prog.instrs.len();
+    let exit: usize;
+    match mode {
+        RepeatMode::Count(_) => {
+            let count = count.unwrap_or(reps);
+            prog.instrs.push(VmInstr::LoadSlot(reps));
+            prog.instrs.push(VmInstr::LoadSlot(count));
+            prog.instrs.push(VmInstr::Bin("<".to_string()));
+            exit = prog.instrs.len();
+            prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
+        }
+        RepeatMode::While(cond) | RepeatMode::Until(cond) => {
+            let until = matches!(mode, RepeatMode::Until(_));
+            prog.instrs.push(VmInstr::CheckLimit {
+                slot: reps,
+                msg: if until {
+                    "Repeat until loop exceeded safety limit".to_string()
+                } else {
+                    "Repeat while loop exceeded safety limit".to_string()
+                },
+            });
+            if !vm_compile_text(cond, prog, rt) {
+                return false;
+            }
+            exit = prog.instrs.len();
+            prog.instrs.push(if until {
+                VmInstr::JumpIfTrue(usize::MAX)
+            } else {
+                VmInstr::JumpIfFalse(usize::MAX)
+            });
+        }
+        RepeatMode::ForEach(_) | RepeatMode::ForIn { .. } => {
+            let (items, index, item, _) = for_slots.unwrap_or((reps, reps, reps, "Item"));
+            exit = prog.instrs.len();
+            prog.instrs.push(VmInstr::IterNext {
+                items,
+                index,
+                item,
+                reps,
+                end: usize::MAX,
+            });
+        }
+        // `repeat` with no bound only ends through `stop`, which a compiled body
+        // does not support.
+        RepeatMode::Infinite => return false,
+    }
+
+    prog.reps_stack.push(reps);
+    let compiled = vm_compile_stmts(body, prog, rt);
+    prog.reps_stack.pop();
+    if !compiled {
+        return false;
+    }
+    if !matches!(mode, RepeatMode::ForEach(_) | RepeatMode::ForIn { .. }) {
+        prog.instrs.push(VmInstr::BumpSlot(reps));
+    }
+    prog.instrs.push(VmInstr::Jump(start));
+    let end = prog.instrs.len();
+    prog.instrs.push(VmInstr::PopFrame);
+    match &mut prog.instrs[exit] {
+        VmInstr::JumpIfFalse(t) | VmInstr::JumpIfTrue(t) => *t = end,
+        VmInstr::IterNext { end: t, .. } => *t = end,
+        _ => {}
+    }
+    true
 }
 
 /// Whether an expression's text mentions the bare name `Reps`.
@@ -3577,7 +3795,7 @@ fn vm_compile_text(text: &str, prog: &mut VmProgram, rt: &Runtime) -> bool {
     if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
         return false;
     }
-    vm_compile_expr(&ast, &mut prog.instrs, &mut prog.slots)
+    vm_compile_expr(&ast, prog)
 }
 
 /// Compile a statement list, recursing into `if` branches.
@@ -3655,6 +3873,13 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 }
                 prog.instrs.push(VmInstr::Pop);
             }
+            // A loop inside a compiled body: its own stream, its own counter, and
+            // its own frame for the bindings a callee can name.
+            Stmt::Repeat { mode, body, .. } => {
+                if !vm_compile_nested(mode, body, prog, rt) {
+                    return false;
+                }
+            }
             // A call standing on its own line: the result is discarded, as
             // `exec_stmt` does.
             Stmt::Call { callee, args, .. } if vm_stmt_call_ok(callee, args, rt) => {
@@ -3714,12 +3939,9 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
 fn vm_names_bound(prog: &VmProgram, ctx: &ExecContext<'_>) -> bool {
     prog.slots.iter().enumerate().all(|(i, name)| {
         let i = i as u16;
-        // `Reps` and the `for` item are bound by the loop; a scratch slot is the
-        // compiler's own and names nothing.
-        name.is_empty()
-            || Some(i) == prog.reps_slot
-            || Some(i) == prog.item_slot
-            || ctx.has_var(name)
+        // `Reps` and the `for` item are bound by the loop, at every level; a
+        // scratch slot is the compiler's own and names nothing.
+        name.is_empty() || prog.owned.contains(&i) || ctx.has_var(name)
     })
 }
 
@@ -3789,18 +4011,13 @@ fn vm_concat_slot(
 /// the loop ends, so without this a callee would read the values from *before* the
 /// loop and, worse, a pull-back afterwards would undo the iterations that already
 /// ran. The counter is handed over too, because a callee can read `Reps`.
-fn vm_flush_slots(
-    slots: &[String],
-    reps_slot: Option<u16>,
-    values: &[Value],
-    ctx: &mut ExecContext<'_>,
-) {
-    for (i, name) in slots.iter().enumerate() {
+fn vm_flush_slots(prog: &VmProgram, values: &[Value], ctx: &mut ExecContext<'_>) {
+    // Slot order matters: when loops are nested, two slots are named `Reps` and
+    // `set_var` resolves to the innermost frame holding that name, so writing the
+    // outer level first leaves the inner counter — the one a callee should see —
+    // in place.
+    for (i, name) in prog.slots.iter().enumerate() {
         if name.is_empty() {
-            continue;
-        }
-        if Some(i as u16) == reps_slot {
-            ctx.set_var("Reps", values[i].clone());
             continue;
         }
         ctx.set_var(name, values[i].clone());
@@ -3813,17 +4030,11 @@ fn vm_flush_slots(
 /// through frames, and those writes have to come back into the loop's cache or
 /// the body would keep reading the values it had before the call. Paired with
 /// `vm_flush_slots`, this keeps the two engines' view identical across a call.
-fn vm_pull_slots(
-    slots: &[String],
-    reps_slot: Option<u16>,
-    item_slot: Option<u16>,
-    values: &mut [Value],
-    ctx: &ExecContext<'_>,
-) {
-    for (i, name) in slots.iter().enumerate() {
-        // `Reps` and the `for` item are the loop's own bindings — user code cannot
-        // meaningfully replace either, and scratch slots name nothing.
-        if name.is_empty() || Some(i as u16) == reps_slot || Some(i as u16) == item_slot {
+fn vm_pull_slots(prog: &VmProgram, values: &mut [Value], ctx: &ExecContext<'_>) {
+    for (i, name) in prog.slots.iter().enumerate() {
+        // The loop's own bindings are not the callee's to replace, and scratch
+        // slots name nothing.
+        if name.is_empty() || prog.owned.contains(&(i as u16)) {
             continue;
         }
         values[i] = ctx.get_var(name).unwrap_or(Value::Empty);
@@ -3861,6 +4072,12 @@ fn vm_run(
     prog: &VmProgram,
     ctx: &mut ExecContext<'_>,
 ) -> Result<(), String> {
+    // A nested loop's stream may have pushed a frame that an error skipped the
+    // `PopFrame` for, so drop back to the depth the loop started at.
+    let depth = ctx.frames.len();
+    while ctx.frames.len() > depth {
+        ctx.pop_frame();
+    }
     // Read the body's variables once. Slots are then just a `Vec` index, so the
     // loop body never hashes a name again.
     let mut values: Vec<Value> = prog
@@ -3922,17 +4139,11 @@ fn vm_run(
                         let object_operand =
                             matches!(a, Value::Object { .. }) || matches!(b, Value::Object { .. });
                         if object_operand {
-                            vm_flush_slots(&prog.slots, prog.reps_slot, &values, ctx);
+                            vm_flush_slots(prog, &values, ctx);
                         }
                         let result = eval_binary(op, a, b, ctx);
                         if object_operand {
-                            vm_pull_slots(
-                                &prog.slots,
-                                prog.reps_slot,
-                                prog.item_slot,
-                                &mut values,
-                                ctx,
-                            );
+                            vm_pull_slots(prog, &mut values, ctx);
                         }
                         let v = result?;
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
@@ -3949,17 +4160,11 @@ fn vm_run(
                         // the callee replaced back into the frame.
                         let user_code = vm_call_runs_user_code(callee, &args, ctx);
                         if user_code {
-                            vm_flush_slots(&prog.slots, prog.reps_slot, &values, ctx);
+                            vm_flush_slots(prog, &values, ctx);
                         }
                         let result = invoke_callable_values(callee, args, ctx);
                         if user_code {
-                            vm_pull_slots(
-                                &prog.slots,
-                                prog.reps_slot,
-                                prog.item_slot,
-                                &mut values,
-                                ctx,
-                            );
+                            vm_pull_slots(prog, &mut values, ctx);
                         }
                         let v = result?;
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
@@ -4016,16 +4221,10 @@ fn vm_run(
                         if matches!(values[idx], Value::Object { .. }) {
                             // An operator method is user code, so this one case
                             // takes the hand-over a call takes.
-                            vm_flush_slots(&prog.slots, prog.reps_slot, &values, ctx);
+                            vm_flush_slots(prog, &values, ctx);
                             let lhs = std::mem::replace(&mut values[idx], Value::Empty);
                             let result = eval_binary("+", lhs, rhs, ctx);
-                            vm_pull_slots(
-                                &prog.slots,
-                                prog.reps_slot,
-                                prog.item_slot,
-                                &mut values,
-                                ctx,
-                            );
+                            vm_pull_slots(prog, &mut values, ctx);
                             result?;
                         } else {
                             vm_concat_slot(&mut values, idx, rhs, ctx)?;
@@ -4034,6 +4233,42 @@ fn vm_run(
                     }
                     VmInstr::Pop => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        ip += 1;
+                    }
+                    VmInstr::PushFrame => {
+                        ctx.push_frame();
+                        ip += 1;
+                    }
+                    VmInstr::PopFrame => {
+                        ctx.pop_frame();
+                        ip += 1;
+                    }
+                    VmInstr::SetLocal { slot, name } => {
+                        let v = values[*slot as usize].clone();
+                        ctx.define_local(name, v);
+                        ip += 1;
+                    }
+                    VmInstr::CheckCount { slot } => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let v = stack[sp].clone();
+                        let n = v.as_number().ok_or_else(|| {
+                            format!(
+                                "Repeat count must be a number, got {}: {}",
+                                v.type_name(),
+                                v
+                            )
+                        })?;
+                        // The tree-walker truncates with `as_number()? as usize`,
+                        // which saturates, so a negative count is no iterations.
+                        values[*slot as usize] = Value::Int((n as usize).min(i64::MAX as usize) as i64);
+                        ip += 1;
+                    }
+                    VmInstr::IterPrepare { items, index, msg } => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let v = stack[sp].clone();
+                        let list = iterable_items_owned(v).ok_or_else(|| msg.clone())?;
+                        values[*items as usize] = Value::List(list);
+                        values[*index as usize] = Value::Int(0);
                         ip += 1;
                     }
                     VmInstr::JumpIfFalse(target) => {
@@ -4078,11 +4313,7 @@ fn vm_run(
     // the loop's own bindings (`Reps`, the `for` item) die with the loop frame, so
     // neither is written anywhere.
     for (i, name) in prog.slots.iter().enumerate() {
-        if name.is_empty() || Some(i as u16) == prog.item_slot {
-            continue;
-        }
-        if Some(i as u16) == prog.reps_slot {
-            ctx.set_var("Reps", values[i].clone());
+        if name.is_empty() || prog.owned.contains(&(i as u16)) {
             continue;
         }
         ctx.set_var(name, values[i].clone());

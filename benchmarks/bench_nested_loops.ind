@@ -1,0 +1,70 @@
+#! Cost probe: nested loops.
+#!
+#! Before this stage an inner loop refused to compile *and* took its whole
+#! enclosing loop back to the tree-walker with it, so nothing in a loop nest ran
+#! compiled. These cover an inner count loop, an inner while loop, an inner `for`
+#! over a list, and both levels' `Reps` — which is what the per-level counter
+#! shadowing has to get right.
+#!
+#! Expected on 100 x 50000 = 5 000 000 inner passes, and 100 x 1000 for the list:
+#!   inner     5000000
+#!   outer     5000000
+#!   pairsum   124997500000    (100 * sum(0..49999))
+#!   outerreps 4950            (sum(0..99): the *outer* Reps, read after the inner
+#!                              loop has released its own counter)
+#!   listsum   49950000        (100 * sum(0..999))
+
+var N int = 50000
+var rows int = 100
+
+#! ---- inner count loop ----
+var inner int = 0
+var t0 float = time_perf_counter
+repeat rows
+    repeat N
+        inner is inner + 1
+var t1 float = time_perf_counter
+say "nest count    " + string((t1 - t0) * 1000000000.0 / float(N * rows)) + " ns/op"
+
+#! ---- inner while loop ----
+#! `j` is reset by the outer body rather than declared inside it: a `var` in a loop
+#! body is one of the statements the compiler refuses, and that would put the whole
+#! nest back on the tree-walker.
+var j int = 0
+var outer int = 0
+var t2 float = time_perf_counter
+repeat rows
+    j is 0
+    repeat while j < N
+        outer is outer + 1
+        j is j + 1
+var t3 float = time_perf_counter
+say "nest while    " + string((t3 - t2) * 1000000000.0 / float(N * rows)) + " ns/op"
+
+#! ---- both levels' Reps ----
+var pairsum int = 0
+var outerreps int = 0
+var t4 float = time_perf_counter
+repeat rows
+    repeat N
+        pairsum is pairsum + Reps
+    outerreps is outerreps + Reps
+var t5 float = time_perf_counter
+say "nest reps     " + string((t5 - t4) * 1000000000.0 / float(N * rows)) + " ns/op"
+
+#! ---- inner for over a list ----
+var xs dynamic = []
+var i int = 0
+repeat 1000
+    xs is append xs i
+    i is i + 1
+
+var listsum int = 0
+var t6 float = time_perf_counter
+repeat rows
+    repeat v in xs
+        listsum is listsum + v
+var t7 float = time_perf_counter
+say "nest for in   " + string((t7 - t6) * 1000000000.0 / float(1000 * rows)) + " ns/op"
+
+say "checks " + string(inner) + " " + string(outer) + " " + string(pairsum) + " " + string(outerreps) + " " + string(listsum)
