@@ -399,6 +399,22 @@ where
 /// How many finished tasks to keep around for `task_result`.
 const TASK_HISTORY_MAX: usize = 256;
 
+/// Live entries allowed in `WS_CLIENTS`.
+///
+/// The table is process-wide and used to be unbounded, so a client that kept
+/// reconnecting left every dead socket and its buffers behind. A program that
+/// genuinely needs more than this many *simultaneous* sockets is beyond what the
+/// builtins are meant for; see `ws_close` for the explicit release path.
+const WS_CLIENTS_MAX: usize = 256;
+
+/// Distinct modules kept in `module_cache`.
+///
+/// The cache is keyed by canonical path and nothing ever evicted from it, so a
+/// program that imports from disk repeatedly — a plugin loader, a test runner
+/// walking a directory — kept one fully loaded module per distinct path for the
+/// life of the process. See the insert in `load_module` for how it is bounded.
+const MODULE_CACHE_MAX: usize = 500;
+
 /// Record a task, evicting the oldest *completed* entries once the history gets
 /// long.
 ///
@@ -6803,11 +6819,18 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
     }
     let module = Arc::new(ModuleInstance { entries });
 
-    ctx.rt
-        .module_cache
-        .lock()
-        .unwrap()
-        .insert(canonical, module.clone());
+    {
+        let mut cache = ctx.rt.module_cache.lock().unwrap();
+        // Drop the whole cache on overflow rather than trimming it: a `HashMap`
+        // has no notion of "oldest", and a cleared cache costs a reload, never
+        // correctness. A program that reaches 500 distinct modules is either
+        // generating them or running a long-lived plugin host, and in both cases
+        // a bounded cache that occasionally reloads beats unbounded growth.
+        if cache.len() >= MODULE_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(canonical, module.clone());
+    }
     Ok(module)
 }
 
@@ -14140,6 +14163,16 @@ fn ws_connect_builtin(url: &str) -> Result<Value, String> {
         .map_err(|_| "ws_connect failed: socket registry lock poisoned".to_string())?;
     // Ids increase monotonically, so the lowest id is the oldest connection.
     if sockets.len() >= WS_CLIENT_MAX {
+        if let Some(oldest) = sockets.keys().min().copied() {
+            sockets.remove(&oldest);
+        }
+    }
+    // Bound the socket table. Nothing but an explicit `ws_close` ever removed an
+    // entry, so a client that errors out and reconnects — the ordinary shape of a
+    // bot on a flaky network — accumulated dead sockets and their buffers for the
+    // life of the process. Socket ids increase monotonically, so the smallest key
+    // is the oldest connection; dropping the entry drops the socket with it.
+    if sockets.len() >= WS_CLIENTS_MAX && !sockets.contains_key(&socket_id) {
         if let Some(oldest) = sockets.keys().min().copied() {
             sockets.remove(&oldest);
         }
