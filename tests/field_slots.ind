@@ -1,0 +1,85 @@
+#! field_slots.ind — the field *order* of an instance, and what the slots hold.
+#!
+#! An instance used to keep its fields in a hash map keyed by name, so anything
+#! that had to print them sorted the names first — a hash map has no order to
+#! rely on. Fields are now slots in the order the class declares them, which is
+#! also the order a positional argument fills them, so printing follows the
+#! declaration. Every class below declares its fields in a deliberately
+#! non-alphabetical order, so these assertions fail if the sorted order comes
+#! back.
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check_eq got expected label
+    var ok = got == expected
+    if not ok
+        var msg = label + ": expected '" + expected + "' got '" + got + "'"
+        fail msg
+    say "  ok: " + label
+
+#! ---- 1. a dataclass prints its fields in declaration order ----
+dataclass Zeta
+    var zulu int
+    var alpha int
+    var mike int
+
+var z = Zeta(1, 2, 3)
+check_eq (string(z)) "Zeta(zulu: 1, alpha: 2, mike: 3)" "a dataclass prints in declaration order"
+
+#! ---- 2. `say` uses the same order ----
+var shown = string(z)
+check_eq shown "Zeta(zulu: 1, alpha: 2, mike: 3)" "string() and say agree"
+
+#! ---- 3. positional arguments land in that same order ----
+check_eq (string(z.zulu)) "1" "the first argument fills the first declared field"
+check_eq (string(z.alpha)) "2" "the second fills the second"
+check_eq (string(z.mike)) "3" "the third fills the third"
+
+#! ---- 4. inheritance: parent fields come first ----
+class Base
+    var zz int
+    var aa int
+
+class Child from Base
+    var mm int
+
+var c = Child(10, 20, 30)
+check_eq (string(c.zz)) "10" "the parent's first field takes the first argument"
+check_eq (string(c.aa)) "20" "the parent's second field takes the second"
+check_eq (string(c.mm)) "30" "the child's field takes the third"
+
+#! ---- 5. a field with a default, and one left empty ----
+class Sparse
+    var second int
+    var first int
+
+var s = Sparse(7)
+check_eq (string(s.second)) "7" "a declared field takes its argument"
+check_eq (string(s.first)) "empty" "a field with no argument stays empty"
+
+#! ---- 6. slots keep their values as the instance is copied about ----
+var noisy dynamic = []
+var item dynamic = empty
+var i int = 0
+repeat 20
+    item is Zeta(i, i + 1, i + 2)
+    noisy is append noisy item
+    i is i + 1
+var last dynamic = noisy[19]
+check_eq (string(last)) "Zeta(zulu: 19, alpha: 20, mike: 21)" "a list of instances keeps every slot"
+check_eq (string(noisy[0])) "Zeta(zulu: 0, alpha: 1, mike: 2)" "and the first one keeps its own"
+
+#! ---- 7. equality compares the slots ----
+var same = Zeta(1, 2, 3) == Zeta(1, 2, 3)
+var diff = Zeta(1, 2, 3) == Zeta(1, 2, 4)
+check_eq (string(same)) "TRUE" "equal field values are equal"
+check_eq (string(diff)) "FALSE" "a different last field is not"
+
+#! ---- 8. a write lands in the slot the reader reads ----
+var w = Zeta(1, 2, 3)
+w.mike is 99
+check_eq (string(w)) "Zeta(zulu: 1, alpha: 2, mike: 99)" "a written field is the one printed"
+
+say "field_slots: all checks passed"

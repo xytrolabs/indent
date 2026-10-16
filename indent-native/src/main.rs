@@ -430,6 +430,30 @@ struct ClassDef {
     is_dataclass: bool,
 }
 
+/// Everything every instance of a class shares, built once per class definition:
+/// the name, the merged field list in slot order, the name-to-slot index, and
+/// the merged method table.
+///
+/// An instance used to carry a `String` for the class name, a `HashMap` of its
+/// own for the fields — which stored every field *name* again, once per instance
+/// — and an `Arc` to a method table. For a five-field, ten-method class that is
+/// roughly 850 bytes of bookkeeping per object, nearly all of it duplicate. Now
+/// an instance is a pointer to this and an array of values, about 150 bytes, and
+/// a field read is an index rather than a hash lookup.
+///
+/// `field_index` is what makes the slot layout usable: the class statement
+/// declares the fields, and a write to a name it does not declare is refused, so
+/// there is no overflow bucket to fall back to.
+#[derive(Debug)]
+struct ClassMeta {
+    name: String,
+    /// Merged, parent fields first: this *is* the slot order.
+    field_names: Vec<String>,
+    field_index: Map<String, u32>,
+    methods: HashMap<String, Arc<FunctionDef>>,
+    is_dataclass: bool,
+}
+
 /// A function body is immutable once parsed, so it is shared behind an `Arc`.
 /// This matters enormously: `resolve_callable` clones the resolved callable on
 /// **every call**, and a by-value `FunctionDef` would deep-copy the parameters
@@ -460,21 +484,18 @@ enum Value {
     List(Vec<Value>),
     Set(Vec<Value>),  // ordered set — unique values, insertion order
     Dict(HashMap<String, Value>),
-    /// Class instance. The two maps are `Box`ed purely to keep `Value` small:
-    /// an inline `HashMap` is 48 bytes each, which made `Value` 128 bytes and
-    /// charged every variable read, argument pass and list element a 128-byte
-    /// move. Boxing them takes `Value` to 56 bytes.
+    /// Class instance. The two parts are a pointer to the class's shared
+    /// metadata and a slot-indexed array of the values.
     ///
-    /// `methods` is an `Arc` because the merged parent+own method table belongs
-    /// to the *class*, not the instance: every object of a class used to build
-    /// its own copy of that map (a fresh `HashMap`, one `String` key and one
-    /// `Arc<FunctionDef>` clone per method, per object). It is now built once per
-    /// class definition and shared by refcount.
+    /// The fields used to be a `Box<HashMap<String, Value>>` keyed by name, which
+    /// meant every instance held its own hash table *and* its own copy of every
+    /// field name. Slots come from the class, so the instance holds values only:
+    /// a field read is `class.field_index[name]` and then an index, and a
+    /// five-field instance is five values instead of a table of five entries.
+    /// The `Box` keeps `Value` small; an inline slice would make it 32 bytes.
     Object {
-        class_name: String,
-        fields: Box<Map<String, Value>>,
-        methods: Arc<HashMap<String, Arc<FunctionDef>>>,
-        is_dataclass: bool,
+        class: Arc<ClassMeta>,
+        fields: Box<[Value]>,
     },
     Func(String),
     Module(Arc<ModuleInstance>),
@@ -780,18 +801,16 @@ impl fmt::Display for Value {
                     .join(", ");
                 write!(f, "{{{joined}}}")
             }
-            Value::Object { class_name, fields, .. } => {
-                let mut keys: Vec<&String> = fields.keys().collect();
-                keys.sort();
-                let joined = keys
+            Value::Object { class, fields } => {
+                // Declaration order, which is the slot order too.
+                let joined = class
+                    .field_names
                     .iter()
-                    .map(|k| {
-                        let v = fields.get(*k).map_or(&Value::Empty, |v| v);
-                        format!("{}: {}", k, v)
-                    })
+                    .zip(fields.iter())
+                    .map(|(name, value)| format!("{}: {}", name, value))
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "{}({})", class_name, joined)
+                write!(f, "{}({joined})", class.name)
             }
             Value::Func(name) => write!(f, "{name}"),
             Value::Module(_) => write!(f, "<module>"),
@@ -846,49 +865,36 @@ impl Value {
 // Instantiate a class: create an Object with fields initialized from positional args.
 // If the class has a parent, parent fields come first, then child fields.
 fn instantiate_class(class_def: &ClassDef, args: &[Value], rt: &mut Runtime) -> Value {
-    // Collect all fields: parent fields first, then child fields
-    let mut all_fields: Vec<ClassField> = Vec::new();
-    if let Some(ref parent_name) = class_def.parent {
-        if let Some(parent_def) = rt.classes.get(parent_name) {
-            // Recursively collect parent fields (grandparent, etc.)
-            let parent_fields = collect_all_fields(parent_def, &rt.classes);
-            all_fields.extend(parent_fields);
+    let class = rt.class_meta(class_def);
+    // One slot per merged field, parent fields first, so a positional argument is
+    // simply its index — the merged list is what `class_meta` computed.
+    let mut fields: Vec<Value> = vec![Value::Empty; class.field_names.len()];
+    for (slot, value) in args.iter().enumerate() {
+        if slot < fields.len() {
+            fields[slot] = value.clone();
         }
     }
-    all_fields.extend(class_def.fields.clone());
-
-    let mut fields = Map::default();
-    for (i, field) in all_fields.iter().enumerate() {
-        let value = if i < args.len() {
-            args[i].clone()
-        } else {
-            Value::Empty
-        };
-        fields.insert(field.name.clone(), value);
-    }
-
-    // Shared merged method table (built once per class, see `class_methods`)
-    // rather than a fresh parent+own merge for every instance.
-    let methods = rt.class_methods(class_def);
-
     Value::Object {
-        class_name: class_def.name.clone(),
-        fields: Box::new(fields),
-        methods,
-        is_dataclass: class_def.is_dataclass,
+        class,
+        fields: fields.into_boxed_slice(),
     }
 }
 
-/// Recursively collect all fields from a class and its ancestors (parent first)
-fn collect_all_fields(class_def: &ClassDef, classes: &Map<String, ClassDef>) -> Vec<ClassField> {
-    let mut fields = Vec::new();
+/// Recursively collect all field *names* from a class and its ancestors (parent
+/// first). The names are the slot layout of every instance of the class.
+fn collect_field_names(class_def: &ClassDef, classes: &Map<String, ClassDef>) -> Vec<String> {
+    let mut names = Vec::new();
     if let Some(ref parent_name) = class_def.parent {
         if let Some(parent_def) = classes.get(parent_name) {
-            fields.extend(collect_all_fields(parent_def, classes));
+            names = collect_field_names(parent_def, classes);
         }
     }
-    fields.extend(class_def.fields.clone());
-    fields
+    for field in &class_def.fields {
+        if !names.iter().any(|n| n == &field.name) {
+            names.push(field.name.clone());
+        }
+    }
+    names
 }
 
 /// Recursively collect all methods from a class and its ancestors (parent first, child overrides)
@@ -1019,8 +1025,9 @@ fn resolve_context_value(name: &str, ctx: &ExecContext<'_>) -> Option<Value> {
             Value::Dict(ref map) => {
                 cur = map.get(*p)?.clone();
             }
-            Value::Object { ref fields, .. } => {
-                cur = fields.get(*p)?.clone();
+            Value::Object { ref class, ref fields } => {
+                let slot = *class.field_index.get(*p)? as usize;
+                cur = fields[slot].clone();
             }
             Value::Module(ref m) => {
                 cur = m.vars.get(*p)?.clone();
@@ -1167,12 +1174,13 @@ struct Runtime {
     /// reused. Shared across module runtimes (like `module_cache`), so a
     /// std-library expression is parsed once per process.
     expr_cache: Arc<RwLock<Map<String, Arc<Expr>>>>,
-    /// Merged method table per class name, shared by every instance of that
-    /// class (see `Runtime::class_methods`). Each entry records the class
-    /// generation it was built for, so a later `class` statement invalidates it.
-    method_tables: HashMap<String, (u64, Arc<HashMap<String, Arc<FunctionDef>>>)>,
-    /// Bumped by every `class` statement. `method_tables` entries are only valid
-    /// while this matches the value they were built with.
+    /// Merged metadata per class name — the field slots and the method table —
+    /// shared by every instance of that class (see `Runtime::class_meta`). Each
+    /// entry records the class generation it was built for, so a later `class`
+    /// statement invalidates it.
+    class_meta_cache: HashMap<String, (u64, Arc<ClassMeta>)>,
+    /// Bumped by every `class` statement. `class_meta_cache` entries are only
+    /// valid while this matches the value they were built with.
     class_gen: u64,
     /// Direct-mapped cache of recently evaluated expressions.
     ///
@@ -1223,7 +1231,7 @@ impl Runtime {
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
             expr_cache: Arc::new(RwLock::new(Map::default())),
-            method_tables: HashMap::new(),
+            class_meta_cache: HashMap::new(),
             class_gen: 0,
             expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
@@ -1250,7 +1258,7 @@ impl Runtime {
         temp.modules = std::mem::take(&mut self.modules);
         // The class-method table cache goes along with the classes it describes,
         // so a method body that instantiates objects does not rebuild them.
-        temp.method_tables = std::mem::take(&mut self.method_tables);
+        temp.class_meta_cache = std::mem::take(&mut self.class_meta_cache);
         temp.class_gen = self.class_gen;
         // The expression memo is text-keyed and frame-independent, so the method
         // body shares the caller's — its expressions then hit on the second call
@@ -1267,7 +1275,7 @@ impl Runtime {
         self.funcs = temp.funcs;
         self.callables = temp.callables;
         self.modules = temp.modules;
-        self.method_tables = temp.method_tables;
+        self.class_meta_cache = temp.class_meta_cache;
         // A method body may define a class, which invalidates tables built before
         // it; taking the newer generation is the safe direction (a stale entry
         // just gets rebuilt, where a too-new one would be trusted).
@@ -1275,20 +1283,44 @@ impl Runtime {
         self.expr_memo = temp.expr_memo;
     }
 
-    /// Merged method table for a class: its own methods plus every ancestor's,
-    /// child overriding parent. Shared by every instance of the class.
+    /// Merged metadata for a class: its own fields and methods plus every
+    /// ancestor's, compiled into slot order, child overriding parent. Shared by
+    /// every instance of the class.
     ///
-    /// `instantiate_class` used to rebuild this map for every single instance — a
-    /// fresh `HashMap`, one `String` key per method and one `Arc` clone per method,
-    /// per object. `class_gen` is bumped by every `class` statement, so redefining
-    /// a class (or a parent, which children pick up through `collect_all_methods`)
-    /// invalidates the cached table exactly as rebuilding per instance did.
-    fn class_methods(&mut self, class_def: &ClassDef) -> Arc<HashMap<String, Arc<FunctionDef>>> {
-        if let Some((generation, table)) = self.method_tables.get(&class_def.name) {
+    /// This used to be rebuilt per *instance*, which meant a fresh `HashMap`, one
+    /// `String` key per field and per method, and one `Arc` clone per method, for
+    /// every object constructed. `class_gen` is bumped by every `class`
+    /// statement, so redefining a class (or a parent, which children pick up
+    /// through the merge) invalidates the cached entry exactly as rebuilding
+    /// per instance did.
+    fn class_meta(&mut self, class_def: &ClassDef) -> Arc<ClassMeta> {
+        if let Some((generation, meta)) = self.class_meta_cache.get(&class_def.name) {
             if *generation == self.class_gen {
-                return Arc::clone(table);
+                return Arc::clone(meta);
             }
         }
+
+        // Parent fields first, so a positional argument is its slot index.
+        let mut field_names: Vec<String> = Vec::new();
+        if let Some(ref parent_name) = class_def.parent {
+            if let Some(parent_def) = self.classes.get(parent_name) {
+                field_names = collect_field_names(parent_def, &self.classes);
+            }
+        }
+        for field in &class_def.fields {
+            // A child redeclaring a parent's field keeps the parent's slot: the
+            // old code wrote both names into one map and let the later write win,
+            // which shifted no positional argument either.
+            if !field_names.iter().any(|n| n == &field.name) {
+                field_names.push(field.name.clone());
+            }
+        }
+
+        let mut field_index = Map::default();
+        for (slot, name) in field_names.iter().enumerate() {
+            field_index.insert(name.clone(), slot as u32);
+        }
+
         let mut methods = HashMap::new();
         if let Some(ref parent_name) = class_def.parent {
             if let Some(parent_def) = self.classes.get(parent_name) {
@@ -1296,10 +1328,17 @@ impl Runtime {
             }
         }
         methods.extend(class_def.methods.clone());
-        let table = Arc::new(methods);
-        self.method_tables
-            .insert(class_def.name.clone(), (self.class_gen, Arc::clone(&table)));
-        table
+
+        let meta = Arc::new(ClassMeta {
+            name: class_def.name.clone(),
+            field_names,
+            field_index,
+            methods,
+            is_dataclass: class_def.is_dataclass,
+        });
+        self.class_meta_cache
+            .insert(class_def.name.clone(), (self.class_gen, Arc::clone(&meta)));
+        meta
     }
 
     fn new(module_dir: PathBuf) -> Self {
@@ -1313,7 +1352,7 @@ impl Runtime {
             module_cache: Arc::new(Mutex::new(HashMap::new())),
             module_loading: Arc::new(Mutex::new(HashSet::new())),
             expr_cache: Arc::new(RwLock::new(Map::default())),
-            method_tables: HashMap::new(),
+            class_meta_cache: HashMap::new(),
             class_gen: 0,
             expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
@@ -1332,7 +1371,7 @@ impl Runtime {
             module_cache: cache,
             module_loading: Arc::new(Mutex::new(HashSet::new())),
             expr_cache: Arc::new(RwLock::new(Map::default())),
-            method_tables: HashMap::new(),
+            class_meta_cache: HashMap::new(),
             class_gen: 0,
             expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
@@ -1358,7 +1397,7 @@ impl Runtime {
             module_cache: cache,
             module_loading: loading,
             expr_cache: exprs,
-            method_tables: HashMap::new(),
+            class_meta_cache: HashMap::new(),
             class_gen: 0,
             expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
             debugger: None,
@@ -2381,7 +2420,10 @@ fn try_inplace_member_append(
     // expression with side effects can never be evaluated twice.
     let holds_list = match ctx.get_var_ref(root) {
         Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::List(_))),
-        Some(Value::Object { fields, .. }) => matches!(fields.get(field), Some(Value::List(_))),
+        Some(Value::Object { class, fields }) => class
+            .field_index
+            .get(field)
+            .is_some_and(|slot| matches!(fields[*slot as usize], Value::List(_))),
         _ => false,
     };
     if !holds_list {
@@ -2416,40 +2458,24 @@ fn try_inplace_member_append(
             m.insert(field.to_string(), Value::List(list));
             Value::Dict(m)
         }
-        Value::Object {
-            class_name,
-            mut fields,
-            methods,
-            is_dataclass,
-        } => {
-            let mut list = match fields.remove(field) {
-                Some(Value::List(l)) => l,
-                Some(other) => {
-                    fields.insert(field.to_string(), other);
-                    ctx.set_var(
-                        root,
-                        Value::Object { class_name, fields, methods, is_dataclass },
-                    );
-                    return None;
-                }
+        Value::Object { class, mut fields } => {
+            // The slot is where the list already is, so this appends into the
+            // instance's own value: no remove-and-put-back, and nothing to
+            // restore when the item is rejected.
+            let slot = match class.field_index.get(field) {
+                Some(slot) => *slot as usize,
                 None => {
-                    ctx.set_var(
-                        root,
-                        Value::Object { class_name, fields, methods, is_dataclass },
-                    );
+                    ctx.set_var(root, Value::Object { class, fields });
                     return None;
                 }
             };
-            if let Err(e) = append_items_into(&mut list, item, callee) {
-                fields.insert(field.to_string(), Value::List(list));
-                ctx.set_var(
-                    root,
-                    Value::Object { class_name, fields, methods, is_dataclass },
-                );
-                return Some(Err(e));
+            if let Value::List(list) = &mut fields[slot] {
+                if let Err(e) = append_items_into(list, item, callee) {
+                    ctx.set_var(root, Value::Object { class, fields });
+                    return Some(Err(e));
+                }
             }
-            fields.insert(field.to_string(), Value::List(list));
-            Value::Object { class_name, fields, methods, is_dataclass }
+            Value::Object { class, fields }
         }
         other => {
             ctx.set_var(root, other);
@@ -2490,7 +2516,10 @@ fn try_inplace_member_concat(
     };
     let holds_list = match ctx.get_var_ref(root) {
         Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::List(_))),
-        Some(Value::Object { fields, .. }) => matches!(fields.get(field), Some(Value::List(_))),
+        Some(Value::Object { class, fields }) => class
+            .field_index
+            .get(field)
+            .is_some_and(|slot| matches!(fields[*slot as usize], Value::List(_))),
         _ => false,
     };
     if !holds_list {
@@ -2528,33 +2557,18 @@ fn try_inplace_member_concat(
             m.insert(field.to_string(), Value::List(list));
             Value::Dict(m)
         }
-        Value::Object {
-            class_name,
-            mut fields,
-            methods,
-            is_dataclass,
-        } => {
-            let mut list = match fields.remove(field) {
-                Some(Value::List(l)) => l,
-                Some(other) => {
-                    fields.insert(field.to_string(), other);
-                    ctx.set_var(
-                        root,
-                        Value::Object { class_name, fields, methods, is_dataclass },
-                    );
-                    return None;
-                }
+        Value::Object { class, mut fields } => {
+            let slot = match class.field_index.get(field) {
+                Some(slot) => *slot as usize,
                 None => {
-                    ctx.set_var(
-                        root,
-                        Value::Object { class_name, fields, methods, is_dataclass },
-                    );
+                    ctx.set_var(root, Value::Object { class, fields });
                     return None;
                 }
             };
-            list.extend(extra);
-            fields.insert(field.to_string(), Value::List(list));
-            Value::Object { class_name, fields, methods, is_dataclass }
+            if let Value::List(list) = &mut fields[slot] {
+                list.extend(extra);
+            }
+            Value::Object { class, fields }
         }
         other => {
             ctx.set_var(root, other);
@@ -5395,10 +5409,11 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
 
 fn invoke_object_method(
     method_def: &FunctionDef,
-    fields: &Map<String, Value>,
+    class: &ClassMeta,
+    fields: &[Value],
     args: &[Value],
     ctx: &mut ExecContext<'_>,
-) -> Result<(Value, Map<String, Value>), String> {
+) -> Result<(Value, Box<[Value]>), String> {
     // A method body runs in its own runtime so that it sees its fields as
     // globals and does *not* see the caller's locals.
     //
@@ -5408,7 +5423,10 @@ fn invoke_object_method(
     // call. Both are now O(1): the tables are lent and reclaimed, and the caches
     // are shared.
     let mut temp_rt = Runtime::bare(PathBuf::from("."));
-    temp_rt.vars = fields.clone();
+    temp_rt.vars = Map::default();
+    for (slot, name) in class.field_names.iter().enumerate() {
+        temp_rt.vars.insert(name.clone(), fields[slot].clone());
+    }
     ctx.rt.lend_tables_to(&mut temp_rt);
 
     let out = {
@@ -5431,13 +5449,15 @@ fn invoke_object_method(
 
     // The body reads and writes its fields as globals of that runtime, so the
     // fields as they stand afterwards are what the caller has to put back on the
-    // instance. The map is filtered *in place* rather than rebuilt into a new
-    // one: a name the method invented is dropped — a write to something the
-    // class does not declare stays what it was inside the method, which is the
-    // same rule a write from outside follows — and the rest is then moved out.
-    // Rebuilding would allocate a map and clone every field on every call.
-    temp_rt.vars.retain(|name, _| fields.contains_key(name));
-    let after = std::mem::take(&mut temp_rt.vars);
+    // instance. They are read back in slot order by *moving* them out of the
+    // runtime, which is about to be dropped anyway — no clone per field and no
+    // map built per call. A name the method invented is not a field and is left
+    // behind, which is the rule a write from outside follows too.
+    let after: Box<[Value]> = class
+        .field_names
+        .iter()
+        .map(|name| temp_rt.vars.remove(name).unwrap_or(Value::Empty))
+        .collect();
 
     ctx.rt.reclaim_tables_from(temp_rt);
     out.map(|value| (value, after))
@@ -5453,56 +5473,56 @@ fn call_object_method_value(
     args: &[Value],
     ctx: &mut ExecContext<'_>,
 ) -> Option<Result<Value, String>> {
-    if let Value::Object {
-        fields,
-        methods,
-        class_name,
-        is_dataclass,
-    } = receiver
-    {
-        for (name, mdef) in methods.iter() {
+    if let Value::Object { class, fields } = receiver {
+        for (name, mdef) in class.methods.iter() {
             // `eq_ignore_ascii_case` compares exactly like folded copies would
             // (ASCII-only folding, non-ASCII bytes compared verbatim) but
             // allocates nothing.  This loop used to allocate twice per declared
             // method -- once for the callee, once per candidate -- on every
             // special-method lookup (`+`, `==`, `string()`, `len`, ...).
             if name.eq_ignore_ascii_case(method) {
-                return Some(invoke_object_method(mdef, fields, args, ctx).map(|(value, _)| value));
+                return Some(
+                    invoke_object_method(mdef, class, fields, args, ctx).map(|(value, _)| value),
+                );
             }
         }
         // dataclass auto-generated defaults (when no user method is defined).
-        if *is_dataclass {
+        if class.is_dataclass {
             if method.eq_ignore_ascii_case("to_string") {
-                let mut names: Vec<&String> = fields.keys().collect();
-                names.sort();
-                let parts: Vec<String> = names
+                // Declaration order, which is slot order: the fields print the
+                // way they were written, and the way a positional argument
+                // fills them. This used to sort the names, because a hash map
+                // has no order to rely on.
+                let parts: Vec<String> = class
+                    .field_names
                     .iter()
-                    .map(|k| format!("{}: {}", k, fields.get(*k).unwrap()))
+                    .zip(fields.iter())
+                    .map(|(name, value)| format!("{}: {}", name, value))
                     .collect();
-                return Some(Ok(Value::Str(format!("{}({})", class_name, parts.join(", ")))));
+                return Some(Ok(Value::Str(format!(
+                    "{}({})",
+                    class.name,
+                    parts.join(", ")
+                ))));
             }
             if method.eq_ignore_ascii_case("equals") {
                 if let Some(other) = args.first() {
                     if let Value::Object {
-                        class_name: cn2,
+                        class: class2,
                         fields: f2,
-                        ..
                     } = other
                     {
-                        if cn2 != class_name || fields.len() != f2.len() {
+                        // Two instances of the same class have the same slots,
+                        // so the fields compare position for position.
+                        if class2.name != class.name || fields.len() != f2.len() {
                             return Some(Ok(Value::Bool(false)));
                         }
-                        let mut eq = true;
-                        for (k, v) in fields.iter() {
-                            match f2.get(k) {
-                                Some(v2) if eq_values(v, v2) => {}
-                                _ => {
-                                    eq = false;
-                                    break;
-                                }
-                            }
-                        }
-                        return Some(Ok(Value::Bool(eq)));
+                        return Some(Ok(Value::Bool(
+                            fields
+                                .iter()
+                                .zip(f2.iter())
+                                .all(|(a, b)| eq_values(a, b)),
+                        )));
                     }
                     return Some(Ok(Value::Bool(false)));
                 }
@@ -5586,11 +5606,11 @@ fn invoke_method_on_place(
 
     // Look the method up on the instance as it stands, before taking it apart.
     let method_def = {
-        let Value::Object { methods, .. } = ctx.get_var_ref(receiver_name)? else {
+        let Value::Object { class, .. } = ctx.get_var_ref(receiver_name)? else {
             return None;
         };
         let mut found = None;
-        for (name, def) in methods.iter() {
+        for (name, def) in class.methods.iter() {
             if name.eq_ignore_ascii_case(method_lc) {
                 found = Some(Arc::clone(def));
                 break;
@@ -5599,30 +5619,16 @@ fn invoke_method_on_place(
         found?
     };
 
-    let Some(Value::Object {
-        class_name,
-        fields,
-        methods,
-        is_dataclass,
-    }) = ctx.take_var(receiver_name)
-    else {
+    let Some(Value::Object { class, fields }) = ctx.take_var(receiver_name) else {
         return None;
     };
 
-    let (out, after) = match invoke_object_method(&method_def, &fields, args, ctx) {
+    let (out, after) = match invoke_object_method(&method_def, &class, &fields, args, ctx) {
         Ok(pair) => pair,
         // The body failed: the instance goes back as it was, because a method
         // that raised cannot be said to have assigned anything.
         Err(e) => {
-            ctx.set_var(
-                receiver_name,
-                Value::Object {
-                    class_name,
-                    fields,
-                    methods,
-                    is_dataclass,
-                },
-            );
+            ctx.set_var(receiver_name, Value::Object { class, fields });
             return Some(Err(e));
         }
     };
@@ -5630,10 +5636,8 @@ fn invoke_method_on_place(
     ctx.set_var(
         receiver_name,
         Value::Object {
-            class_name,
-            fields: Box::new(after),
-            methods,
-            is_dataclass,
+            class,
+            fields: after,
         },
     );
     Some(Ok(out))
@@ -5658,16 +5662,22 @@ fn invoke_method_on_value(
 
     // 1. Handle Object method dispatch (classes)
     if let Value::Object {
+        ref class,
         ref fields,
-        ref methods,
-        ref class_name,
-        ..
     } = target_val
     {
-        if let Some(method_def) = methods.get(method_lc) {
-            return invoke_object_method(method_def, fields, args, ctx).map(|(value, _)| value);
+        if let Some(method_def) = class.methods.get(method_lc) {
+            return invoke_object_method(method_def, class, fields, args, ctx).map(|(value, _)| value);
         }
-        if let Some(Value::Func(fn_name)) = fields.get(method) {
+        // A function-valued field behaves as a method of the instance.
+        let from_field = class
+            .field_index
+            .get(method)
+            .and_then(|slot| match &fields[*slot as usize] {
+                Value::Func(name) => Some(name.clone()),
+                _ => None,
+            });
+        if let Some(fn_name) = from_field {
             let exprs: Vec<Expr> = args.iter().map(|v| match v {
                 Value::Int(i) => Expr::Int(*i),
                 Value::Float(f) => Expr::Float(*f),
@@ -5677,14 +5687,17 @@ fn invoke_method_on_value(
                 _ => Expr::Str(v.to_string()),
             }).collect();
             let mut temp_rt = Runtime::bare(PathBuf::from("."));
-            temp_rt.vars = (**fields).clone();
+            for (slot, name) in class.field_names.iter().enumerate() {
+                temp_rt.vars.insert(name.clone(), fields[slot].clone());
+            }
             ctx.rt.lend_tables_to(&mut temp_rt);
-            let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
+            let out = invoke_callable_expr(&fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
             ctx.rt.reclaim_tables_from(temp_rt);
             return out;
         }
         return Err(format!(
-            "Object of class '{class_name}' has no method '{method}'"
+            "Object of class '{}' has no method '{method}'",
+            class.name
         ));
     }
 
@@ -5761,9 +5774,9 @@ fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<
                 Err(format!("Dictionary has no key '{field}'"))
             }
         }
-        Value::Object { ref fields, .. } => {
-            if let Some(v) = fields.get(field) {
-                Ok(v.clone())
+        Value::Object { class, fields } => {
+            if let Some(slot) = class.field_index.get(field) {
+                Ok(fields[*slot as usize].clone())
             } else {
                 Err(format!("Object has no field '{field}'"))
             }
@@ -12449,11 +12462,13 @@ fn value_to_json(value: &Value) -> JsonValue {
         }
         Value::Func(name) => JsonValue::String(name.clone()),
         Value::Module(_) | Value::Empty => JsonValue::Null,
-        Value::Object { fields, class_name, .. } => {
+        Value::Object { class, fields } => {
             let mut out = JsonMap::new();
-            out.insert("__class__".to_string(), JsonValue::from(class_name.clone()));
-            for (k, v) in fields.iter() {
-                out.insert(k.clone(), value_to_json(v));
+            out.insert("__class__".to_string(), JsonValue::from(class.name.clone()));
+            // Declaration order, which is slot order: the keys come out in a
+            // fixed order rather than whatever a hash map happened to have.
+            for (name, value) in class.field_names.iter().zip(fields.iter()) {
+                out.insert(name.clone(), value_to_json(value));
             }
             JsonValue::Object(out)
         },
@@ -13754,9 +13769,9 @@ fn resolve_var_chain(parts: &[String], ctx: &mut ExecContext<'_>) -> Result<Valu
                     return Err(format!("Dictionary has no key '{p}'"));
                 }
             }
-            Value::Object { ref fields, .. } => {
-                if let Some(v) = fields.get(p) {
-                    cur = v.clone();
+            Value::Object { ref class, ref fields } => {
+                if let Some(slot) = class.field_index.get(p) {
+                    cur = fields[*slot as usize].clone();
                 } else {
                     return Err(format!("Object has no field '{p}'"));
                 }
@@ -13799,26 +13814,18 @@ fn assign_var_chain(name: &str, value: Value, ctx: &mut ExecContext<'_>) -> Resu
         // silent drop. Before this arm existed the write went nowhere at all:
         // `p.x is 9` left `p.x` at its old value and only the read afterwards
         // complained, which made a declared field look read-only.
-        Some(Value::Object {
-            class_name,
-            mut fields,
-            methods,
-            is_dataclass,
-        }) => {
-            if !fields.contains_key(field) {
-                return Err(format!("Object of class '{class_name}' has no field '{field}'"));
+        Some(Value::Object { class, mut fields }) => {
+            match class.field_index.get(field) {
+                Some(slot) => {
+                    fields[*slot as usize] = value;
+                    ctx.set_var(root_name, Value::Object { class, fields });
+                    Ok(())
+                }
+                None => Err(format!(
+                    "Object of class '{}' has no field '{field}'",
+                    class.name
+                )),
             }
-            fields.insert(field.to_string(), value);
-            ctx.set_var(
-                root_name,
-                Value::Object {
-                    class_name,
-                    fields,
-                    methods,
-                    is_dataclass,
-                },
-            );
-            Ok(())
         }
         // Anything else keeps the old behaviour of leaving the chain alone.
         _ => Ok(()),
@@ -14483,9 +14490,9 @@ fn is_identity_equal(a: &Value, b: &Value) -> bool {
         (Value::Func(x), Value::Func(y)) => x == y,
         (Value::Module(x), Value::Module(y)) => Arc::ptr_eq(x, y),
         (Value::Empty, Value::Empty) => true,
-        (Value::Object { class_name: cn1, .. }, Value::Object { class_name: cn2, .. }) => {
+        (Value::Object { class: c1, .. }, Value::Object { class: c2, .. }) => {
             // Object identity: same class AND same field values
-            cn1 == cn2 && eq_values(a, b)
+            c1.name == c2.name && eq_values(a, b)
         }
         (Value::List(_), Value::List(_)) | (Value::Dict(_), Value::Dict(_)) => {
             // Collections: identity means same reference (pointer equality), but since
