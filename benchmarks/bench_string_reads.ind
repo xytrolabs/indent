@@ -1,0 +1,81 @@
+#! bench_string_reads.ind — what reading a string costs.
+#!
+#! `get_var` returns `v.clone()`, so a string variable is copied in full on every
+#! read, every time it is passed to a function, and every time it is used as an
+#! operand. `s is s + x` has an in-place fast path, but *reading* does not, and a
+#! big string read in a loop spends the whole loop in memcpy.
+#!
+#! Section 1 reads one long string many times; section 2 hands it to a function;
+#! section 3 reads one short string (the case where a refcount bump is *not*
+#! obviously cheaper than copying a handful of bytes, and the reason this has to
+#! be measured rather than assumed); section 4 compares a string, which is a read
+#! that also has to look at the bytes.
+#!
+#! Read this together with the process's peak RSS
+#! (`sh benchmarks/rss.sh benchmarks/bench_string_reads.ind`), because the claim
+#! is about bytes copied and bytes resident, not about dispatch cost.
+#!
+#! Run:  indent benchmarks/bench_string_reads.ind
+
+var unit string = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,.;:!"
+var long string = ""
+repeat 3000
+    long is long + unit
+say "long string: " + string(len(long)) + " chars"
+
+#! ---- 1. read a long string ----
+repeat n in [500]
+    var t0 float = time_perf_counter
+    var seen int = 0
+    var s dynamic = ""
+    var j int = 0
+    repeat n
+        s is long
+        seen is seen + len(s)
+        j is j + 1
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    say "read long   " + string(n) + ": " + string(per) + " ns/op, len " + string(len(long))
+
+#! ---- 2. pass a long string to a function ----
+fun str_len s
+    give len(s)
+
+repeat n in [500]
+    var t0 float = time_perf_counter
+    var total int = 0
+    var m int = 0
+    repeat n
+        total is total + str_len(long)
+        m is m + 1
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    say "pass long   " + string(n) + ": " + string(per) + " ns/op, len " + string(len(long))
+
+#! ---- 3. read a short string ----
+var short string = "hello world"
+repeat n in [100000]
+    var t0 float = time_perf_counter
+    var acc int = 0
+    var q dynamic = ""
+    var p int = 0
+    repeat n
+        q is short
+        acc is acc + len(q)
+        p is p + 1
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    say "read short  " + string(n) + ": " + string(per) + " ns/op, acc " + string(acc)
+
+#! ---- 4. compare a string ----
+repeat n in [100000]
+    var t0 float = time_perf_counter
+    var hits int = 0
+    var r int = 0
+    repeat n
+        if short == "hello world"
+            hits is hits + 1
+        r is r + 1
+    var t1 float = time_perf_counter
+    var per float = (t1 - t0) * 1000000000.0 / float(n)
+    say "compare     " + string(n) + ": " + string(per) + " ns/op, hits " + string(hits)

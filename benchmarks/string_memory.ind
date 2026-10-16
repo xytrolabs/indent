@@ -1,0 +1,33 @@
+#! string_memory.ind — how many copies of one string a program actually holds.
+#!
+#! A list of `N` copies of the same string today holds `N` separate buffers,
+#! because every `Value` handed out is an owned `String` and the list stores the
+#! value. This program builds 200 copies of a 200 KB string, stores them in a
+#! list, and touches each one so nothing can be optimised away.
+#!
+#! Read it with `sh benchmarks/rss.sh benchmarks/string_memory.ind`: today the
+#! peak RSS should carry ~40 MB of string bytes that are all the same 200 KB. If
+#! the buffer is shared, those bytes are resident once and the figure should fall
+#! by that much — which is the memory claim of the change, stated in bytes.
+#!
+#! Run:  sh benchmarks/rss.sh benchmarks/string_memory.ind
+
+var unit string = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,.;:!"
+var long string = ""
+repeat 3000
+    long is long + unit
+say "one buffer: " + string(len(long)) + " chars"
+
+var copies int = 200
+var held dynamic = []
+repeat copies
+    held is append held long
+
+var total int = 0
+repeat h in held
+    total is total + len(h)
+say "held " + string(len(held)) + " copies, " + string(total) + " chars, " + string(len(long) * copies) + " expected"
+
+#! Hold on to it so the measurement is of live memory, then report something
+#! derived from every element so the list cannot be dropped early.
+say "distinct first bytes: " + string(len(held[0]) + len(held[copies - 1]))

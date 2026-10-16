@@ -1,0 +1,115 @@
+#! string_sharing.ind — a string shares its bytes, so writing must be copy-on-write.
+#!
+#! `Value::Str` used to hold an owned `String`, so every read copied the buffer —
+#! 201 KB per read in `benchmarks/bench_string_reads.ind`, and five copies' worth
+#! to pass one long string to a function. It now holds a shared buffer, which is
+#! what makes reading a refcount bump and why 200 copies of one 200 KB string
+#! went from ~40 MB of resident memory to one buffer.
+#!
+#! The rule that a compiled program cannot check for us is the same one the
+#! container tests pin: two names for one string must not be able to see each
+#! other's writes. `Arc` refuses to hand out `&mut` while a second handle exists,
+#! so the *representation* cannot alias silently — but it cannot tell a
+#! legitimate copy-on-write from a write that was supposed to land in the
+#! original either. These assertions pin the observable behaviour, including the
+#! case where the copy-on-write has to happen inside a function, through a
+#! parameter, with the original still live in the caller.
+#!
+#! Every assertion is one both engines must agree on; whether the VM took the
+#! body is checked with `INDENT_VM_TRACE=1`.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. a long string is its own value ----
+var unit string = "0123456789abcdef"
+var long string = ""
+repeat 1000
+    long is long + unit
+var ok1 boolean = len(long) == 16000
+assert ok1 "a string built by repetition has the length it should"
+
+#! ---- 2. an alias sees the same bytes ----
+var alias dynamic = long
+var ok2a boolean = len(alias) == len(long)
+assert ok2a "an alias reads the same length"
+var ok2b boolean = alias == long
+assert ok2b "and compares equal to it"
+
+#! ---- 3. growing the alias does not grow the original ----
+alias is alias + "!"
+var ok3a boolean = len(long) == 16000
+assert ok3a "the original kept its length when the alias grew"
+var ok3b boolean = len(alias) == 16001
+assert ok3b "and the alias really grew"
+var ok3c boolean = long == long
+assert ok3c "the original is still itself"
+
+#! ---- 4. `+` does not write through either operand ----
+var left string = "left"
+var right string = "right"
+var joined dynamic = left + right
+var ok4a boolean = joined == "leftright"
+assert ok4a "concatenation produces the joined text"
+var ok4b boolean = left == "left"
+var ok4c boolean = right == "right"
+assert ok4b "the left operand is unchanged"
+assert ok4c "and so is the right"
+
+#! ---- 5. the write that copies happens through a parameter ----
+#! The caller still holds `long`, so the parameter's buffer is shared when the
+#! body appends to it. The caller must not see that write.
+fun shout s
+    s is s + "!!"
+    give len(s)
+
+var shouted int = shout(long)
+var ok5a boolean = shouted == 16002
+assert ok5a "the callee saw its own grown copy"
+var ok5b boolean = len(long) == 16000
+assert ok5b "and the caller's string was not written through"
+
+#! ---- 6. two strings built the same way are equal but independent ----
+var x1 string = "same" + "text"
+var x2 string = "same" + "text"
+var ok6a boolean = x1 == x2
+assert ok6a "separately built strings compare equal by value"
+x1 is x1 + "-one"
+var ok6b boolean = x2 == "sametext"
+assert ok6b "growing one leaves the other alone"
+
+#! ---- 7. a string that is only ever read keeps working ----
+var ok7a boolean = long[0] == "0"
+assert ok7a "indexing a shared string works"
+var head dynamic = long[0:8]
+var ok7b boolean = head == "01234567"
+assert ok7b "and slicing it works"
+var ok7c boolean = contains(long, "abcdef")
+assert ok7c "and membership works"
+
+#! ---- 8. the empty string and interpolation ----
+#! `empty` is the language's own keyword for the absent value, so this variable
+#! must not be called that — the name would not bind to the string at all.
+var blank string = ""
+var ok8a boolean = len(blank) == 0
+assert ok8a "the empty string is empty"
+var ok8b boolean = is_missing(blank)
+assert ok8b "and reads as missing"
+var ok8c boolean = "value is %long%" != ""
+assert ok8c "a shared string interpolates"
+say "  ok: interpolation produced " + string(len("value is %long%")) + " chars"
+
+#! ---- 9. a string held by two containers ----
+var bag dynamic = [long, long]
+var ok9a boolean = len(bag[0]) == len(bag[1])
+assert ok9a "the same string stored twice has the same length in both"
+bag is append bag (long + "?")
+var ok9b boolean = len(bag[2]) == 16001
+assert ok9b "appending a grown copy stored the copy"
+var ok9c boolean = len(bag[0]) == 16000
+assert ok9c "and left the shared element alone"
+
+say "string_sharing: all checks passed"

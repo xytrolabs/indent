@@ -813,12 +813,137 @@ impl IntoIterator for SharedList {
     }
 }
 
+/// A shared string.
+///
+/// `Value::Str` held an owned `String`, so *reading* a string variable copied its
+/// whole buffer: 201 KB per read, and 5.6 copies' worth to pass one string to a
+/// function (`benchmarks/bench_string_reads.ind`). It also meant the same bytes
+/// were resident once per holder — 200 copies of one 200 KB string cost ~40 MB of
+/// RSS (`benchmarks/string_memory.ind`), which is most of that process.
+///
+/// The payload is `Arc<String>` rather than `Arc<str>`, which costs one extra
+/// pointer hop per read and buys two things that matter more here. First,
+/// `Arc<str>` cannot be taken apart: `Arc::try_unwrap` needs `Sized`, `str` is not,
+/// and the standard library offers no `From<Arc<str>> for String` — so there is no
+/// way to get the buffer back out in O(1), and the in-place growth paths
+/// (`s is s + x`) would copy the whole accumulated prefix on every step, which is
+/// exactly the quadratic trap this codebase has removed three times already.
+/// `String` is `Sized`, so `try_unwrap` is free while the string is unshared.
+/// Second, it makes this type structurally identical to `SharedList` and
+/// `SharedDict`, so the same `Deref`/`DerefMut`-to-`make_mut` shape applies and a
+/// wrong usage is a compile error rather than a silent copy.
+#[derive(Clone)]
+struct SharedStr(Arc<String>);
+
+impl SharedStr {
+    /// Take the bytes out as an owned `String`, copying only if the buffer is
+    /// shared. This is what keeps the in-place string paths O(1) per step: after
+    /// the first growth the refcount is back to 1, so every later step unwraps
+    /// without touching the bytes.
+    fn into_string(self) -> String {
+        match Arc::try_unwrap(self.0) {
+            Ok(s) => s,
+            Err(arc) => (*arc).clone(),
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::ops::Deref for SharedStr {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+/// Writing through a shared string is copy-on-write, exactly as reading is: the
+/// first write after a second handle exists pays one copy, and repeated writes in
+/// a loop do not, because the writer is then the only owner again.
+impl std::ops::DerefMut for SharedStr {
+    fn deref_mut(&mut self) -> &mut String {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl AsRef<str> for SharedStr {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for SharedStr {
+    fn borrow(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<String> for SharedStr {
+    fn from(s: String) -> Self {
+        SharedStr(Arc::new(s))
+    }
+}
+
+impl From<&str> for SharedStr {
+    fn from(s: &str) -> Self {
+        SharedStr(Arc::new(s.to_string()))
+    }
+}
+
+impl fmt::Display for SharedStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+impl fmt::Debug for SharedStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl PartialEq for SharedStr {
+    fn eq(&self, other: &Self) -> bool {
+        // The bytes are the value; two handles on one buffer are equal either way,
+        // but `ptr_eq` is the cheap way to say so and is what makes comparing a
+        // variable with itself cost nothing.
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for SharedStr {}
+
+impl PartialEq<str> for SharedStr {
+    fn eq(&self, other: &str) -> bool {
+        self.0.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for SharedStr {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for SharedStr {
+    fn eq(&self, other: &String) -> bool {
+        self.0.as_str() == other.as_str()
+    }
+}
+
+/// Iterating a string's characters, for the sites that do.
+
 #[derive(Debug, Clone)]
 enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
-    Str(String),
+    /// The shared string. Written as `Value::Str(s)` everywhere, through the
+    /// constructor below: only *patterns* have to know the bytes are behind an
+    /// `Arc`, and that split is what let this change be mechanical.
+    StrShared(SharedStr),
     /// The shared list. Written as `Value::List(v)` everywhere, through the
     /// constructor below: only *patterns* have to know the elements are behind an
     /// `Arc`, and keeping the two apart is what let this change be mechanical.
@@ -873,6 +998,12 @@ impl Value {
     #[allow(non_snake_case)]
     fn Set(elements: Vec<Value>) -> Value {
         Value::SetShared(elements.into())
+    }
+
+    /// Build a string. Named `Str` for the same reason as `List` above.
+    #[allow(non_snake_case)]
+    fn Str(s: String) -> Value {
+        Value::StrShared(s.into())
     }
 }
 
@@ -1149,7 +1280,7 @@ impl fmt::Display for Value {
                 }
             }
             Value::Bool(v) => write!(f, "{}", if *v { "TRUE" } else { "FALSE" }),
-            Value::Str(v) => write!(f, "{v}"),
+            Value::StrShared(v) => write!(f, "{v}"),
             Value::ListShared(items) => {
                 let joined = items
                     .iter()
@@ -1203,7 +1334,7 @@ impl Value {
             Value::Bool(v) => *v,
             Value::Int(v) => *v != 0,
             Value::Float(v) => *v != 0.0,
-            Value::Str(v) => !v.is_empty(),
+            Value::StrShared(v) => !v.is_empty(),
             Value::ListShared(v) => !v.is_empty(),
             Value::SetShared(v) => !v.is_empty(),
             Value::DictShared(v) => !v.is_empty(),
@@ -1218,7 +1349,7 @@ impl Value {
         match self {
             Value::Int(v) => Some(*v as f64),
             Value::Float(v) => Some(*v),
-            Value::Str(s) => s.trim().parse::<f64>().ok(),
+            Value::StrShared(s) => s.trim().parse::<f64>().ok(),
             _ => None,
         }
     }
@@ -1228,7 +1359,7 @@ impl Value {
             Value::Int(_) => "int",
             Value::Float(_) => "float",
             Value::Bool(_) => "bool",
-            Value::Str(_) => "string",
+            Value::StrShared(_) => "string",
             Value::ListShared(_) => "list",
             Value::SetShared(_) => "group",
             Value::DictShared(_) => "dict",
@@ -1290,7 +1421,7 @@ fn collect_all_methods(class_def: &ClassDef, classes: &Map<String, ClassDef>) ->
 fn is_missing_value(value: &Value) -> bool {
     match value {
         Value::Empty => true,
-        Value::Str(v) => v.is_empty(),
+        Value::StrShared(v) => v.is_empty(),
         Value::ListShared(v) => v.is_empty(),
         Value::SetShared(v) => v.is_empty(),
         Value::DictShared(v) => v.is_empty(),
@@ -1528,7 +1659,7 @@ fn to_i64_value(value: &Value) -> Result<i64, String> {
         Value::Int(v) => Ok(*v),
         Value::Float(v) => Ok(*v as i64),
         Value::Bool(v) => Ok(if *v { 1 } else { 0 }),
-        Value::Str(s) => match s.trim().parse::<i64>() {
+        Value::StrShared(s) => match s.trim().parse::<i64>() {
             Ok(v) => Ok(v),
             Err(_) => Err(format!("Cannot convert string \"{}\" to int", s)),
         },
@@ -1541,7 +1672,7 @@ fn to_f64_value(value: &Value) -> Result<f64, String> {
         Value::Int(v) => Ok(*v as f64),
         Value::Float(v) => Ok(*v),
         Value::Bool(v) => Ok(if *v { 1.0 } else { 0.0 }),
-        Value::Str(s) => match s.trim().parse::<f64>() {
+        Value::StrShared(s) => match s.trim().parse::<f64>() {
             Ok(v) => Ok(v),
             Err(_) => Err(format!("Cannot convert string \"{}\" to float", s)),
         },
@@ -2651,7 +2782,7 @@ fn try_inplace_string_concat(
         _ => return None,
     };
 
-    if !matches!(ctx.get_var_ref(name), Some(Value::Str(_))) {
+    if !matches!(ctx.get_var_ref(name), Some(Value::StrShared(_))) {
         return None;
     }
 
@@ -2663,15 +2794,22 @@ fn try_inplace_string_concat(
     };
 
     match ctx.take_var(name) {
-        Some(Value::Str(mut s)) => {
+        Some(Value::StrShared(mut s)) => {
             use std::fmt::Write as _;
             // `write!` appends the `Display` form straight into the buffer, so
             // the output is byte-for-byte what `format!("{}{}", s, rhs)`
             // produced, without the intermediate allocation (and without
-            // copying the accumulated prefix a second time). Writing into a
-            // `String` cannot fail, so the result is ignored.
-            let _ = write!(s, "{}", rhs);
-            ctx.set_var(name, Value::Str(s));
+            // copying the accumulated prefix a second time).
+            //
+            // Writing *through* the `Arc` (`DerefMut` -> `make_mut`) is what keeps
+            // this O(1) per step without rebuilding the buffer: the variable was
+            // just taken out of its frame, so this is the only handle, `make_mut`
+            // sees a refcount of 1 and hands back the same `String`. Taking the
+            // bytes out with `into_string()` and wrapping them in a fresh `Arc`
+            // instead allocated a header on every step. Writing into a `String`
+            // cannot fail, so the result is ignored.
+            let _ = write!(&mut *s, "{}", rhs);
+            ctx.set_var(name, Value::StrShared(s));
             Some(Ok(Control::None))
         }
         // The right-hand side reassigned the variable to something that is not a
@@ -3008,7 +3146,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 v = r?;
             }
             let interpolated = match v {
-                Value::Str(ref s) => Value::Str(interpolate_string(s, ctx)),
+                Value::StrShared(ref s) => Value::Str(interpolate_string(s, ctx)),
                 _ => v,
             };
             println!("{interpolated}");
@@ -5375,12 +5513,15 @@ fn vm_concat_slot(
     use std::fmt::Write as _;
     let lhs = std::mem::replace(&mut values[idx], Value::Empty);
     match (lhs, rhs) {
-        (Value::Str(mut buf), rhs) => {
+        (Value::StrShared(mut buf), rhs) => {
             // Appending through `Display` is byte-for-byte what
             // `format!("{}{}", buf, rhs)` produced, without the second copy of
-            // the accumulated prefix. Writing into a `String` cannot fail.
-            let _ = write!(buf, "{}", rhs);
-            values[idx] = Value::Str(buf);
+            // the accumulated prefix. Writing through the `Arc` keeps the buffer
+            // already owned (`make_mut` is a no-op at refcount 1) instead of
+            // allocating a fresh header per step; writing into a `String` cannot
+            // fail, so the result is ignored.
+            let _ = write!(&mut *buf, "{}", rhs);
+            values[idx] = Value::StrShared(buf);
             Ok(())
         }
         (Value::ListShared(mut list), Value::ListShared(extra)) => {
@@ -5635,7 +5776,7 @@ fn vm_run(
                             let key = stack[sp + pair * 2].clone();
                             let value = stack[sp + pair * 2 + 1].clone();
                             let key = match key {
-                                Value::Str(s) => s,
+                                Value::StrShared(s) => s.into_string(),
                                 // The tree-walker's message for the same mistake.
                                 _ => return Err("Dictionary keys must evaluate to string values".to_string()),
                             };
@@ -5813,7 +5954,7 @@ fn vm_run(
                             }
                             Value::DictShared(map) => {
                                 let key = match index {
-                                    Value::Str(s) => s,
+                                    Value::StrShared(s) => s.to_string(),
                                     _ => {
                                         return Err(format!(
                                             "Dictionary key must be a string, got {}: {}",
@@ -6971,7 +7112,7 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
             "clear" => Some("clear"),
             _ => None,
         },
-        Value::Str(_) => match method {
+        Value::StrShared(_) => match method {
             "upper" => Some("upper"),
             "lower" => Some("lower"),
             "trim" | "strip" => Some("trim"),
@@ -7300,7 +7441,7 @@ fn invoke_method_on_value(
                 Value::Int(i) => Expr::Int(*i),
                 Value::Float(f) => Expr::Float(*f),
                 Value::Bool(b) => Expr::Bool(*b),
-                Value::Str(s) => Expr::Str(s.clone()),
+                Value::StrShared(s) => Expr::Str(s.to_string()),
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
@@ -7326,7 +7467,7 @@ fn invoke_method_on_value(
                 Value::Int(i) => Expr::Int(*i),
                 Value::Float(f) => Expr::Float(*f),
                 Value::Bool(b) => Expr::Bool(*b),
-                Value::Str(s) => Expr::Str(s.clone()),
+                Value::StrShared(s) => Expr::Str(s.to_string()),
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
@@ -7447,7 +7588,7 @@ fn resolve_member_access_ref(target: &Value, field: &str) -> Result<Value, Strin
                 Err(format!("List has no property '{field}'"))
             }
         }
-        Value::Str(s) => {
+        Value::StrShared(s) => {
             if field == "length" || field == "len" {
                 Ok(Value::Int(s.chars().count() as i64))
             } else {
@@ -7480,7 +7621,7 @@ fn invoke_callable_value(
                 Value::Int(i) => Expr::Int(*i),
                 Value::Float(f) => Expr::Float(*f),
                 Value::Bool(b) => Expr::Bool(*b),
-                Value::Str(s) => Expr::Str(s.clone()),
+                Value::StrShared(s) => Expr::Str(s.to_string()),
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
@@ -7906,7 +8047,7 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
         (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
-        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::StrShared(x), Value::StrShared(y)) => x.cmp(y),
         (Value::ListShared(x), Value::ListShared(y)) => {
             let n = x.len().min(y.len());
             for i in 0..n {
@@ -8021,14 +8162,14 @@ fn color_builtin(name: &str, positional: &[Value]) -> Result<Value, String> {
             let mut codes: Vec<u8> = Vec::new();
             for arg in &positional[1..] {
                 match arg {
-                    Value::Str(s) => {
+                    Value::StrShared(s) => {
                         let c = style_code(s)
                             .ok_or_else(|| format!("style: unknown style '{s}'"))?;
                         codes.push(c);
                     }
                     Value::ListShared(items) => {
                         for it in items {
-                            if let Value::Str(s) = it {
+                            if let Value::StrShared(s) = it {
                                 let c = style_code(s)
                                     .ok_or_else(|| format!("style: unknown style '{s}'"))?;
                                 codes.push(c);
@@ -8096,14 +8237,14 @@ fn color_builtin(name: &str, positional: &[Value]) -> Result<Value, String> {
             }
             let mut styles: Vec<u8> = Vec::new();
             match &positional[3] {
-                Value::Str(s) => {
+                Value::StrShared(s) => {
                     if !s.is_empty() {
                         styles.push(style_code(s).ok_or_else(|| format!("style: unknown style '{s}'"))?);
                     }
                 }
                 Value::ListShared(items) => {
                     for it in items {
-                        if let Value::Str(s) = it {
+                        if let Value::StrShared(s) = it {
                             if !s.is_empty() {
                                 styles.push(style_code(s).ok_or_else(|| format!("style: unknown style '{s}'"))?);
                             }
@@ -8365,7 +8506,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("len expects exactly 1 argument".to_string()));
             }
             let out = match &positional[0] {
-                Value::Str(s) => Value::Int(s.chars().count() as i64),
+                Value::StrShared(s) => Value::Int(s.chars().count() as i64),
                 Value::ListShared(v) => Value::Int(v.len() as i64),
                 Value::SetShared(v) => Value::Int(v.len() as i64),
                 Value::DictShared(v) => Value::Int(v.len() as i64),
@@ -8845,7 +8986,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                     out.reverse();
                     Some(Ok(Value::List(out)))
                 }
-                Value::Str(s) => {
+                Value::StrShared(s) => {
                     let out = s.chars().rev().collect::<String>();
                     Some(Ok(Value::Str(out)))
                 }
@@ -8962,16 +9103,16 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Ok(best));
             }
 
-            let all_strings = items.iter().all(|v| matches!(v, Value::Str(_)));
+            let all_strings = items.iter().all(|v| matches!(v, Value::StrShared(_)));
             if all_strings {
                 let mut best = match &items[0] {
-                    Value::Str(s) => s.clone(),
+                    Value::StrShared(s) => s.to_string(),
                     _ => String::new(),
                 };
                 for item in items.iter().skip(1) {
-                    if let Value::Str(s) = item {
-                        if s < &best {
-                            best = s.clone();
+                    if let Value::StrShared(s) = item {
+                        if s.as_str() < best.as_str() {
+                            best = s.to_string();
                         }
                     }
                 }
@@ -9009,16 +9150,16 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Ok(best));
             }
 
-            let all_strings = items.iter().all(|v| matches!(v, Value::Str(_)));
+            let all_strings = items.iter().all(|v| matches!(v, Value::StrShared(_)));
             if all_strings {
                 let mut best = match &items[0] {
-                    Value::Str(s) => s.clone(),
+                    Value::StrShared(s) => s.to_string(),
                     _ => String::new(),
                 };
                 for item in items.iter().skip(1) {
-                    if let Value::Str(s) = item {
-                        if s > &best {
-                            best = s.clone();
+                    if let Value::StrShared(s) = item {
+                        if s.as_str() > best.as_str() {
+                            best = s.to_string();
                         }
                     }
                 }
@@ -9064,9 +9205,9 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                         .count() as i64;
                     Some(Ok(Value::Int(count)))
                 }
-                Value::Str(text) => {
+                Value::StrShared(text) => {
                     let needle = match &positional[1] {
-                        Value::Str(s) => s,
+                        Value::StrShared(s) => s,
                         _ => {
                             return Some(Err(
                                 "count on string expects string value".to_string(),
@@ -9076,12 +9217,12 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                     if needle.is_empty() {
                         Some(Ok(Value::Int(text.chars().count() as i64 + 1)))
                     } else {
-                        Some(Ok(Value::Int(text.matches(needle).count() as i64)))
+                        Some(Ok(Value::Int(text.matches(needle.as_str()).count() as i64)))
                     }
                 }
                 Value::DictShared(map) => {
                     let key = match &positional[1] {
-                        Value::Str(s) => s,
+                        Value::StrShared(s) => s,
                         _ => {
                             return Some(Err(
                                 "count on dictionary expects string key".to_string(),
@@ -9319,7 +9460,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => return Some(Err(format!("dict_get expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = match &positional[1] {
-                Value::Str(v) => v,
+                Value::StrShared(v) => v,
                 _ => return Some(Err("dict_get key must be string".to_string())),
             };
 
@@ -9343,7 +9484,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => return Some(Err(format!("dict_set expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = match &positional[1] {
-                Value::Str(v) => v.clone(),
+                Value::StrShared(v) => v.to_string(),
                 _ => return Some(Err("dict_set key must be string".to_string())),
             };
 
@@ -9392,7 +9533,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 _ => return Some(Err(format!("dict_remove expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = match &positional[1] {
-                Value::Str(v) => v,
+                Value::StrShared(v) => v,
                 _ => return Some(Err("dict_remove key must be string".to_string())),
             };
 
@@ -9446,7 +9587,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::ListShared(_) => Some(Ok(Value::List(vec![]))),
                 Value::SetShared(_) => Some(Ok(Value::Set(vec![]))),
                 Value::DictShared(_) => Some(Ok(Value::Dict(HashMap::new().into()))),
-                Value::Str(_) => Some(Ok(Value::Str(String::new()))),
+                Value::StrShared(_) => Some(Ok(Value::Str(String::new()))),
                 _ => Some(Err(format!("clear expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
             }
         }
@@ -9635,9 +9776,9 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                         .unwrap_or(-1);
                     Some(Ok(Value::Int(idx)))
                 }
-                Value::Str(text) => {
+                Value::StrShared(text) => {
                     let needle = match &positional[1] {
-                        Value::Str(s) => s,
+                        Value::StrShared(s) => s,
                         _ => {
                             return Some(Err(
                                 "index on string expects string value".to_string(),
@@ -9649,7 +9790,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                         return Some(Ok(Value::Int(0)));
                     }
 
-                    if let Some(byte_index) = text.find(needle) {
+                    if let Some(byte_index) = text.find(needle.as_str()) {
                         let char_index = text[..byte_index].chars().count() as i64;
                         Some(Ok(Value::Int(char_index)))
                     } else {
@@ -10099,7 +10240,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Int(_) => "int",
                 Value::Float(_) => "float",
                 Value::Bool(_) => "boolean",
-                Value::Str(_) => "string",
+                Value::StrShared(_) => "string",
                 Value::ListShared(_) => "list",
                 Value::SetShared(_) => "group",
                 Value::DictShared(_) => "dict",
@@ -10118,7 +10259,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let matches = match callee {
                 "is_list" => matches!(positional[0], Value::ListShared(_)),
                 "is_dict" => matches!(positional[0], Value::DictShared(_)),
-                "is_string" => matches!(positional[0], Value::Str(_)),
+                "is_string" => matches!(positional[0], Value::StrShared(_)),
                 "is_int" => matches!(positional[0], Value::Int(_)),
                 "is_float" => matches!(positional[0], Value::Float(_)),
                 "is_bool" => matches!(positional[0], Value::Bool(_)),
@@ -10632,7 +10773,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let seed = match &positional[0] {
                 Value::Int(v) => *v,
                 Value::Float(v) => *v as i64,
-                Value::Str(s) => match s.trim().parse::<i64>() {
+                Value::StrShared(s) => match s.trim().parse::<i64>() {
                     Ok(v) => v,
                     Err(_) => return Some(Err("random_seed requires int-like value".to_string())),
                 },
@@ -12887,7 +13028,7 @@ fn value_to_toml(v: &Value) -> Option<toml::Value> {
         Value::Int(i) => Some(toml::Value::Integer(*i)),
         Value::Float(f) => Some(toml::Value::Float(*f)),
         Value::Bool(b) => Some(toml::Value::Boolean(*b)),
-        Value::Str(s) => Some(toml::Value::String(s.clone())),
+        Value::StrShared(s) => Some(toml::Value::String(s.to_string())),
         Value::ListShared(items) => Some(toml::Value::Array(
             items.iter().filter_map(value_to_toml).collect(),
         )),
@@ -13217,7 +13358,7 @@ fn task_wait_timeout_builtin(id: i64, seconds: f64) -> Result<Value, String> {
 fn future_to_id(v: &Value) -> Result<i64, String> {
     match v {
         Value::Int(i) => Ok(*i),
-        Value::Str(s) => s
+        Value::StrShared(s) => s
             .trim()
             .parse::<i64>()
             .map_err(|_| format!("await: invalid future id '{}'", s)),
@@ -13856,7 +13997,7 @@ fn json_to_value(value: JsonValue) -> Value {
 fn parse_socket_id(value: &Value) -> Result<i64, String> {
     match value {
         Value::Int(v) => Ok(*v),
-        Value::Str(s) => s
+        Value::StrShared(s) => s
             .trim()
             .parse::<i64>()
             .map_err(|_| "socket_id must be an int".to_string()),
@@ -13866,7 +14007,7 @@ fn parse_socket_id(value: &Value) -> Result<i64, String> {
         // the sort of thing nobody discovers from the source.
         Value::DictShared(map) => match map.get("socket_id") {
             Some(Value::Int(v)) => Ok(*v),
-            Some(Value::Str(s)) => s
+            Some(Value::StrShared(s)) => s
                 .trim()
                 .parse::<i64>()
                 .map_err(|_| "socket_id must be an int".to_string()),
@@ -14100,7 +14241,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::Int(v) => JsonValue::from(*v),
         Value::Float(v) => JsonValue::from(*v),
         Value::Bool(v) => JsonValue::from(*v),
-        Value::Str(v) => JsonValue::from(v.clone()),
+        Value::StrShared(v) => JsonValue::String(v.to_string()),
         Value::ListShared(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::SetShared(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::DictShared(items) => {
@@ -14471,7 +14612,7 @@ fn write_http_response(stream: &mut TcpStream, resp: &Value) -> Result<(), Strin
     let mut content_type = "text/html; charset=utf-8".to_string();
     let mut extra: Vec<(String, String)> = Vec::new();
     match resp {
-        Value::Str(s) => body = s.clone(),
+        Value::StrShared(s) => body = s.to_string(),
         Value::DictShared(m) => {
             if let Some(Value::Int(s)) = m.get("status") {
                 status = *s;
@@ -14479,8 +14620,8 @@ fn write_http_response(stream: &mut TcpStream, resp: &Value) -> Result<(), Strin
             if let Some(v) = m.get("body") {
                 body = v.to_string();
             }
-            if let Some(Value::Str(ct)) = m.get("content_type") {
-                content_type = ct.clone();
+            if let Some(Value::StrShared(ct)) = m.get("content_type") {
+                content_type = ct.to_string();
             }
             if let Some(Value::DictShared(h)) = m.get("headers") {
                 for (k, v) in h {
@@ -14760,7 +14901,7 @@ fn coerce_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value,
     };
     match ty {
         "string" => match value {
-            Value::Str(_) => Ok(value),
+            Value::StrShared(_) => Ok(value),
             _ => Err(format!("Line {line}: variable '{name}' expects string")),
         },
         "int" => match value {
@@ -14793,7 +14934,7 @@ fn coerce_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value,
             _ => Err(format!("Line {line}: variable '{name}' expects empty")),
         },
         "color" => match value {
-            Value::Str(s) if is_valid_color_literal(&s) => Ok(Value::Str(s)),
+            Value::StrShared(s) if is_valid_color_literal(&s) => Ok(Value::StrShared(s)),
             _ => Err(format!("Line {line}: variable '{name}' expects color")),
         },
         "dynamic" => Ok(value),
@@ -14816,7 +14957,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
         "int" => match value {
             Value::Int(_) => Ok(value),
             Value::Float(v) if v.fract().abs() < f64::EPSILON => Ok(Value::Int(v as i64)),
-            Value::Str(text) => text.trim().parse::<i64>().map(Value::Int).map_err(|_| {
+            Value::StrShared(text) => text.trim().parse::<i64>().map(Value::Int).map_err(|_| {
                 format!("Line {line}: variable '{name}' cannot be converted to int")
             }),
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to int")),
@@ -14824,7 +14965,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
         "float" => match value {
             Value::Float(_) => Ok(value),
             Value::Int(v) => Ok(Value::Float(v as f64)),
-            Value::Str(text) => text.trim().parse::<f64>().map(Value::Float).map_err(|_| {
+            Value::StrShared(text) => text.trim().parse::<f64>().map(Value::Float).map_err(|_| {
                 format!("Line {line}: variable '{name}' cannot be converted to float")
             }),
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to float")),
@@ -14833,7 +14974,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
             Value::Bool(_) => Ok(value),
             Value::Int(v) => Ok(Value::Bool(v != 0)),
             Value::Float(v) => Ok(Value::Bool(v != 0.0)),
-            Value::Str(text) => {
+            Value::StrShared(text) => {
                 let normalized = text.trim().to_ascii_lowercase();
                 match normalized.as_str() {
                     "true" | "1" => Ok(Value::Bool(true)),
@@ -14881,7 +15022,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to empty")),
         },
         "color" => match convert_type(line, name, "string", value)? {
-            Value::Str(text) if is_valid_color_literal(&text) => Ok(Value::Str(text)),
+            Value::StrShared(text) if is_valid_color_literal(&text) => Ok(Value::StrShared(text)),
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to color")),
         },
         "dynamic" => Ok(value),
@@ -15092,7 +15233,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             for (k_expr, v_expr) in items {
                 let k_val = eval_ast(k_expr, ctx)?;
                 let key = match k_val {
-                    Value::Str(s) => s,
+                    Value::StrShared(s) => s.into_string(),
                     _ => return Err("Dictionary keys must evaluate to string values".to_string()),
                 };
                 let value = eval_ast(v_expr, ctx)?;
@@ -15116,7 +15257,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     && borrowable_var(&parts[0])
                     && matches!(
                         ctx.get_var_ref(&parts[0]),
-                        Some(Value::ListShared(_) | Value::Str(_) | Value::DictShared(_))
+                        Some(Value::ListShared(_) | Value::StrShared(_) | Value::DictShared(_))
                     );
                 if borrowable {
                     let index_val = eval_ast(index, ctx)?;
@@ -15177,7 +15318,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     && borrowable_var(&parts[0])
                     && matches!(
                         ctx.get_var_ref(&parts[0]),
-                        Some(Value::ListShared(_) | Value::Str(_))
+                        Some(Value::ListShared(_) | Value::StrShared(_))
                     );
                 if borrowable {
                     if let Some(base) = ctx.get_var_ref(&parts[0]) {
@@ -15205,7 +15346,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     {
                         if let Some(v) = ctx.get_var_ref(&parts[0]) {
                             match v {
-                                Value::Str(s) => {
+                                Value::StrShared(s) => {
                                     return Ok(Value::Int(s.chars().count() as i64))
                                 }
                                 Value::ListShared(v) => return Ok(Value::Int(v.len() as i64)),
@@ -15587,7 +15728,7 @@ fn slice_builtin(container: &Value, start: Option<i64>, end: Option<i64>, step: 
             }
             Ok(Value::List(out))
         }
-        Value::Str(text) => {
+        Value::StrShared(text) => {
             let chars = text.chars().collect::<Vec<_>>();
             let indices = build_slice_indices(chars.len(), start, end, step)?;
             let mut out = String::new();
@@ -15616,7 +15757,7 @@ fn resolve_index(target: Value, index: Value) -> Result<Value, String> {
                 .cloned()
                 .ok_or_else(|| format!("List index out of range: {idx}"))
         }
-        Value::Str(s) => {
+        Value::StrShared(s) => {
             let raw = match index {
                 Value::Int(i) => i,
                 _ => return Err(format!("String index must be an int, got {}: {}", index.type_name(), index)),
@@ -15631,7 +15772,7 @@ fn resolve_index(target: Value, index: Value) -> Result<Value, String> {
         }
         Value::DictShared(map) => {
             let key = match index {
-                Value::Str(s) => s,
+                Value::StrShared(s) => s,
                 _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
             };
             map.get(&key)
@@ -15660,7 +15801,7 @@ fn resolve_index_ref(target: &Value, index: Value) -> Result<Value, String> {
                 .cloned()
                 .ok_or_else(|| format!("List index out of range: {idx}"))
         }
-        Value::Str(s) => {
+        Value::StrShared(s) => {
             let raw = match index {
                 Value::Int(i) => i,
                 _ => return Err(format!("String index must be an int, got {}: {}", index.type_name(), index)),
@@ -15675,7 +15816,7 @@ fn resolve_index_ref(target: &Value, index: Value) -> Result<Value, String> {
         }
         Value::DictShared(map) => {
             let key = match index {
-                Value::Str(s) => s,
+                Value::StrShared(s) => s,
                 _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
             };
             map.get(&key)
@@ -15708,7 +15849,7 @@ fn assign_index_value(target: Value, index: Value, replacement: Value) -> Result
         }
         Value::DictShared(mut map) => {
             let key = match index {
-                Value::Str(s) => s,
+                Value::StrShared(s) => s.into_string(),
                 _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
             };
             map.insert(key, replacement);
@@ -15891,8 +16032,8 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
             (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 + y)),
             (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
-            (Value::Str(x), y) => Ok(Value::Str(format!("{}{}", x, y))),
-            (x, Value::Str(y)) => Ok(Value::Str(format!("{}{}", x, y))),
+            (Value::StrShared(x), y) => Ok(Value::Str(format!("{}{}", x, y))),
+            (x, Value::StrShared(y)) => Ok(Value::Str(format!("{}{}", x, y))),
             (Value::ListShared(mut x), Value::ListShared(y)) => {
                 // `extend` grows the left operand, so a shared buffer copies here —
                 // which is what `+` on two lists has to do: it must not change the
@@ -15923,7 +16064,7 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
         },
         "*" => {
             match (&a, &b) {
-                (Value::Str(s), Value::Int(n)) | (Value::Int(n), Value::Str(s)) => {
+                (Value::StrShared(s), Value::Int(n)) | (Value::Int(n), Value::StrShared(s)) => {
                     let count = if *n < 0 { 0 } else { *n as usize };
                     Ok(Value::Str(s.repeat(count)))
                 }
@@ -16009,17 +16150,17 @@ fn contains_value(container: &Value, item: &Value) -> Result<bool, String> {
         Value::SetShared(items) => Ok(items.iter().any(|v| eq_values(v, item))),
         Value::DictShared(map) => {
             let key = match item {
-                Value::Str(s) => s,
+                Value::StrShared(s) => s,
                 _ => return Err(format!("'in' with dict expects a string key, got {}: {}", item.type_name(), item)),
             };
             Ok(map.contains_key(key))
         }
-        Value::Str(text) => {
+        Value::StrShared(text) => {
             let needle = match item {
-                Value::Str(s) => s,
+                Value::StrShared(s) => s,
                 _ => return Err(format!("'in' with string expects a string needle, got {}: {}", item.type_name(), item)),
             };
-            Ok(text.contains(needle))
+            Ok(text.contains(needle.as_str()))
         }
         _ => Err(format!("'in' expects a list, set, dict, or string container, got {}", container.type_name())),
     }
@@ -16096,7 +16237,7 @@ fn eq_values(a: &Value, b: &Value) -> bool {
         (Value::Int(x), Value::Float(y)) => (*x as f64 - *y).abs() < f64::EPSILON,
         (Value::Float(x), Value::Int(y)) => (*x - *y as f64).abs() < f64::EPSILON,
         (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::StrShared(x), Value::StrShared(y)) => x == y,
         (Value::ListShared(x), Value::ListShared(y)) => {
             x.len() == y.len()
                 && x
@@ -16130,7 +16271,7 @@ fn is_identity_equal(a: &Value, b: &Value) -> bool {
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Float(x), Value::Float(y)) => (x - y).abs() < f64::EPSILON,
         (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::StrShared(x), Value::StrShared(y)) => x == y,
         (Value::Func(x), Value::Func(y)) => x == y,
         (Value::Module(x), Value::Module(y)) => Arc::ptr_eq(x, y),
         (Value::Empty, Value::Empty) => true,
@@ -20936,7 +21077,7 @@ var converted string = string(UInput)
         let mut ctx = ExecContext::new(&mut rt);
         exec_block(&program, &mut ctx).expect("program executes");
 
-        assert!(matches!(ctx.rt.vars.get("converted"), Some(Value::Str(s)) if s == "4"));
+        assert!(matches!(ctx.rt.vars.get("converted"), Some(Value::StrShared(s)) if s == "4"));
     }
     #[test]
     fn imports_module_from_indent_path() {
@@ -21117,9 +21258,9 @@ var firstChar string = title[0]
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
-        assert!(matches!(rt.vars.get("title"), Some(Value::Str(s)) if s == "Indent"));
+        assert!(matches!(rt.vars.get("title"), Some(Value::StrShared(s)) if s == "Indent"));
         assert!(matches!(rt.vars.get("second"), Some(Value::Int(20))));
-        assert!(matches!(rt.vars.get("firstChar"), Some(Value::Str(s)) if s == "I"));
+        assert!(matches!(rt.vars.get("firstChar"), Some(Value::StrShared(s)) if s == "I"));
     }
 
     #[test]
@@ -21229,9 +21370,9 @@ var accentBare color = "#3b82f6"
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
-        assert!(matches!(rt.vars.get("accent"), Some(Value::Str(s)) if s == "#ff4d4d"));
-        assert!(matches!(rt.vars.get("accentHex"), Some(Value::Str(s)) if s == "#22c55e"));
-        assert!(matches!(rt.vars.get("accentBare"), Some(Value::Str(s)) if s == "#3b82f6"));
+        assert!(matches!(rt.vars.get("accent"), Some(Value::StrShared(s)) if s == "#ff4d4d"));
+        assert!(matches!(rt.vars.get("accentHex"), Some(Value::StrShared(s)) if s == "#22c55e"));
+        assert!(matches!(rt.vars.get("accentBare"), Some(Value::StrShared(s)) if s == "#3b82f6"));
     }
 
     #[test]
@@ -21256,7 +21397,7 @@ Lastly:
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
-        assert!(matches!(rt.vars.get("state"), Some(Value::Str(s)) if s.contains("caught: Line") && s.contains("lastly")));
+        assert!(matches!(rt.vars.get("state"), Some(Value::StrShared(s)) if s.contains("caught: Line") && s.contains("lastly")));
     }
 
     #[test]
@@ -21279,7 +21420,7 @@ Lastly:
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
-        assert!(matches!(rt.vars.get("status"), Some(Value::Str(s)) if s == "ok|otherwise|lastly"));
+        assert!(matches!(rt.vars.get("status"), Some(Value::StrShared(s)) if s == "ok|otherwise|lastly"));
     }
 
     #[test]
@@ -21323,7 +21464,7 @@ say safe
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
-        assert!(matches!(rt.vars.get("safe"), Some(Value::Str(s)) if s == "quit-or"));
+        assert!(matches!(rt.vars.get("safe"), Some(Value::StrShared(s)) if s == "quit-or"));
     }
 
     #[test]
