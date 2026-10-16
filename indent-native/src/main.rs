@@ -1203,10 +1203,21 @@ fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
 /// loop now consumes the value it evaluated, which is the same snapshot with one
 /// fewer O(n) copy.
 fn iterable_items_owned(value: Value) -> Option<Vec<Value>> {
+    iterable_items_owned_typed(value, true)
+}
+
+/// `iterable_items_owned`, with the accepted set chosen by the source form.
+///
+/// A `repeat for` takes a generator; a comprehension takes only a list or a set, and
+/// reports it with its own message. Sharing one lookup would have let a comprehension
+/// quietly succeed where the tree-walker raises.
+fn iterable_items_owned_typed(value: Value, generators: bool) -> Option<Vec<Value>> {
     match value {
         Value::List(v) => Some(v),
         Value::Set(v) => Some(v),
-        Value::Dict(mut m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
+        Value::Dict(mut m)
+            if generators && m.get("__generator__").map_or(false, |v| v.to_bool()) =>
+        {
             match m.remove("__gen_values__") {
                 Some(Value::List(v)) => Some(v),
                 _ => Some(Vec::new()),
@@ -3551,7 +3562,14 @@ enum VmInstr {
     /// Pop a `repeat` count, check it is a number, and store it as an integer.
     CheckCount { slot: u16 },
     /// Pop an iterable, materialise it for a nested `for`, or fail with `msg`.
-    IterPrepare { items: u16, index: u16, msg: String },
+    /// `generators` is what the source accepts: a `repeat for` takes a generator,
+    /// a comprehension does not, and the two report it with different messages.
+    IterPrepare {
+        items: u16,
+        index: u16,
+        msg: String,
+        generators: bool,
+    },
     /// Pop the value a `give` produced and leave the stream with it. The value goes
     /// into `value` and `flag` records that a `give` ran, so the runner can tell a
     /// returned `empty` from a body that fell off its end.
@@ -3945,9 +3963,9 @@ fn vm_slot_target(target: &Expr, prog: &mut VmProgram) -> Option<u16> {
 /// Compile an expression, postfix. Returns false for anything unsupported, in
 /// which case the caller must discard `out`.
 ///
-/// Every expression form is compiled except comprehensions and lambdas: a
-/// comprehension binds an item name in a frame of its own, and a lambda carries
-/// its body as an AST the runtime would have to keep. Everything else — indexing,
+/// Every expression form is compiled except dict comprehensions and lambdas: the
+/// dict form needs a way to store a key and a value, and a lambda carries its body
+/// as an AST the runtime would have to keep. Everything else — indexing,
 /// slicing, members, method calls, interpolation, list and dict literals,
 /// ternaries, unary operators and short-circuit `and`/`or` — used to send the
 /// whole enclosing body back to the tree-walker, which meant a single method call
@@ -4181,6 +4199,105 @@ fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
                 callee: callee[0].clone(),
                 argc: args.len() as u16,
             });
+        }
+        // A list comprehension: the first expression form that iterates, lowered
+        // onto the pair a `for` already uses, with a slot holding the result.
+        //
+        //   out = []
+        //   <iterable>              (pushed, then materialised by IterPrepare)
+        //   IterPrepare
+        //   PushFrame
+        //   item <- its old value saved, then bound in the frame
+        // start:
+        //   IterNext                (exit when exhausted)
+        //   <condition>? JumpIfFalse -> join
+        //   <result>
+        //   AppendSlot(out)
+        // join: Jump(start)
+        // exit: PopFrame
+        //   item <- its old value put back
+        //   LoadSlot(out)
+        //
+        // The item is the delicate part, exactly as it is for a `for`: a read
+        // resolves to the first slot carrying a name, so the item shares whatever
+        // slot the name already had and shadows it for precisely as long as the
+        // comprehension runs. `Reps` gets a scratch slot instead — the tree-walker's
+        // comprehension publishes no counter, so a read of `Reps` inside one means an
+        // enclosing loop's, which is what the slot it resolves to holds.
+        //
+        // Only the list form is compiled; a dict comprehension needs a way to store
+        // a key and a value, which is a different accumulation.
+        Expr::Comprehension {
+            kind,
+            result_expr,
+            item_name,
+            iterable,
+            condition,
+            ..
+        } if kind.as_str() == "list" => {
+            let out = vm_scratch(&mut prog.slots);
+            let items = vm_scratch(&mut prog.slots);
+            let index = vm_scratch(&mut prog.slots);
+            let reps = vm_scratch(&mut prog.slots);
+            let item = vm_slot(&mut prog.slots, item_name);
+            let saved = vm_scratch(&mut prog.slots);
+            prog.owned.push(item);
+            prog.instrs.push(VmInstr::MakeList(0));
+            prog.instrs.push(VmInstr::StoreSlot(out));
+            if !vm_compile_expr(iterable, prog) {
+                return false;
+            }
+            prog.instrs.push(VmInstr::IterPrepare {
+                items,
+                index,
+                msg: "Comprehension iterable must be a list or set".to_string(),
+                generators: false,
+            });
+            prog.instrs.push(VmInstr::PushFrame);
+            prog.instrs.push(VmInstr::LoadSlot(item));
+            prog.instrs.push(VmInstr::StoreSlot(saved));
+            prog.instrs.push(VmInstr::SetLocal {
+                slot: item,
+                name: item_name.clone(),
+            });
+            let start = prog.instrs.len();
+            prog.instrs.push(VmInstr::IterNext {
+                items,
+                index,
+                item,
+                reps,
+                end: usize::MAX,
+            });
+            let mut skipped: Vec<usize> = Vec::new();
+            if let Some(cond) = condition {
+                if !vm_compile_expr(cond, prog) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
+                skipped.push(prog.instrs.len() - 1);
+            }
+            if !vm_compile_expr(result_expr, prog) {
+                return false;
+            }
+            prog.instrs.push(VmInstr::AppendSlot {
+                slot: out,
+                callee: "append".to_string(),
+            });
+            let join = prog.instrs.len();
+            prog.instrs.push(VmInstr::Jump(start));
+            let exit = prog.instrs.len();
+            prog.instrs.push(VmInstr::PopFrame);
+            prog.instrs.push(VmInstr::LoadSlot(saved));
+            prog.instrs.push(VmInstr::StoreSlot(item));
+            prog.instrs.push(VmInstr::LoadSlot(out));
+            if let VmInstr::IterNext { end, .. } = &mut prog.instrs[start] {
+                *end = exit;
+            }
+            for j in skipped {
+                if let VmInstr::JumpIfFalse(target) = &mut prog.instrs[j] {
+                    *target = join;
+                }
+            }
         }
         _ => return false,
     }
@@ -4529,6 +4646,7 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
             items,
             index,
             msg: msg.to_string(),
+            generators: true,
         });
         for_slots = Some((items, index, item, name));
         item_saved = Some(saved);
@@ -5693,10 +5811,16 @@ fn vm_run(
                         values[*slot as usize] = Value::Int((n as usize).min(i64::MAX as usize) as i64);
                         ip += 1;
                     }
-                    VmInstr::IterPrepare { items, index, msg } => {
+                    VmInstr::IterPrepare {
+                        items,
+                        index,
+                        msg,
+                        generators,
+                    } => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
                         let v = stack[sp].clone();
-                        let list = iterable_items_owned(v).ok_or_else(|| msg.clone())?;
+                        let list =
+                            iterable_items_owned_typed(v, *generators).ok_or_else(|| msg.clone())?;
                         values[*items as usize] = Value::List(list);
                         values[*index as usize] = Value::Int(0);
                         ip += 1;

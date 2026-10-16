@@ -1,0 +1,70 @@
+#! A comprehension used as an expression inside a compiled body.
+#!
+#! A comprehension binds an item name and iterates, so the instruction stream has to
+#! do three things the expression compiler otherwise never does: materialise the
+#! iterable, push an item frame, and accumulate. It is lowered onto the same
+#! `IterPrepare`/`IterNext` pair a `repeat for` uses, with a slot holding the result.
+#!
+#! The item name is the delicate part — the same one a `for` has. It must shadow
+#! whatever the name meant before, for exactly as long as the comprehension runs, so
+#! a variable of the same name is saved before it and put back after.
+#!
+#! Every assertion here is one both engines must agree on; whether the VM actually
+#! took the body is checked with `INDENT_VM_TRACE=1`.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. a list comprehension in a loop body ----
+var total int = 0
+repeat i in [1, 2, 3]
+    var doubled dynamic = [n * 2 for n in [i, i + 1]]
+    total is total + doubled[0] + doubled[1]
+var ok1 boolean = total == 30
+assert ok1 "a comprehension in a loop body yields its list"
+
+#! ---- 2. a filtered comprehension ----
+var big dynamic = [n for n in [1, 2, 3, 4] if n > 2]
+var ok2a boolean = len(big) == 2
+assert ok2a "a comprehension's condition drops the items it excludes"
+var ok2b boolean = big[0] == 3
+assert ok2b "the surviving items keep their order"
+
+#! ---- 3. the item name shadows a variable and is given back ----
+var n int = 100
+var squares int = 0
+repeat i in [1, 2]
+    var sq dynamic = [n * n for n in [i]]
+    squares is squares + sq[0]
+var ok3a boolean = n == 100
+assert ok3a "the name a comprehension bound means what it meant before again"
+var ok3b boolean = squares == 5
+assert ok3b "and the comprehension's own body read its item"
+
+#! ---- 4. a comprehension over a variable, counted in place ----
+var src dynamic = [1, 2, 3]
+var counted int = 0
+repeat i in [0, 1]
+    counted is counted + len([x + i for x in src])
+var ok4 boolean = counted == 6
+assert ok4 "a comprehension over a variable yields one item per element"
+
+#! ---- 5. a comprehension inside a nested loop ----
+var nested int = 0
+repeat a in [1, 2]
+    repeat b in [10, 20]
+        var inner dynamic = [x + a for x in [b]]
+        nested is nested + inner[0]
+var ok5 boolean = nested == 66
+assert ok5 "a comprehension works at every nesting level"
+
+#! ---- 6. a comprehension iterating the enclosing loop's item ----
+var chained int = 0
+repeat i in [1, 2]
+    var chained2 dynamic = [y * i for y in [1, 2]]
+    chained is chained + chained2[0] + chained2[1]
+var ok6 boolean = chained == 9
+assert ok6 "a comprehension may iterate an enclosing loop's item"
