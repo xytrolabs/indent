@@ -103,6 +103,229 @@ fn to_map(src: &HashMap<String, Value>) -> Map<String, Value> {
     src.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
+/// The same thing for a `SmallDict` source, which no longer has a `HashMap` to
+/// clone from: the pairs are copied out one at a time, clones and all. The three
+/// call sites are `dict with function value` / JS-style-object method dispatch,
+/// so this is not on any hot path.
+#[inline]
+fn dict_to_map(src: &SmallDict) -> Map<String, Value> {
+    let mut out = Map::default();
+    for (k, v) in src {
+        out.insert(k.clone(), v.clone());
+    }
+    out
+}
+
+/// A dictionary that does not pay for a hash table until it has enough keys.
+///
+/// A `HashMap` is 48 bytes when empty and allocates on its first insert, and each
+/// entry costs a 24-byte `String`, a 56-byte `Value` and a control byte. A
+/// three-key dict like `{"type": "quit", "down": true}` is therefore a hash table,
+/// three `String`s and three entries — around 400 bytes and four allocations for
+/// what is really a tagged record.
+///
+/// Most dicts in real scripts are small: config objects, event payloads, one JSON
+/// row each. Up to `SMALL_DICT_MAX` keys live in one `Vec` of pairs and are found
+/// by scanning, which for a handful of short keys is cheaper than hashing them —
+/// no hash, no control bytes, one or two cache lines. Past the threshold the dict
+/// promotes to the hash map, so a dict that really is a dictionary still behaves
+/// like one.
+///
+/// Both representations are correct at any size, and the API mirrors `HashMap`
+/// so the interpreter code reads the same either way.
+#[derive(Debug, Clone, Default)]
+enum SmallDict {
+    #[default]
+    Empty,
+    Small(Vec<(String, Value)>),
+    Large(HashMap<String, Value>),
+}
+
+/// How many keys a `SmallDict` keeps in a `Vec` before promoting to a hash map.
+/// This is where the scan stops paying for itself, not a correctness boundary.
+const SMALL_DICT_MAX: usize = 8;
+
+impl SmallDict {
+    fn new() -> Self {
+        SmallDict::Empty
+    }
+
+    fn with_capacity(n: usize) -> Self {
+        if n <= SMALL_DICT_MAX {
+            SmallDict::Small(Vec::with_capacity(n))
+        } else {
+            SmallDict::Large(HashMap::with_capacity(n))
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            SmallDict::Empty => 0,
+            SmallDict::Small(pairs) => pairs.len(),
+            SmallDict::Large(map) => map.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, key: &str) -> Option<&Value> {
+        match self {
+            SmallDict::Empty => None,
+            SmallDict::Small(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            SmallDict::Large(map) => map.get(key),
+        }
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        match self {
+            SmallDict::Empty => None,
+            SmallDict::Small(pairs) => pairs.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v),
+            SmallDict::Large(map) => map.get_mut(key),
+        }
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    fn insert(&mut self, key: String, value: Value) -> Option<Value> {
+        match self {
+            SmallDict::Empty => {
+                let mut pairs = Vec::with_capacity(4);
+                pairs.push((key, value));
+                *self = SmallDict::Small(pairs);
+                None
+            }
+            SmallDict::Small(pairs) => {
+                if let Some(slot) = pairs.iter_mut().find(|(k, _)| *k == key) {
+                    return Some(std::mem::replace(&mut slot.1, value));
+                }
+                if pairs.len() < SMALL_DICT_MAX {
+                    pairs.push((key, value));
+                    return None;
+                }
+                let mut map: HashMap<String, Value> = pairs.drain(..).collect();
+                map.insert(key, value);
+                *self = SmallDict::Large(map);
+                None
+            }
+            SmallDict::Large(map) => map.insert(key, value),
+        }
+    }
+
+    fn remove(&mut self, key: &str) -> Option<Value> {
+        match self {
+            SmallDict::Empty => None,
+            // Order is not part of a dict's meaning, so the cheap removal is fine
+            // — but a small dict keeps insertion order for printing, so removing
+            // is the one place it can shuffle. Nothing depends on that order.
+            SmallDict::Small(pairs) => {
+                let at = pairs.iter().position(|(k, _)| k == key)?;
+                Some(pairs.swap_remove(at).1)
+            }
+            SmallDict::Large(map) => map.remove(key),
+        }
+    }
+
+    fn iter(&self) -> DictIter<'_> {
+        match self {
+            SmallDict::Empty => DictIter::Empty,
+            SmallDict::Small(pairs) => DictIter::Small(pairs.iter()),
+            SmallDict::Large(map) => DictIter::Large(map.iter()),
+        }
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.iter().map(|(k, _)| k)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &Value> {
+        self.iter().map(|(_, v)| v)
+    }
+
+    /// Add every pair of `other`, overwriting what is already here. What
+    /// `Value::Dict + Value::Dict` means.
+    fn extend(&mut self, other: SmallDict) {
+        match other {
+            SmallDict::Empty => {}
+            SmallDict::Small(pairs) => {
+                for (k, v) in pairs {
+                    self.insert(k, v);
+                }
+            }
+            SmallDict::Large(map) => {
+                for (k, v) in map {
+                    self.insert(k, v);
+                }
+            }
+        }
+    }
+
+    /// Keep only the pairs `f` accepts.
+    fn retain<F: FnMut(&String, &Value) -> bool>(&mut self, mut f: F) {
+        match self {
+            SmallDict::Empty => {}
+            SmallDict::Small(pairs) => pairs.retain(|(k, v)| f(k, v)),
+            SmallDict::Large(map) => map.retain(|k, v| f(k, v)),
+        }
+    }
+}
+
+impl From<HashMap<String, Value>> for SmallDict {
+    fn from(map: HashMap<String, Value>) -> Self {
+        // A map that arrived as a hash map but is small still gets the scan: the
+        // point is the representation, not how the dict was built.
+        if map.len() <= SMALL_DICT_MAX {
+            SmallDict::Small(map.into_iter().collect())
+        } else {
+            SmallDict::Large(map)
+        }
+    }
+}
+
+impl FromIterator<(String, Value)> for SmallDict {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
+        let mut out = SmallDict::new();
+        for (k, v) in iter {
+            out.insert(k, v);
+        }
+        out
+    }
+}
+
+/// Iterator over a `SmallDict`'s pairs, whichever representation it is in. An
+/// enum rather than a boxed trait object so that walking a dict — which happens
+/// in every `for (k, v) in d` and every dump — allocates nothing.
+enum DictIter<'a> {
+    Empty,
+    Small(std::slice::Iter<'a, (String, Value)>),
+    Large(std::collections::hash_map::Iter<'a, String, Value>),
+}
+
+impl<'a> Iterator for DictIter<'a> {
+    type Item = (&'a String, &'a Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            DictIter::Empty => None,
+            DictIter::Small(pairs) => pairs.next().map(|(k, v)| (k, v)),
+            DictIter::Large(map) => map.next(),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a SmallDict {
+    type Item = (&'a String, &'a Value);
+    type IntoIter = DictIter<'a>;
+
+    fn into_iter(self) -> DictIter<'a> {
+        self.iter()
+    }
+}
+
+
 /// The map type for anything keyed by a variable, field or property name — the
 /// maps on the interpreter's hot path. See the note on `FxHasher` above.
 ///
@@ -483,7 +706,7 @@ enum Value {
     Str(String),
     List(Vec<Value>),
     Set(Vec<Value>),  // ordered set — unique values, insertion order
-    Dict(HashMap<String, Value>),
+    Dict(SmallDict),
     /// Class instance. The two parts are a pointer to the class's shared
     /// metadata and a slot-indexed array of the values.
     ///
@@ -5713,7 +5936,7 @@ fn invoke_method_on_value(
                 _ => Expr::Str(v.to_string()),
             }).collect();
             let mut temp_rt = Runtime::bare(PathBuf::from("."));
-            temp_rt.vars = to_map(map);
+            temp_rt.vars = dict_to_map(map);
             ctx.rt.lend_tables_to(&mut temp_rt);
             let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
             ctx.rt.reclaim_tables_from(temp_rt);
@@ -6040,7 +6263,7 @@ fn invoke_function(
         let mut g = HashMap::new();
         g.insert("__generator__".to_string(), Value::Bool(true));
         g.insert("__gen_values__".to_string(), Value::List(values));
-        Ok(Value::Dict(g))
+        Ok(Value::Dict(g.into()))
     } else {
         match resumed_body(f, ctx)? {
             Control::Return(v) => {
@@ -6597,7 +6820,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             for (cat, names) in groups {
                 out.insert(cat, Value::List(names));
             }
-            Some(Ok(Value::Dict(out)))
+            Some(Ok(Value::Dict(out.into())))
         }
         "say" | "print" => {
             if positional.is_empty() {
@@ -7540,7 +7763,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let mut result = HashMap::new();
             result.insert("item".to_string(), item);
             result.insert("list".to_string(), Value::List(out));
-            Some(Ok(Value::Dict(result)))
+            Some(Ok(Value::Dict(result.into())))
         }
         "unshift" => {
             if positional.len() != 2 {
@@ -7795,7 +8018,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             match &positional[0] {
                 Value::List(_) => Some(Ok(Value::List(vec![]))),
                 Value::Set(_) => Some(Ok(Value::Set(vec![]))),
-                Value::Dict(_) => Some(Ok(Value::Dict(HashMap::new()))),
+                Value::Dict(_) => Some(Ok(Value::Dict(HashMap::new().into()))),
                 Value::Str(_) => Some(Ok(Value::Str(String::new()))),
                 _ => Some(Err(format!("clear expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
             }
@@ -8088,7 +8311,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let mut map = HashMap::new();
             map.insert("ok".to_string(), Value::Bool(true));
             map.insert("value".to_string(), positional[0].clone());
-            Some(Ok(Value::Dict(map)))
+            Some(Ok(Value::Dict(map.into())))
         }
         "err" => {
             if positional.len() != 1 {
@@ -8097,7 +8320,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let mut map = HashMap::new();
             map.insert("ok".to_string(), Value::Bool(false));
             map.insert("error".to_string(), positional[0].clone());
-            Some(Ok(Value::Dict(map)))
+            Some(Ok(Value::Dict(map.into())))
         }
         "is_ok" => {
             if positional.len() != 1 {
@@ -8144,7 +8367,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let mut map = HashMap::new();
             map.insert("ok".to_string(), Value::Bool(true));
             map.insert("value".to_string(), positional[0].clone());
-            Some(Ok(Value::Dict(map)))
+            Some(Ok(Value::Dict(map.into())))
         }
         "file_sha256" => {
             if positional.len() != 1 {
@@ -9354,7 +9577,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                         map.insert("start".to_string(), Value::Int(m.start() as i64));
                         map.insert("end".to_string(), Value::Int(m.end() as i64));
                         map.insert("text".to_string(), Value::Str(m.as_str().to_string()));
-                        Some(Ok(Value::Dict(map)))
+                        Some(Ok(Value::Dict(map.into())))
                     }
                     None => Some(Ok(Value::Empty)),
                 },
@@ -10113,7 +10336,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             for (k, v) in groups {
                 out.insert(k, Value::List(v));
             }
-            Some(Ok(Value::Dict(out)))
+            Some(Ok(Value::Dict(out.into())))
         }
         "max_key" | "min_key" => {
             if positional.len() != 2 {
@@ -10477,7 +10700,7 @@ fn os_run_builtin(command: &str) -> Result<Value, String> {
         "stderr".to_string(),
         Value::Str(String::from_utf8_lossy(&output.stderr).to_string()),
     );
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 /// Return `true` if `command` exits with status 0 (shutil-style quick check).
@@ -10627,7 +10850,7 @@ exec(_code)
         "stderr".to_string(),
         Value::Str(String::from_utf8_lossy(&output.stderr).to_string()),
     );
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 fn python_eval_builtin(expression: &str) -> Result<Value, String> {
@@ -10728,7 +10951,7 @@ fn python_run_file_builtin(path: &str) -> Result<Value, String> {
         "stderr".to_string(),
         Value::Str(String::from_utf8_lossy(&output.stderr).to_string()),
     );
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 fn python_prefixed_call_builtin(
@@ -10748,7 +10971,7 @@ fn python_prefixed_call_builtin(
     for (k, v) in named {
         named_map.insert(k.clone(), v.clone());
     }
-    let kwargs_json = serde_json::to_string(&value_to_json(&Value::Dict(named_map)))
+    let kwargs_json = serde_json::to_string(&value_to_json(&Value::Dict(named_map.into())))
         .map_err(|e| format!("py.{target} failed to serialize kwargs: {e}"))?;
 
     let script = r#"
@@ -10873,7 +11096,7 @@ fn os_environ_builtin() -> Value {
     for (k, v) in env::vars() {
         out.insert(k, Value::Str(v));
     }
-    Value::Dict(out)
+    Value::Dict(out.into())
 }
 
 fn file_read_text_builtin(path: &str) -> Result<Value, String> {
@@ -11200,7 +11423,7 @@ fn counter_builtin(list: &Value) -> Result<Value, String> {
             *n += 1;
         }
     }
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 /// Write a log line `[LEVEL] message` to stderr.
@@ -11222,7 +11445,7 @@ fn toml_to_value(v: &toml::Value) -> Value {
             for (k, v) in t {
                 m.insert(k.clone(), toml_to_value(v));
             }
-            Value::Dict(m)
+            Value::Dict(m.into())
         }
     }
 }
@@ -12198,7 +12421,7 @@ fn json_to_value(value: JsonValue) -> Value {
             for (k, v) in map {
                 out.insert(k, json_to_value(v));
             }
-            Value::Dict(out)
+            Value::Dict(out.into())
         }
     }
 }
@@ -12250,7 +12473,7 @@ fn ws_connect_builtin(url: &str) -> Result<Value, String> {
     let mut out = HashMap::new();
     out.insert("ok".to_string(), Value::Bool(true));
     out.insert("socket_id".to_string(), Value::Int(socket_id));
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 fn ws_send_text_builtin(socket_id: i64, text: &str) -> Result<Value, String> {
@@ -12268,7 +12491,7 @@ fn ws_send_text_builtin(socket_id: i64, text: &str) -> Result<Value, String> {
     let mut out = HashMap::new();
     out.insert("ok".to_string(), Value::Bool(true));
     out.insert("socket_id".to_string(), Value::Int(socket_id));
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 fn set_ws_read_timeout(socket: &mut WsClient, timeout: Option<Duration>) -> Result<(), String> {
@@ -12306,7 +12529,7 @@ fn ws_recv_text_builtin(socket_id: i64) -> Result<Value, String> {
                 out.insert("ok".to_string(), Value::Bool(true));
                 out.insert("socket_id".to_string(), Value::Int(socket_id));
                 out.insert("text".to_string(), Value::Str(text.to_string()));
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             WsMessage::Binary(data) => {
                 let mut out = HashMap::new();
@@ -12316,7 +12539,7 @@ fn ws_recv_text_builtin(socket_id: i64) -> Result<Value, String> {
                     "text".to_string(),
                     Value::Str(String::from_utf8_lossy(&data).to_string()),
                 );
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             WsMessage::Ping(payload) => {
                 socket
@@ -12333,7 +12556,7 @@ fn ws_recv_text_builtin(socket_id: i64) -> Result<Value, String> {
                     out.insert("code".to_string(), Value::Int(u16::from(f.code) as i64));
                     out.insert("reason".to_string(), Value::Str(f.reason.to_string()));
                 }
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             WsMessage::Frame(_) => {}
         }
@@ -12365,7 +12588,7 @@ fn ws_recv_text_timeout_builtin(socket_id: i64, timeout_seconds: f64) -> Result<
                 out.insert("ok".to_string(), Value::Bool(false));
                 out.insert("socket_id".to_string(), Value::Int(socket_id));
                 out.insert("timeout".to_string(), Value::Bool(true));
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             Err(tungstenite::Error::ConnectionClosed)
             | Err(tungstenite::Error::AlreadyClosed) => {
@@ -12373,7 +12596,7 @@ fn ws_recv_text_timeout_builtin(socket_id: i64, timeout_seconds: f64) -> Result<
                 out.insert("ok".to_string(), Value::Bool(false));
                 out.insert("socket_id".to_string(), Value::Int(socket_id));
                 out.insert("closed".to_string(), Value::Bool(true));
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             Err(err) => {
                 let msg = err.to_string().to_lowercase();
@@ -12382,7 +12605,7 @@ fn ws_recv_text_timeout_builtin(socket_id: i64, timeout_seconds: f64) -> Result<
                     out.insert("ok".to_string(), Value::Bool(false));
                     out.insert("socket_id".to_string(), Value::Int(socket_id));
                     out.insert("closed".to_string(), Value::Bool(true));
-                    return Ok(Value::Dict(out));
+                    return Ok(Value::Dict(out.into()));
                 }
                 return Err(format!("ws_recv_text_timeout failed: {err}"));
             }
@@ -12394,7 +12617,7 @@ fn ws_recv_text_timeout_builtin(socket_id: i64, timeout_seconds: f64) -> Result<
                 out.insert("ok".to_string(), Value::Bool(true));
                 out.insert("socket_id".to_string(), Value::Int(socket_id));
                 out.insert("text".to_string(), Value::Str(text.to_string()));
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             WsMessage::Binary(data) => {
                 let mut out = HashMap::new();
@@ -12404,7 +12627,7 @@ fn ws_recv_text_timeout_builtin(socket_id: i64, timeout_seconds: f64) -> Result<
                     "text".to_string(),
                     Value::Str(String::from_utf8_lossy(&data).to_string()),
                 );
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             WsMessage::Ping(payload) => {
                 socket
@@ -12421,7 +12644,7 @@ fn ws_recv_text_timeout_builtin(socket_id: i64, timeout_seconds: f64) -> Result<
                     out.insert("code".to_string(), Value::Int(u16::from(f.code) as i64));
                     out.insert("reason".to_string(), Value::Str(f.reason.to_string()));
                 }
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(out.into()));
             }
             WsMessage::Frame(_) => {}
         }
@@ -12442,7 +12665,7 @@ fn ws_close_builtin(socket_id: i64) -> Result<Value, String> {
     let mut out = HashMap::new();
     out.insert("ok".to_string(), Value::Bool(true));
     out.insert("socket_id".to_string(), Value::Int(socket_id));
-    Ok(Value::Dict(out))
+    Ok(Value::Dict(out.into()))
 }
 
 fn value_to_json(value: &Value) -> JsonValue {
@@ -12503,8 +12726,8 @@ fn http_response_value(status: i64, body: String, headers: HashMap<String, Value
     out.insert("ok".to_string(), Value::Bool((200..300).contains(&status)));
     out.insert("status".to_string(), Value::Int(status));
     out.insert("body".to_string(), Value::Str(body));
-    out.insert("headers".to_string(), Value::Dict(headers));
-    Value::Dict(out)
+    out.insert("headers".to_string(), Value::Dict(headers.into()));
+    Value::Dict(out.into())
 }
 
 /// Collect response headers into an Indent dict (lowercased names → values).
@@ -12709,7 +12932,7 @@ fn dict_response(status: i64, body: &str, ct: &str) -> Value {
     m.insert("status".to_string(), Value::Int(status));
     m.insert("body".to_string(), Value::Str(body.to_string()));
     m.insert("content_type".to_string(), Value::Str(ct.to_string()));
-    Value::Dict(m)
+    Value::Dict(m.into())
 }
 
 fn http_status_text(code: i64) -> &'static str {
@@ -12807,10 +13030,10 @@ fn parse_http_request(raw: &str) -> Value {
     let mut m = HashMap::new();
     m.insert("method".to_string(), Value::Str(method));
     m.insert("path".to_string(), Value::Str(path));
-    m.insert("query".to_string(), Value::Dict(query));
-    m.insert("headers".to_string(), Value::Dict(headers));
+    m.insert("query".to_string(), Value::Dict(query.into()));
+    m.insert("headers".to_string(), Value::Dict(headers.into()));
     m.insert("body".to_string(), Value::Str(body.trim_end().to_string()));
-    Value::Dict(m)
+    Value::Dict(m.into())
 }
 
 /// Write an HTTP response. `resp` is either a string (→ 200 text/html body) or
@@ -13448,7 +13671,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                 let value = eval_ast(v_expr, ctx)?;
                 out.insert(key, value);
             }
-            Ok(Value::Dict(out))
+            Ok(Value::Dict(out.into()))
         }
         Expr::Var(parts) => resolve_var_chain(parts, ctx),
         Expr::Index { target, index } => {
@@ -13675,7 +13898,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                         }
                         ctx.pop_frame();
                     }
-                    Ok(Value::Dict(out))
+                    Ok(Value::Dict(out.into()))
                 }
                 _ => Err("Unknown comprehension kind".to_string()),
             }
@@ -13687,7 +13910,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             lambda_obj.insert("__lambda_params__".to_string(), Value::List(params.iter().map(|p| Value::Str(p.clone())).collect()));
             lambda_obj.insert("__lambda_body__".to_string(), Value::Str(format!("{:?}", body)));
             // For now, store as dict representation — full callable lambda needs runtime closure capture
-            Ok(Value::Dict(lambda_obj))
+            Ok(Value::Dict(lambda_obj.into()))
         }
         Expr::Ternary { cond, true_expr, false_expr } => {
             let cond_val = eval_ast(cond, ctx)?;

@@ -1,0 +1,122 @@
+#! dict_storage.ind — dictionaries of every size.
+#!
+#! A dict is now two representations behind one API: up to eight keys live in one
+#! vector and are found by scanning, past that it is a hash map. These assertions
+#! cross that threshold in both directions and then copy the dicts around, because
+#! a dict that changed representation on the way through a copy would lose or
+#! duplicate a key rather than fail loudly.
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check cond label
+    if not cond
+        fail label
+    say "  ok: " + label
+
+fun check_eq got expected label
+    var ok = got == expected
+    if not ok
+        var msg = label + ": expected '" + expected + "' got '" + got + "'"
+        fail msg
+    say "  ok: " + label
+
+#! ---- 1. an empty dict ----
+var e dynamic = {}
+check (len(e) == 0) "an empty dict has no keys"
+e["a"] is 1
+check (len(e) == 1) "a key can be added to an empty dict"
+check (e["a"] == 1) "and read back"
+
+#! ---- 2. a small dict: one vector, scanned ----
+var d dynamic = {"one": 1, "two": 2, "three": 3}
+check (len(d) == 3) "a three-key dict has three keys"
+check (d["two"] == 2) "a key in the middle reads"
+check (has_key(d, "three")) "has_key finds the last key"
+check (not has_key(d, "four")) "has_key rejects a key that is not there"
+d["two"] is 22
+check (len(d) == 3) "overwriting a key does not add one"
+check (d["two"] == 22) "and the value is the new one"
+d["four"] is 4
+check (len(d) == 4) "adding a key grows the dict"
+check (d["four"] == 4) "and the new key reads"
+
+#! ---- 3. the threshold: 7, 8, 9 and 12 keys ----
+#! Eight keys is the last small dict; nine promotes to a hash map. Every key has
+#! to survive that, and every key has to stay readable afterwards.
+var grown dynamic = {}
+var n int = 0
+repeat 12
+    grown["k" + string(n)] is n * 10
+    n is n + 1
+check (len(grown) == 12) "twelve keys are twelve keys"
+check (grown["k0"] == 0) "the first key of a promoted dict reads"
+check (grown["k7"] == 70) "the last key before promotion reads"
+check (grown["k8"] == 80) "the first key after promotion reads"
+check (grown["k11"] == 110) "the last key reads"
+check (not has_key(grown, "k12")) "a key that was never added is not there"
+var names = keys(grown)
+check (len(names) == 12) "keys() lists every key"
+check_eq (string(names[0])) "k0" "keys() starts at the first key"
+check_eq (string(names[11])) "k9" "and is sorted, so the last one is k9"
+var vals = values(grown)
+check (len(vals) == 12) "values() lists every value"
+
+#! ---- 4. overwriting after promotion, and no growth from it ----
+grown["k8"] is 800
+check (len(grown) == 12) "overwriting a promoted key does not add one"
+check (grown["k8"] == 800) "and the new value is the one read"
+grown["k0"] is 1
+check (len(grown) == 12) "and neither does overwriting the first key"
+
+#! ---- 5. merge, equality and membership ----
+var left dynamic = {"a": 1, "b": 2}
+var right dynamic = {"b": 20, "c": 30}
+var merged dynamic = left + right
+check (len(merged) == 3) "a merge has the union of the keys"
+check (merged["b"] == 20) "the right-hand side wins a shared key"
+check (merged["c"] == 30) "and the new key is there"
+check (len(left) == 2) "the left-hand dict was not changed"
+check ("a" in left) "in finds a key"
+check (not ("c" in left)) "in rejects a key that is not there"
+var same = left == {"a": 1, "b": 2}
+check (same) "equal dicts compare equal"
+var differs = left == {"a": 1, "b": 3}
+check (not differs) "a different value is not equal"
+
+#! ---- 6. a dict is a value: a copy does not write back ----
+fun touch target
+    target["a"] is 999
+    give target
+
+var copy dynamic = touch(left)
+check (copy["a"] == 999) "the callee's own dict changed"
+check (left["a"] == 1) "and the caller's did not"
+
+#! ---- 7. both sizes across a call boundary, in a compiled loop ----
+#! A small dict and a promoted one both cross the argument boundary and come back
+#! through the frame hand-over, once per iteration.
+fun read_one source
+    if has_key(source, "x")
+        give source["x"]
+    give source["k8"]
+
+var small_seen int = 0
+var large_seen int = 0
+var small dynamic = {"x": 1}
+var i int = 0
+repeat 20
+    small_seen is small_seen + read_one(small)
+    large_seen is large_seen + read_one(grown)
+    i is i + 1
+check (small_seen == 20) "a small dict survives twenty crossings"
+check (large_seen == 20 * 800) "a promoted dict survives twenty crossings"
+check (len(grown) == 12) "and kept its key count"
+
+#! ---- 8. nested containers ----
+var nested dynamic = {"list": [1, 2, 3], "dict": {"inner": "value"}}
+check (len(nested["list"]) == 3) "a list inside a dict keeps its items"
+check_eq (string(nested["dict"]["inner"])) "value" "a dict inside a dict reads"
+
+say "dict_storage: all checks passed"
