@@ -698,13 +698,84 @@ struct ModuleInstance {
     callables: Map<String, Callable>,
 }
 
+/// A list's elements, shared by every binding that holds them.
+///
+/// Reading a list variable used to deep-copy every element. `len(big)` on a
+/// 20 000-element list cost 1.1 MB of copying *per call*, which made read-only work
+/// on a big collection O(n) per use — `bench_container_reads` measured the compiled
+/// path 1700x slower than the tree-walker on exactly that line, because the VM's
+/// `LoadSlot` clones the value it reads. `for x in xs` cloned `xs` too.
+///
+/// The `Arc` turns a read into a refcount bump. Writes go through `Arc::make_mut`,
+/// which copies only when the buffer really is shared: the pass-by-value model the
+/// language already had, deferred to the first write instead of paid on every read.
+/// `DerefMut` does that automatically, so a site that mutates a list it owns pays
+/// nothing, and a site that mutates one it shares keeps its own copy — which is the
+/// same result the old code got by cloning eagerly, only later.
+#[derive(Debug, Clone, Default)]
+struct SharedList(Arc<Vec<Value>>);
+
+impl SharedList {
+    /// The elements themselves, for a caller that needs to own them — taking them out
+    /// of the `Arc` when nothing else holds it, and copying only when something does.
+    fn into_vec(self) -> Vec<Value> {
+        match Arc::try_unwrap(self.0) {
+            Ok(vec) => vec,
+            Err(shared) => (*shared).clone(),
+        }
+    }
+}
+
+impl From<Vec<Value>> for SharedList {
+    fn from(vec: Vec<Value>) -> Self {
+        Self(Arc::new(vec))
+    }
+}
+
+impl std::ops::Deref for SharedList {
+    type Target = Vec<Value>;
+    fn deref(&self) -> &Vec<Value> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SharedList {
+    fn deref_mut(&mut self) -> &mut Vec<Value> {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+/// Iterating a borrowed shared list is free — the elements are already in one buffer
+/// and nothing is moved out, so this is the shape to prefer.
+impl<'a> IntoIterator for &'a SharedList {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// Iterating an owned one has to hand the elements out by value, so it costs a copy
+/// when the buffer is still shared. That is the same result the old code got by
+/// cloning eagerly; it is just no longer paid when the caller only reads.
+impl IntoIterator for SharedList {
+    type Item = Value;
+    type IntoIter = std::vec::IntoIter<Value>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
     Str(String),
-    List(Vec<Value>),
+    /// The shared list. Written as `Value::List(v)` everywhere, through the
+    /// constructor below: only *patterns* have to know the elements are behind an
+    /// `Arc`, and keeping the two apart is what let this change be mechanical.
+    ListShared(SharedList),
     Set(Vec<Value>),  // ordered set — unique values, insertion order
     Dict(SmallDict),
     /// Class instance. The two parts are a pointer to the class's shared
@@ -723,6 +794,21 @@ enum Value {
     Func(String),
     Module(Arc<ModuleInstance>),
     Empty,
+}
+
+impl Value {
+    /// Build a list from its elements.
+    ///
+    /// Named `List` because that is what every call site already said. The variant
+    /// itself is `ListShared`, so a *pattern* has to be written differently, which is
+    /// the point: a pattern has to deal with the shared representation, and a
+    /// construction should not have to. Conversions that were mechanical — every
+    /// `Value::List(v)` stayed as it was — are the ones the compiler cannot check for
+    /// you, and this is one fewer of them.
+    #[allow(non_snake_case)]
+    fn List(elements: Vec<Value>) -> Value {
+        Value::ListShared(elements.into())
+    }
 }
 
 fn default_color_vars() -> Map<String, Value> {
@@ -999,7 +1085,7 @@ impl fmt::Display for Value {
             }
             Value::Bool(v) => write!(f, "{}", if *v { "TRUE" } else { "FALSE" }),
             Value::Str(v) => write!(f, "{v}"),
-            Value::List(items) => {
+            Value::ListShared(items) => {
                 let joined = items
                     .iter()
                     .map(|x| format!("{x}"))
@@ -1053,7 +1139,7 @@ impl Value {
             Value::Int(v) => *v != 0,
             Value::Float(v) => *v != 0.0,
             Value::Str(v) => !v.is_empty(),
-            Value::List(v) => !v.is_empty(),
+            Value::ListShared(v) => !v.is_empty(),
             Value::Set(v) => !v.is_empty(),
             Value::Dict(v) => !v.is_empty(),
             Value::Func(_) => true,
@@ -1078,7 +1164,7 @@ impl Value {
             Value::Float(_) => "float",
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
-            Value::List(_) => "list",
+            Value::ListShared(_) => "list",
             Value::Set(_) => "group",
             Value::Dict(_) => "dict",
             Value::Func(_) => "function",
@@ -1140,7 +1226,7 @@ fn is_missing_value(value: &Value) -> bool {
     match value {
         Value::Empty => true,
         Value::Str(v) => v.is_empty(),
-        Value::List(v) => v.is_empty(),
+        Value::ListShared(v) => v.is_empty(),
         Value::Set(v) => v.is_empty(),
         Value::Dict(v) => v.is_empty(),
         _ => false,
@@ -1217,13 +1303,16 @@ fn iterable_items_owned(value: Value) -> Option<Vec<Value>> {
 /// quietly succeed where the tree-walker raises.
 fn iterable_items_owned_typed(value: Value, generators: bool) -> Option<Vec<Value>> {
     match value {
-        Value::List(v) => Some(v),
+        // `into_vec` moves the buffer out when nothing else holds it, so a loop over
+        // a list the caller owns still does not copy — but a shared one is read, not
+        // moved away from, and that is the one case that copies.
+        Value::ListShared(v) => Some(v.into_vec()),
         Value::Set(v) => Some(v),
         Value::Dict(mut m)
             if generators && m.get("__generator__").map_or(false, |v| v.to_bool()) =>
         {
             match m.remove("__gen_values__") {
-                Some(Value::List(v)) => Some(v),
+                Some(Value::ListShared(v)) => Some(v.into_vec()),
                 _ => Some(Vec::new()),
             }
         }
@@ -1234,11 +1323,13 @@ fn iterable_items_owned_typed(value: Value, generators: bool) -> Option<Vec<Valu
 /// Convert an iterable (list, set, or generator) into its items.
 fn iterable_items(value: &Value) -> Option<Vec<Value>> {
     match value {
-        Value::List(v) => Some(v.clone()),
+        // A read of an iterable is an owned snapshot, so it copies the elements —
+        // which is exactly what the caller asked for.
+        Value::ListShared(v) => Some(v.to_vec()),
         Value::Set(v) => Some(v.clone()),
         Value::Dict(m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
             match m.get("__gen_values__") {
-                Some(Value::List(v)) => Some(v.clone()),
+                Some(Value::ListShared(v)) => Some(v.to_vec()),
                 _ => Some(Vec::new()),
             }
         }
@@ -2437,9 +2528,9 @@ fn try_inplace_list_append(
     };
 
     match ctx.take_var(name) {
-        Some(Value::List(mut list)) => {
+        Some(Value::ListShared(mut list)) => {
             match item {
-                Value::List(extra) if callee == "extend" => list.extend(extra),
+                Value::ListShared(extra) if callee == "extend" => list.extend(extra),
                 other if callee == "extend" => {
                     return Some(Err(format!(
                         "extend expects a list, got {}",
@@ -2448,7 +2539,7 @@ fn try_inplace_list_append(
                 }
                 other => list.push(other),
             }
-            ctx.set_var(name, Value::List(list));
+            ctx.set_var(name, Value::ListShared(list));
             Some(Ok(Control::None))
         }
         // Not a list (or not a variable): reproduce the builtin's own error.
@@ -2566,7 +2657,7 @@ fn try_inplace_container_concat(
         _ => return None,
     };
     // One lookup rejects the overwhelming majority of assignments here.
-    if !matches!(ctx.get_var_ref(name), Some(Value::List(_) | Value::Dict(_))) {
+    if !matches!(ctx.get_var_ref(name), Some(Value::ListShared(_) | Value::Dict(_))) {
         return None;
     }
 
@@ -2579,9 +2670,9 @@ fn try_inplace_container_concat(
     let lhs = ctx.take_var(name)?;
 
     let out = match (lhs, rhs) {
-        (Value::List(mut l), Value::List(r)) => {
+        (Value::ListShared(mut l), Value::ListShared(r)) => {
             l.extend(r);
-            Value::List(l)
+            Value::ListShared(l)
         }
         (Value::Dict(mut d), Value::Dict(r)) => {
             d.extend(r);
@@ -2601,7 +2692,7 @@ fn try_inplace_container_concat(
 /// cannot drift apart.
 fn append_items_into(list: &mut Vec<Value>, item: Value, callee: &str) -> Result<(), String> {
     match item {
-        Value::List(extra) if callee == "extend" => {
+        Value::ListShared(extra) if callee == "extend" => {
             list.extend(extra);
             Ok(())
         }
@@ -2657,11 +2748,11 @@ fn try_inplace_member_append(
     // Confirm the member really is a list before evaluating the value, so an
     // expression with side effects can never be evaluated twice.
     let holds_list = match ctx.get_var_ref(root) {
-        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::List(_))),
+        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::ListShared(_))),
         Some(Value::Object { class, fields }) => class
             .field_index
             .get(field)
-            .is_some_and(|slot| matches!(fields[*slot as usize], Value::List(_))),
+            .is_some_and(|slot| matches!(fields[*slot as usize], Value::ListShared(_))),
         _ => false,
     };
     if !holds_list {
@@ -2677,7 +2768,7 @@ fn try_inplace_member_append(
     let updated = match root_val {
         Value::Dict(mut m) => {
             let mut list = match m.remove(field) {
-                Some(Value::List(l)) => l,
+                Some(Value::ListShared(l)) => l,
                 Some(other) => {
                     m.insert(field.to_string(), other);
                     ctx.set_var(root, Value::Dict(m));
@@ -2689,11 +2780,11 @@ fn try_inplace_member_append(
                 }
             };
             if let Err(e) = append_items_into(&mut list, item, callee) {
-                m.insert(field.to_string(), Value::List(list));
+                m.insert(field.to_string(), Value::ListShared(list));
                 ctx.set_var(root, Value::Dict(m));
                 return Some(Err(e));
             }
-            m.insert(field.to_string(), Value::List(list));
+            m.insert(field.to_string(), Value::ListShared(list));
             Value::Dict(m)
         }
         Value::Object { class, mut fields } => {
@@ -2707,7 +2798,7 @@ fn try_inplace_member_append(
                     return None;
                 }
             };
-            if let Value::List(list) = &mut fields[slot] {
+            if let Value::ListShared(list) = &mut fields[slot] {
                 if let Err(e) = append_items_into(list, item, callee) {
                     ctx.set_var(root, Value::Object { class, fields });
                     return Some(Err(e));
@@ -2753,11 +2844,11 @@ fn try_inplace_member_concat(
         _ => return None,
     };
     let holds_list = match ctx.get_var_ref(root) {
-        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::List(_))),
+        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::ListShared(_))),
         Some(Value::Object { class, fields }) => class
             .field_index
             .get(field)
-            .is_some_and(|slot| matches!(fields[*slot as usize], Value::List(_))),
+            .is_some_and(|slot| matches!(fields[*slot as usize], Value::ListShared(_))),
         _ => false,
     };
     if !holds_list {
@@ -2772,7 +2863,7 @@ fn try_inplace_member_concat(
         Err(e) => return Some(Err(e)),
     };
     let extra = match rhs {
-        Value::List(r) => r,
+        Value::ListShared(r) => r,
         _ => return None,
     };
 
@@ -2780,7 +2871,7 @@ fn try_inplace_member_concat(
     let updated = match root_val {
         Value::Dict(mut m) => {
             let mut list = match m.remove(field) {
-                Some(Value::List(l)) => l,
+                Some(Value::ListShared(l)) => l,
                 Some(other) => {
                     m.insert(field.to_string(), other);
                     ctx.set_var(root, Value::Dict(m));
@@ -2792,7 +2883,7 @@ fn try_inplace_member_concat(
                 }
             };
             list.extend(extra);
-            m.insert(field.to_string(), Value::List(list));
+            m.insert(field.to_string(), Value::ListShared(list));
             Value::Dict(m)
         }
         Value::Object { class, mut fields } => {
@@ -2803,7 +2894,7 @@ fn try_inplace_member_concat(
                     return None;
                 }
             };
-            if let Value::List(list) = &mut fields[slot] {
+            if let Value::ListShared(list) = &mut fields[slot] {
                 list.extend(extra);
             }
             Value::Object { class, fields }
@@ -2954,14 +3045,14 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             let in_place_container = op == "+="
                 && !name.contains('.')
                 && is_bare_identifier(name)
-                && matches!(ctx.get_var_ref(name), Some(Value::List(_) | Value::Dict(_)));
+                && matches!(ctx.get_var_ref(name), Some(Value::ListShared(_) | Value::Dict(_)));
             let rhs = eval_value_source(value, ctx)?;
             if in_place_container {
                 if let Some(container) = ctx.take_var(name) {
                     let out = match (container, rhs) {
-                        (Value::List(mut l), Value::List(r)) => {
+                        (Value::ListShared(mut l), Value::ListShared(r)) => {
                             l.extend(r);
-                            Value::List(l)
+                            Value::ListShared(l)
                         }
                         (Value::Dict(mut d), Value::Dict(r)) => {
                             d.extend(r);
@@ -5227,9 +5318,9 @@ fn vm_concat_slot(
             values[idx] = Value::Str(buf);
             Ok(())
         }
-        (Value::List(mut list), Value::List(extra)) => {
+        (Value::ListShared(mut list), Value::ListShared(extra)) => {
             list.extend(extra);
-            values[idx] = Value::List(list);
+            values[idx] = Value::ListShared(list);
             Ok(())
         }
         (Value::Dict(mut dict), Value::Dict(extra)) => {
@@ -5640,7 +5731,7 @@ fn vm_run(
                         // assignment, done where the container lives: filling a
                         // list element by element must not copy the list per write.
                         match &mut values[*slot as usize] {
-                            Value::List(items) => {
+                            Value::ListShared(items) => {
                                 let raw = match index {
                                     Value::Int(i) => i,
                                     _ => {
@@ -5766,7 +5857,7 @@ fn vm_run(
                             _ => 0,
                         };
                         let next = match &values[*items as usize] {
-                            Value::List(list) => list.get(at).cloned(),
+                            Value::ListShared(list) => list.get(at).cloned(),
                             _ => None,
                         };
                         match next {
@@ -5785,7 +5876,7 @@ fn vm_run(
                         let item = stack[sp].clone();
                         let idx = *slot as usize;
                         match &mut values[idx] {
-                            Value::List(list) => append_items_into(list, item, callee)?,
+                            Value::ListShared(list) => append_items_into(list, item, callee)?,
                             // Not a list: `try_inplace_list_append` reports the
                             // error the builtin itself would have produced.
                             other => {
@@ -6770,7 +6861,7 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
 
 fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static str> {
     match receiver {
-        Value::List(_) => match method {
+        Value::ListShared(_) => match method {
             "append" | "push" => Some("append"),
             "extend" | "concat" => Some("extend"),
             "insert" => Some("insert"),
@@ -7280,7 +7371,7 @@ fn resolve_member_access_ref(target: &Value, field: &str) -> Result<Value, Strin
                 Err(format!("Module has no attribute '{field}'"))
             }
         }
-        Value::List(items) => {
+        Value::ListShared(items) => {
             if field == "length" || field == "len" {
                 Ok(Value::Int(items.len() as i64))
             } else if field == "first" {
@@ -7751,7 +7842,7 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
-        (Value::List(x), Value::List(y)) => {
+        (Value::ListShared(x), Value::ListShared(y)) => {
             let n = x.len().min(y.len());
             for i in 0..n {
                 let ord = compare_values(&x[i], &y[i]);
@@ -7870,7 +7961,7 @@ fn color_builtin(name: &str, positional: &[Value]) -> Result<Value, String> {
                             .ok_or_else(|| format!("style: unknown style '{s}'"))?;
                         codes.push(c);
                     }
-                    Value::List(items) => {
+                    Value::ListShared(items) => {
                         for it in items {
                             if let Value::Str(s) = it {
                                 let c = style_code(s)
@@ -7903,7 +7994,7 @@ fn color_builtin(name: &str, positional: &[Value]) -> Result<Value, String> {
             let mut colors: Vec<(u8, u8, u8)> = Vec::new();
             for arg in &positional[1..] {
                 match arg {
-                    Value::List(items) => {
+                    Value::ListShared(items) => {
                         for it in items {
                             colors.push(resolve(it)?);
                         }
@@ -7945,7 +8036,7 @@ fn color_builtin(name: &str, positional: &[Value]) -> Result<Value, String> {
                         styles.push(style_code(s).ok_or_else(|| format!("style: unknown style '{s}'"))?);
                     }
                 }
-                Value::List(items) => {
+                Value::ListShared(items) => {
                     for it in items {
                         if let Value::Str(s) = it {
                             if !s.is_empty() {
@@ -8210,7 +8301,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let out = match &positional[0] {
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
-                Value::List(v) => Value::Int(v.len() as i64),
+                Value::ListShared(v) => Value::Int(v.len() as i64),
                 Value::Set(v) => Value::Int(v.len() as i64),
                 Value::Dict(v) => Value::Int(v.len() as i64),
                 _ => return Some(Err(format!("len expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
@@ -8225,7 +8316,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("group expects exactly 1 argument: a list of values".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.to_vec(),
                 Value::Set(v) => v.clone(),
                 _ => return Some(Err(format!("group expects a list, got {}", positional[0].type_name()))),
             };
@@ -8246,7 +8337,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("set (deprecated alias of group) expects exactly 1 argument: a list of values".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.to_vec(),
                 Value::Set(v) => v.clone(),  // set of set = dedup again
                 _ => return Some(Err(format!("set expects a list, got {}", positional[0].type_name()))),
             };
@@ -8364,13 +8455,13 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let (items, sep) = if positional.len() == 1 {
                 match &positional[0] {
-                    Value::List(v) => (v.clone(), String::new()),
+                    Value::ListShared(v) => (v.clone(), String::new()),
                     _ => return Some(Err(format!("join expects a list, got {}", positional[0].type_name()))),
                 }
             } else {
                 match (&positional[0], &positional[1]) {
-                    (Value::List(v), sep_val) => (v.clone(), sep_val.to_string()),
-                    (sep_val, Value::List(v)) => (v.clone(), sep_val.to_string()),
+                    (Value::ListShared(v), sep_val) => (v.clone(), sep_val.to_string()),
+                    (sep_val, Value::ListShared(v)) => (v.clone(), sep_val.to_string()),
                     _ => return Some(Err(format!("join expects a list and a separator, got {} and {}", positional[0].type_name(), positional[1].type_name()))),
                 }
             };
@@ -8647,7 +8738,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("sort expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err(format!("sort expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -8676,7 +8767,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 // e.g. [similarity, item] pairs sort by their score.
                 let mut sorted = items.clone();
                 sorted.sort_by(|a, b| compare_values(a, b));
-                Some(Ok(Value::List(sorted)))
+                Some(Ok(Value::ListShared(sorted)))
             }
         }
         "reverse" => {
@@ -8684,8 +8775,8 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("reverse expects exactly 1 argument (list or string)".to_string()));
             }
             match &positional[0] {
-                Value::List(v) => {
-                    let mut out = v.clone();
+                Value::ListShared(v) => {
+                    let mut out = v.to_vec();
                     out.reverse();
                     Some(Ok(Value::List(out)))
                 }
@@ -8740,7 +8831,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("sum expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -8784,7 +8875,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("min expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("min expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -8831,7 +8922,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("max expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("max expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -8878,7 +8969,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("any expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("any expects a list, got {}", positional[0].type_name()))),
             };
             Some(Ok(Value::Bool(items.iter().any(|v| v.to_bool()))))
@@ -8888,7 +8979,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("all expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("all expects a list, got {}", positional[0].type_name()))),
             };
             Some(Ok(Value::Bool(items.iter().all(|v| v.to_bool()))))
@@ -8901,7 +8992,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             match &positional[0] {
-                Value::List(items) => {
+                Value::ListShared(items) => {
                     let count = items
                         .iter()
                         .filter(|v| eq_values(v, &positional[1]))
@@ -8946,7 +9037,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 ));
             }
             let mut out = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.to_vec(),
                 _ => return Some(Err(format!("append expects a list, got {}", positional[0].type_name()))),
             };
             out.push(positional[1].clone());
@@ -8959,15 +9050,15 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 ));
             }
             let mut out = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err(format!("extend expects a list, got {}", positional[0].type_name()))),
             };
             let extra = match &positional[1] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v.to_vec(),
                 _ => return Some(Err(format!("extend expects a list, got {}", positional[1].type_name()))),
             };
             out.extend(extra.clone());
-            Some(Ok(Value::List(out)))
+            Some(Ok(Value::ListShared(out)))
         }
         "insert" => {
             if positional.len() != 3 {
@@ -8977,7 +9068,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let mut out = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err(format!("insert expects a list, got {}", positional[0].type_name()))),
             };
             let raw_index = match &positional[1] {
@@ -8998,7 +9089,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             };
 
             out.insert(idx, positional[2].clone());
-            Some(Ok(Value::List(out)))
+            Some(Ok(Value::ListShared(out)))
         }
         "pop" => {
             if positional.is_empty() || positional.len() > 2 {
@@ -9008,7 +9099,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let mut out = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err(format!("pop expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -9033,7 +9124,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let item = out.remove(idx);
             let mut result = HashMap::new();
             result.insert("item".to_string(), item);
-            result.insert("list".to_string(), Value::List(out));
+            result.insert("list".to_string(), Value::ListShared(out));
             Some(Ok(Value::Dict(result.into())))
         }
         "unshift" => {
@@ -9041,7 +9132,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("unshift expects exactly 2 arguments: unshift(list, item)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("unshift expects a list, got {}", positional[0].type_name()))),
             };
             let mut out = Vec::with_capacity(items.len() + 1);
@@ -9054,7 +9145,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("shift expects exactly 1 argument: shift(list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("shift expects a list, got {}", positional[0].type_name()))),
             };
             if items.is_empty() {
@@ -9071,7 +9162,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let mut out = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.to_vec(),
                 _ => return Some(Err(format!("remove expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -9092,7 +9183,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let items = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("enumerate expects a list, got {}", positional[0].type_name()))),
             };
 
@@ -9117,11 +9208,11 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let left = match &positional[0] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err(format!("zip expects a list, got {}", positional[0].type_name()))),
             };
             let right = match &positional[1] {
-                Value::List(v) => v,
+                Value::ListShared(v) => v,
                 _ => return Some(Err("zip expects second argument to be list".to_string())),
             };
 
@@ -9287,7 +9378,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             match &positional[0] {
-                Value::List(_) => Some(Ok(Value::List(vec![]))),
+                Value::ListShared(_) => Some(Ok(Value::List(vec![]))),
                 Value::Set(_) => Some(Ok(Value::Set(vec![]))),
                 Value::Dict(_) => Some(Ok(Value::Dict(HashMap::new().into()))),
                 Value::Str(_) => Some(Ok(Value::Str(String::new()))),
@@ -9471,7 +9562,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             match &positional[0] {
-                Value::List(items) => {
+                Value::ListShared(items) => {
                     let idx = items
                         .iter()
                         .position(|v| eq_values(v, &positional[1]))
@@ -9944,7 +10035,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Float(_) => "float",
                 Value::Bool(_) => "boolean",
                 Value::Str(_) => "string",
-                Value::List(_) => "list",
+                Value::ListShared(_) => "list",
                 Value::Set(_) => "group",
                 Value::Dict(_) => "dict",
                 Value::Func(_) => "function",
@@ -9960,7 +10051,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err(format!("{} expects exactly 1 argument", callee)));
             }
             let matches = match callee {
-                "is_list" => matches!(positional[0], Value::List(_)),
+                "is_list" => matches!(positional[0], Value::ListShared(_)),
                 "is_dict" => matches!(positional[0], Value::Dict(_)),
                 "is_string" => matches!(positional[0], Value::Str(_)),
                 "is_int" => matches!(positional[0], Value::Int(_)),
@@ -10555,7 +10646,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("random_sample expects exactly 2 arguments (list, k)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("random_sample expects a list".to_string())),
             };
             let k = match &positional[1] {
@@ -10565,8 +10656,8 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             if k > items.len() {
                 return Some(Err("random_sample: k cannot exceed list length".to_string()));
             }
-            let shuffled = match random_shuffle_builtin(&Value::List(items)) {
-                Ok(Value::List(v)) => v,
+            let shuffled = match random_shuffle_builtin(&Value::ListShared(items)) {
+                Ok(Value::ListShared(v)) => v.into_vec(),
                 Ok(_) => return Some(Err("random_sample internal error".to_string())),
                 Err(e) => return Some(Err(e)),
             };
@@ -10727,7 +10818,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             for p in positional {
                 match p {
                     Value::Int(v) => nums.push(*v),
-                    Value::List(items) => {
+                    Value::ListShared(items) => {
                         for it in items {
                             match it {
                                 Value::Int(v) => nums.push(*v),
@@ -10749,7 +10840,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             for p in positional {
                 match p {
                     Value::Int(v) => nums.push(*v),
-                    Value::List(items) => {
+                    Value::ListShared(items) => {
                         for it in items {
                             match it {
                                 Value::Int(v) => nums.push(*v),
@@ -11286,7 +11377,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             if positional.len() != 2 {
                 return Some(Err("map expects exactly 2 arguments: map(list, function_name)".to_string()));
             }
-            let items = match &positional[0] { Value::List(v) => v.clone(), _ => return Some(Err("map expects a list".to_string())) };
+            let items = match &positional[0] { Value::ListShared(v) => v.clone(), _ => return Some(Err("map expects a list".to_string())) };
             let func_name = positional[1].to_string();
             let mut out = Vec::with_capacity(items.len());
             for item in &items {
@@ -11304,7 +11395,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             if positional.len() != 2 {
                 return Some(Err("filter expects exactly 2 arguments: filter(list, function_name)".to_string()));
             }
-            let items = match &positional[0] { Value::List(v) => v.clone(), _ => return Some(Err("filter expects a list".to_string())) };
+            let items = match &positional[0] { Value::ListShared(v) => v.clone(), _ => return Some(Err("filter expects a list".to_string())) };
             let func_name = positional[1].to_string();
             let mut out = Vec::new();
             for item in &items {
@@ -11324,7 +11415,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let mut out = Vec::new();
             for p in positional {
                 match p {
-                    Value::List(v) => out.extend(v.clone()),
+                    Value::ListShared(v) => out.extend(v.clone()),
                     _ => return Some(Err("chain: all arguments must be lists".to_string())),
                 }
             }
@@ -11336,7 +11427,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             fn flatten_rec(v: &Value, out: &mut Vec<Value>) {
                 match v {
-                    Value::List(items) => {
+                    Value::ListShared(items) => {
                         for it in items {
                             flatten_rec(it, out);
                         }
@@ -11353,7 +11444,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("chunk expects exactly 2 arguments: chunk(list, n)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("chunk expects a list".to_string())),
             };
             let n = match &positional[1] {
@@ -11370,7 +11461,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let mut lists: Vec<Vec<Value>> = Vec::new();
             for p in positional {
                 match p {
-                    Value::List(v) => lists.push(v.clone()),
+                    Value::ListShared(v) => lists.push(v.to_vec()),
                     _ => return Some(Err("product: all arguments must be lists".to_string())),
                 }
             }
@@ -11390,7 +11481,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
         }
         "permutations" => {
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("permutations expects a list".to_string())),
             };
             let k = if positional.len() == 2 {
@@ -11425,7 +11516,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
         }
         "combinations" => {
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("combinations expects a list".to_string())),
             };
             let k = match &positional[1] {
@@ -11453,7 +11544,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
         }
         "accumulate" => {
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("accumulate expects a list".to_string())),
             };
             if items.is_empty() {
@@ -11484,7 +11575,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
         }
         "cycle" => {
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("cycle expects a list".to_string())),
             };
             let n = match &positional[1] {
@@ -11514,7 +11605,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let pred = positional[0].to_string();
             let items = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("takewhile expects a list".to_string())),
             };
             let mut out = Vec::new();
@@ -11533,7 +11624,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let pred = positional[0].to_string();
             let items = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("dropwhile expects a list".to_string())),
             };
             let mut out = Vec::new();
@@ -11555,7 +11646,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("unique expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("unique expects a list".to_string())),
             };
             let mut out: Vec<Value> = Vec::new();
@@ -11571,7 +11662,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("partition expects exactly 2 arguments: partition(list, predicate)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("partition expects a list".to_string())),
             };
             let pred = positional[1].to_string();
@@ -11591,7 +11682,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("group_by expects exactly 2 arguments: group_by(list, keyfn)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("group_by expects a list".to_string())),
             };
             let keyfn = positional[1].to_string();
@@ -11614,7 +11705,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err(format!("{callee} expects exactly 2 arguments: {callee}(list, keyfn)")));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err(format!("{callee} expects a list"))),
             };
             if items.is_empty() {
@@ -11648,7 +11739,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let fn_name = positional[0].to_string();
             let items = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("reduce expects a list".to_string())),
             };
             let mut acc: Value;
@@ -11677,11 +11768,11 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("zip_longest expects 2 or 3 arguments: zip_longest(a, b, fill?)".to_string()));
             }
             let a = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("zip_longest expects lists".to_string())),
             };
             let b = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("zip_longest expects lists".to_string())),
             };
             let fill = positional.get(2).cloned().unwrap_or(Value::Empty);
@@ -11699,7 +11790,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("pairwise expects exactly 1 argument (list)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("pairwise expects a list".to_string())),
             };
             Some(Ok(pairwise_builtin(&items)))
@@ -11710,7 +11801,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let pred = positional[0].to_string();
             let items = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("filterfalse expects a list".to_string())),
             };
             let mut out = Vec::new();
@@ -11728,11 +11819,11 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("compress expects exactly 2 arguments: compress(list, selectors)".to_string()));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("compress expects a list".to_string())),
             };
             let selectors = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("compress: selectors must be a list".to_string())),
             };
             let mut out = Vec::new();
@@ -11749,13 +11840,13 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let fn_name = positional[0].to_string();
             let rows = match &positional[1] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err("starmap expects a list".to_string())),
             };
             let mut out = Vec::new();
             for row in &rows {
                 let args = match row {
-                    Value::List(v) => v.clone(),
+                    Value::ListShared(v) => v.clone(),
                     _ => return Some(Err("starmap: each element must be a list of args".to_string())),
                 };
                 match invoke_builtin(&fn_name, &args) {
@@ -11771,7 +11862,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err(format!("{callee} expects exactly 2 arguments: {callee}(list, n)")));
             }
             let items = match &positional[0] {
-                Value::List(v) => v.clone(),
+                Value::ListShared(v) => v.clone(),
                 _ => return Some(Err(format!("{callee} expects a list"))),
             };
             let n = match &positional[1] {
@@ -12467,13 +12558,13 @@ fn parse_csv_line(line: &str) -> Vec<Value> {
 /// Fields containing commas, quotes, or newlines are quoted/escaped.
 fn csv_write_builtin(path: &str, rows: &Value) -> Result<Value, String> {
     let rows = match rows {
-        Value::List(rows) => rows,
+        Value::ListShared(rows) => rows,
         _ => return Err("csv_write expects a list of rows (list of lists)".to_string()),
     };
     let mut content = String::new();
     for row in rows {
         let row_items = match row {
-            Value::List(items) => items.clone(),
+            Value::ListShared(items) => items.clone(),
             _ => return Err("csv_write expects each row to be a list".to_string()),
         };
         let fields: Vec<String> = row_items
@@ -12684,7 +12775,7 @@ fn error_message_builtin(err: &str) -> Result<Value, String> {
 /// Count occurrences of each element in a list → dict `{element: count}`.
 fn counter_builtin(list: &Value) -> Result<Value, String> {
     let items = match list {
-        Value::List(v) => v,
+        Value::ListShared(v) => v,
         _ => return Err("counter expects a list".to_string()),
     };
     let mut out = HashMap::new();
@@ -12732,7 +12823,7 @@ fn value_to_toml(v: &Value) -> Option<toml::Value> {
         Value::Float(f) => Some(toml::Value::Float(*f)),
         Value::Bool(b) => Some(toml::Value::Boolean(*b)),
         Value::Str(s) => Some(toml::Value::String(s.clone())),
-        Value::List(items) => Some(toml::Value::Array(
+        Value::ListShared(items) => Some(toml::Value::Array(
             items.iter().filter_map(value_to_toml).collect(),
         )),
         Value::Set(items) => Some(toml::Value::Array(
@@ -12977,7 +13068,7 @@ fn task_result_builtin(id: i64) -> Result<Value, String> {
 /// Wait for a list of task ids, return their results in order.
 fn task_wait_all_builtin(ids: &Value) -> Result<Value, String> {
     let ids = match ids {
-        Value::List(v) => v,
+        Value::ListShared(v) => v,
         _ => return Err("task_wait_all expects a list of task ids".to_string()),
     };
     let mut results = Vec::new();
@@ -13000,13 +13091,13 @@ fn parallel_builtin(
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
     let lists = match arglists {
-        Value::List(v) => v,
+        Value::ListShared(v) => v,
         _ => return Err("parallel expects a list of argument-lists".to_string()),
     };
     let mut ids = Vec::new();
     for item in lists {
         let args = match item {
-            Value::List(a) => a.clone(),
+            Value::ListShared(a) => a.clone(),
             _ => {
                 return Err("parallel expects each item to be a list of arguments".to_string())
             }
@@ -13093,7 +13184,7 @@ fn gather_builtin(ids: &[Value]) -> Result<Value, String> {
     for v in ids {
         match v {
             Value::Int(id) => results.push(task_wait_builtin(*id)?),
-            Value::List(l) => {
+            Value::ListShared(l) => {
                 for item in l {
                     if let Value::Int(id) = item {
                         results.push(task_wait_builtin(*id)?);
@@ -13194,19 +13285,19 @@ impl Coro {
 /// `await` nested inside `if`/`repeat` blocks still blocks (thread-backed).
 fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
     let items = match fn_list {
-        Value::List(v) => v,
+        Value::ListShared(v) => v,
         _ => return Err("coop expects a list of [fn_name, [args]]".to_string()),
     };
 
     let mut coros: Vec<Coro> = Vec::new();
     for item in items {
         let pair = match item {
-            Value::List(p) => p,
+            Value::ListShared(p) => p,
             _ => return Err("coop expects each item to be [fn_name, [args]]".to_string()),
         };
         let name = pair[0].to_string();
         let args: Vec<Value> = match pair.get(1) {
-            Some(Value::List(a)) => a.clone(),
+            Some(Value::ListShared(a)) => a.to_vec(),
             _ => vec![],
         };
         let f = ctx
@@ -13569,7 +13660,7 @@ fn random_int_builtin(a: i64, b: i64) -> Result<Value, String> {
 
 fn random_choice_builtin(value: &Value) -> Result<Value, String> {
     match value {
-        Value::List(items) => {
+        Value::ListShared(items) => {
             if items.is_empty() {
                 return Err("random_choice requires a non-empty list".to_string());
             }
@@ -13582,7 +13673,7 @@ fn random_choice_builtin(value: &Value) -> Result<Value, String> {
 
 fn random_shuffle_builtin(value: &Value) -> Result<Value, String> {
     match value {
-        Value::List(items) => {
+        Value::ListShared(items) => {
             let mut out = items.clone();
             if out.len() > 1 {
                 for i in (1..out.len()).rev() {
@@ -13590,7 +13681,7 @@ fn random_shuffle_builtin(value: &Value) -> Result<Value, String> {
                     out.swap(i, j);
                 }
             }
-            Ok(Value::List(out))
+            Ok(Value::ListShared(out))
         }
         _ => Err(format!("random_shuffle expects a list, got {}", value.type_name())),
     }
@@ -13945,7 +14036,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::Float(v) => JsonValue::from(*v),
         Value::Bool(v) => JsonValue::from(*v),
         Value::Str(v) => JsonValue::from(v.clone()),
-        Value::List(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
+        Value::ListShared(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::Set(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::Dict(items) => {
             let mut out = JsonMap::new();
@@ -14621,7 +14712,7 @@ fn coerce_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value,
             _ => Err(format!("Line {line}: variable '{name}' expects boolean")),
         },
         "list" => match value {
-            Value::List(_) => Ok(value),
+            Value::ListShared(_) => Ok(value),
             _ => Err(format!("Line {line}: variable '{name}' expects list")),
         },
         "dictionary" | "dict" => match value {
@@ -14692,12 +14783,12 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
             )),
         },
         "list" => match value {
-            Value::List(_) => Ok(value),
+            Value::ListShared(_) => Ok(value),
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to list")),
         },
         "group" | "set" => match value {
             Value::Set(_) => Ok(value),
-            Value::List(v) => {
+            Value::ListShared(v) => {
                 let mut seen: HashSet<String> = HashSet::new();
                 let mut unique: Vec<Value> = Vec::new();
                 for item in v {
@@ -14960,7 +15051,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     && borrowable_var(&parts[0])
                     && matches!(
                         ctx.get_var_ref(&parts[0]),
-                        Some(Value::List(_) | Value::Str(_) | Value::Dict(_))
+                        Some(Value::ListShared(_) | Value::Str(_) | Value::Dict(_))
                     );
                 if borrowable {
                     let index_val = eval_ast(index, ctx)?;
@@ -15021,7 +15112,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     && borrowable_var(&parts[0])
                     && matches!(
                         ctx.get_var_ref(&parts[0]),
-                        Some(Value::List(_) | Value::Str(_))
+                        Some(Value::ListShared(_) | Value::Str(_))
                     );
                 if borrowable {
                     if let Some(base) = ctx.get_var_ref(&parts[0]) {
@@ -15052,7 +15143,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                                 Value::Str(s) => {
                                     return Ok(Value::Int(s.chars().count() as i64))
                                 }
-                                Value::List(v) => return Ok(Value::Int(v.len() as i64)),
+                                Value::ListShared(v) => return Ok(Value::Int(v.len() as i64)),
                                 Value::Set(v) => return Ok(Value::Int(v.len() as i64)),
                                 Value::Dict(v) => return Ok(Value::Int(v.len() as i64)),
                                 _ => {} // other types: normal path reports the error
@@ -15114,7 +15205,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
         Expr::Comprehension { kind, result_expr, key_expr, item_name, iterable, condition } => {
             let iter = eval_ast(iterable, ctx)?;
             let items = match iter {
-                Value::List(v) => v,
+                Value::ListShared(v) => v.into_vec(),
                 Value::Set(v) => v,
                 _ => return Err("Comprehension iterable must be a list or set".to_string()),
             };
@@ -15421,7 +15512,7 @@ fn build_slice_indices(
 
 fn slice_builtin(container: &Value, start: Option<i64>, end: Option<i64>, step: i64) -> Result<Value, String> {
     match container {
-        Value::List(items) => {
+        Value::ListShared(items) => {
             let indices = build_slice_indices(items.len(), start, end, step)?;
             let mut out = Vec::with_capacity(indices.len());
             for idx in indices {
@@ -15448,7 +15539,7 @@ fn slice_builtin(container: &Value, start: Option<i64>, end: Option<i64>, step: 
 
 fn resolve_index(target: Value, index: Value) -> Result<Value, String> {
     match target {
-        Value::List(items) => {
+        Value::ListShared(items) => {
             let raw = match index {
                 Value::Int(i) => i,
                 _ => return Err(format!("List index must be an int, got {}: {}", index.type_name(), index)),
@@ -15492,7 +15583,7 @@ fn resolve_index(target: Value, index: Value) -> Result<Value, String> {
 /// cloned instead of the whole container.
 fn resolve_index_ref(target: &Value, index: Value) -> Result<Value, String> {
     match target {
-        Value::List(items) => {
+        Value::ListShared(items) => {
             let raw = match index {
                 Value::Int(i) => i,
                 _ => return Err(format!("List index must be an int, got {}: {}", index.type_name(), index)),
@@ -15540,7 +15631,7 @@ fn borrowable_var(name: &str) -> bool {
 
 fn assign_index_value(target: Value, index: Value, replacement: Value) -> Result<Value, String> {
     match target {
-        Value::List(mut items) => {
+        Value::ListShared(mut items) => {
             let raw = match index {
                 Value::Int(i) => i,
                 _ => return Err(format!("List index must be an int, got {}: {}", index.type_name(), index)),
@@ -15548,7 +15639,7 @@ fn assign_index_value(target: Value, index: Value, replacement: Value) -> Result
             let idx = normalize_index(items.len(), raw)
                 .ok_or_else(|| format!("List index out of range: {raw}"))?;
             items[idx] = replacement;
-            Ok(Value::List(items))
+            Ok(Value::ListShared(items))
         }
         Value::Dict(mut map) => {
             let key = match index {
@@ -15592,16 +15683,16 @@ fn assign_slice_value(
     replacement: Value,
 ) -> Result<Value, String> {
     let replacement_items = match replacement {
-        Value::List(items) => items,
+        Value::ListShared(items) => items,
         _ => return Err(format!("Slice assignment expects a list, got {}", replacement.type_name())),
     };
 
     match target {
-        Value::List(mut items) => {
+        Value::ListShared(mut items) => {
             if step == 1 {
                 let (start_idx, end_idx) = normalize_slice_window_step_one(items.len(), start, end);
                 items.splice(start_idx..end_idx, replacement_items);
-                return Ok(Value::List(items));
+                return Ok(Value::ListShared(items));
             }
 
             let indices = build_slice_indices(items.len(), start, end, step)?;
@@ -15617,7 +15708,7 @@ fn assign_slice_value(
             for (idx, value) in indices.iter().copied().zip(replacement_items.into_iter()) {
                 items[idx] = value;
             }
-            Ok(Value::List(items))
+            Ok(Value::ListShared(items))
         }
         _ => Err("Slice assignment is only supported for list values".to_string()),
     }
@@ -15737,9 +15828,12 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
             (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
             (Value::Str(x), y) => Ok(Value::Str(format!("{}{}", x, y))),
             (x, Value::Str(y)) => Ok(Value::Str(format!("{}{}", x, y))),
-            (Value::List(mut x), Value::List(y)) => {
+            (Value::ListShared(mut x), Value::ListShared(y)) => {
+                // `extend` grows the left operand, so a shared buffer copies here —
+                // which is what `+` on two lists has to do: it must not change the
+                // list it was given.
                 x.extend(y);
-                Ok(Value::List(x))
+                Ok(Value::ListShared(x))
             }
             (Value::Set(mut x), Value::Set(y)) => {
                 // Union: add y elements not already in x
@@ -15768,7 +15862,7 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
                     let count = if *n < 0 { 0 } else { *n as usize };
                     Ok(Value::Str(s.repeat(count)))
                 }
-                (Value::List(l), Value::Int(n)) | (Value::Int(n), Value::List(l)) => {
+                (Value::ListShared(l), Value::Int(n)) | (Value::Int(n), Value::ListShared(l)) => {
                     let count = if *n < 0 { 0 } else { *n as usize };
                     let mut out = Vec::with_capacity(l.len() * count);
                     for _ in 0..count {
@@ -15846,7 +15940,7 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
 
 fn contains_value(container: &Value, item: &Value) -> Result<bool, String> {
     match container {
-        Value::List(items) => Ok(items.iter().any(|v| eq_values(v, item))),
+        Value::ListShared(items) => Ok(items.iter().any(|v| eq_values(v, item))),
         Value::Set(items) => Ok(items.iter().any(|v| eq_values(v, item))),
         Value::Dict(map) => {
             let key = match item {
@@ -15938,7 +16032,7 @@ fn eq_values(a: &Value, b: &Value) -> bool {
         (Value::Float(x), Value::Int(y)) => (*x - *y as f64).abs() < f64::EPSILON,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::List(x), Value::List(y)) => {
+        (Value::ListShared(x), Value::ListShared(y)) => {
             x.len() == y.len()
                 && x
                     .iter()
@@ -15979,7 +16073,7 @@ fn is_identity_equal(a: &Value, b: &Value) -> bool {
             // Object identity: same class AND same field values
             c1.name == c2.name && eq_values(a, b)
         }
-        (Value::List(_), Value::List(_)) | (Value::Dict(_), Value::Dict(_)) => {
+        (Value::ListShared(_), Value::ListShared(_)) | (Value::Dict(_), Value::Dict(_)) => {
             // Collections: identity means same reference (pointer equality), but since
             // we don't track references, fall back to structural equality
             eq_values(a, b)
