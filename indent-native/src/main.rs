@@ -3619,6 +3619,17 @@ enum VmInstr {
     /// moved out of it, run against, and put back, so a method that assigns a
     /// field reaches the instance the variable holds.
     PlaceMethodCall { slot: u16, method: String, argc: u16 },
+    /// Pop a value and an index and store it in frame slot `slot`, in place:
+    /// `xs[i] is v` and `d["k"] is v`.
+    IndexStoreSlot { slot: u16 },
+    /// Pop a value, coerce it to the declared type, and make it frame slot
+    /// `slot`: `var x ty = value` inside a body.
+    DefVarSlot {
+        slot: u16,
+        line: usize,
+        name: String,
+        ty: String,
+    },
 }
 
 /// A compiled loop body: instructions plus the names of the frame slots they
@@ -4438,9 +4449,18 @@ fn vm_mentions_reps(text: &str) -> bool {
 /// see `vm_verify_stack` for why that has to be the source of truth.
 fn vm_compile_text(text: &str, prog: &mut VmProgram, rt: &Runtime) -> bool {
     let Ok(ast) = rt.cached_expr(text) else {
+        if std::env::var("INDENT_VM_TRACE").is_ok() {
+            eprintln!("[vm] unparsable expression: {text}");
+        }
         return false;
     };
-    vm_compile_expr(&ast, prog)
+    if !vm_compile_expr(&ast, prog) {
+        if std::env::var("INDENT_VM_TRACE").is_ok() {
+            eprintln!("[vm] refused expression: {text}");
+        }
+        return false;
+    }
+    true
 }
 
 /// Compile a statement list, recursing into `if` branches.
@@ -4512,6 +4532,57 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 let s = vm_slot(&mut prog.slots, name);
                 prog.instrs.push(VmInstr::StoreSlot(s));
             }
+            // `xs[i] is v` / `d["k"] is v` with a plain name: the container is
+            // mutated where it lives. A target that is not a bare name is left to
+            // the tree-walker.
+            Stmt::AssignIndex {
+                name,
+                index_expr,
+                value,
+                ..
+            } if is_bare_identifier(name) => {
+                let text = match value {
+                    ValueSource::Expr(text) => text,
+                    _ => return false,
+                };
+                if !vm_compile_text(text, prog, rt) {
+                    return false;
+                }
+                if !vm_compile_text(index_expr, prog, rt) {
+                    return false;
+                }
+                let slot = vm_slot(&mut prog.slots, name);
+                prog.instrs.push(VmInstr::IndexStoreSlot { slot });
+            }
+            Stmt::AssignIndex { .. } => return false,
+            // `var x ty = value` inside a body. The binding belongs to the body, so
+            // the slot is owned and shadows any outer one: it need not exist
+            // beforehand, a callee can still name it because the hand-over flushes
+            // it, and it is not written back — the tree-walker's loop frame is
+            // popped too.
+            Stmt::DefVar {
+                line,
+                name,
+                ty,
+                value,
+            } if is_bare_identifier(name) => {
+                let text = match value {
+                    ValueSource::Expr(text) => text,
+                    _ => return false,
+                };
+                if !vm_compile_text(text, prog, rt) {
+                    return false;
+                }
+                let slot = vm_slot_shadow(&mut prog.slots, name);
+                prog.owned.push(slot);
+                prog.instrs.push(VmInstr::DefVarSlot {
+                    slot,
+                    line: *line,
+                    name: name.clone(),
+                    ty: ty.clone(),
+                });
+            }
+            Stmt::DefVar { .. } => return false,
             Stmt::BareExpr { expr, .. } => {
                 if !vm_compile_text(expr, prog, rt) {
                     return false;
@@ -5067,6 +5138,63 @@ fn vm_run(
                         sp += 1;
                         ip += 1;
                     }
+                    VmInstr::IndexStoreSlot { slot } => {
+                        sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
+                        let value = stack[sp].clone();
+                        let index = stack[sp + 1].clone();
+                        // The rules and the messages of the tree-walker's indexed
+                        // assignment, done where the container lives: filling a
+                        // list element by element must not copy the list per write.
+                        match &mut values[*slot as usize] {
+                            Value::List(items) => {
+                                let raw = match index {
+                                    Value::Int(i) => i,
+                                    _ => {
+                                        return Err(format!(
+                                            "List index must be an int, got {}: {}",
+                                            index.type_name(),
+                                            index
+                                        ))
+                                    }
+                                };
+                                let idx = normalize_index(items.len(), raw)
+                                    .ok_or_else(|| format!("List index out of range: {raw}"))?;
+                                items[idx] = value;
+                            }
+                            Value::Dict(map) => {
+                                let key = match index {
+                                    Value::Str(s) => s,
+                                    _ => {
+                                        return Err(format!(
+                                            "Dictionary key must be a string, got {}: {}",
+                                            index.type_name(),
+                                            index
+                                        ))
+                                    }
+                                };
+                                map.insert(key, value);
+                            }
+                            _ => {
+                                return Err(
+                                    "Indexed assignment is only supported for list and dictionary values"
+                                        .to_string(),
+                                )
+                            }
+                        }
+                        ip += 1;
+                    }
+                    VmInstr::DefVarSlot {
+                        slot,
+                        line,
+                        name,
+                        ty,
+                    } => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let v = stack[sp].clone();
+                        // The same coercion the tree-walker's `DefVar` applies.
+                        values[*slot as usize] = coerce_type(*line, name, ty, v)?;
+                        ip += 1;
+                    }
                     VmInstr::Call { callee, argc } => {
                         let n = *argc as usize;
                         sp = sp.checked_sub(n).ok_or_else(vm_underflow)?;
@@ -5340,7 +5468,9 @@ fn vm_instr_stack_effect(instr: &VmInstr) -> (usize, usize) {
         | VmInstr::ConcatSlot(_)
         | VmInstr::CheckCount { .. }
         | VmInstr::IterPrepare { .. }
+        | VmInstr::DefVarSlot { .. }
         | VmInstr::Return { .. } => (1, 0),
+        VmInstr::IndexStoreSlot { .. } => (2, 0),
         VmInstr::Unary(_) | VmInstr::ToBool | VmInstr::MemberGet(_) | VmInstr::IndexSlot(_) => (1, 1),
         VmInstr::Jump(_) | VmInstr::JumpIfFalseKeep(_) | VmInstr::JumpIfTrueKeep(_) => (0, 0),
         VmInstr::MakeList(n) => (*n as usize, 1),
