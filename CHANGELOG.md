@@ -1,6 +1,6 @@
 # Indent Changelog
 
-## 2.4.0 — unreleased (lighter on memory, and two release channels)
+## 2.4.0 — 2026-10-16 (lighter on memory, and two release channels)
 
 ### Containers share their buffers
 
@@ -54,6 +54,42 @@ prerelease and skips the Homebrew formula, which belongs to stable:
 ```sh
 git tag v2.4.1-exp.1 && git push origin v2.4.1-exp.1
 ```
+
+The channel lives beside the binary (`$INDENT_HOME/channel`, `~/.local/share/indent`
+by default). An install with no such file — anything installed before 2.4.0 — reads
+as **stable**, and the first `--update` or `--switch-to-*` writes it. Because a
+channel belongs to an `INDENT_HOME`, the channel *inside an active nest* is the
+nest's own, not the global install's.
+
+### Copy-on-write, precisely
+
+Sharing never leaks between names — `append` still returns a new value, exactly as
+in 2.3:
+
+```sh
+var a = [1, 2]
+var b = a
+b is append b 3
+say len(a)          # 2 — a is untouched
+```
+
+The only difference is *when* the copy happens: on the first write after a value
+becomes shared, rather than on every read.
+
+### Breaking changes
+
+- **`indent --version` now prints the channel**: `indent 2.4.0 (stable)`. Anything
+  parsing the version out of that line must take the first word instead of the
+  last. Nothing else in the language or the stdlib changed incompatibly.
+
+### Upgrading
+
+- The on-disk AST cache changed format (`AST_CACHE_FORMAT` 3 → 4), so the first
+  run after upgrading re-parses and rewrites each cached program once. Later runs
+  are as fast as before, and there is nothing to clean up by hand.
+- Checksums are a hard failure when a release publishes `SHA256SUMS.txt`. The
+  oldest releases (2.1.0 and earlier) have none, so upgrading from one warns and
+  installs anyway; everything from 2.2.2 on publishes the file.
 
 ---
 

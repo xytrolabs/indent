@@ -384,7 +384,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum | sed 's|  \./|  |' > SHA256SUMS.txt
 
       # The formula generator lives in scripts/ (not inline) because a bash
       # heredoc terminator must sit at column 0, which a YAML block scalar

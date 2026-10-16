@@ -424,6 +424,14 @@ const MODULE_CACHE_MAX: usize = 500;
 /// the program — a bot spawning 10 futures a second grows this map without bound.
 /// Live tasks are never evicted; only finished ones, oldest first, and only past
 /// the cap.
+/// Track a background task so `task_status` and `wait` can find it.
+///
+/// The cap is on *finished* history: once the map is past `TASK_HISTORY_MAX` the
+/// oldest completed entries are evicted, oldest id first. Live tasks are
+/// deliberately never dropped — a program may legitimately hold more than
+/// `TASK_HISTORY_MAX` running tasks, and evicting one would lose a handle the
+/// program can still join. So a busy program's map can exceed the cap, and the
+/// ceiling that actually bounds memory is the number of concurrent live tasks.
 fn register_task(id: i64, state: TaskState) {
     let mut tasks = TASKS.lock().unwrap();
     tasks.insert(id, state);
@@ -1823,6 +1831,13 @@ impl Runtime {
     /// `Runtime::new` also builds the 11-entry colour palette, which is pure
     /// waste for the temporary runtimes that method dispatch used to create on
     /// every call and then immediately overwrite `vars` on.
+    /// A throwaway runtime used to evaluate one method body.
+    ///
+    /// The three `Arc`s below are replaced moments later by `lend_tables_to`, so
+    /// every dispatch pays three allocations that are then discarded — real but
+    /// tiny next to the tables that get handed over (see below). `Arc::default()`
+    /// is not a drop-in for them: the same fields are swapped back and forth by
+    /// `lend_tables_to`/`reclaim_tables_from`, so they are never simply overwritten.
     fn bare(module_dir: PathBuf) -> Self {
         Self {
             module_dir,
@@ -19565,7 +19580,12 @@ fn parse_checksum_for(sums: &str, asset: &str) -> Option<String> {
         let (Some(digest), Some(name)) = (parts.next(), parts.next()) else {
             continue;
         };
-        if name.trim_start_matches('*') == asset && digest.len() == 64 {
+        // `sha256sum` marks binary mode with a leading `*`, and the release
+        // workflow records every name as `./indent-...` because it hashes the
+        // output of `find . -maxdepth 1`. Neither belongs in the comparison.
+        let name = name.trim_start_matches('*');
+        let name = name.strip_prefix("./").unwrap_or(name);
+        if name == asset && digest.len() == 64 {
             return Some(digest.to_string());
         }
     }
@@ -19587,8 +19607,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 ///
 /// A mismatch is a hard error: the file exists to catch a truncated or
 /// substituted download, and "close enough" is not a thing here. A release that
-/// publishes no `SHA256SUMS.txt` only warns — releases before 2.3.0 predate it,
-/// and refusing to install those would be worse than trusting them.
+/// publishes no `SHA256SUMS.txt` only warns — the oldest releases predate it, and
+/// refusing to install those would be worse than trusting them.
 fn verify_release_checksum(
     client: &reqwest::blocking::Client,
     tag: &str,
@@ -19661,7 +19681,18 @@ fn switch_channel(channel: &str) -> Result<(), String> {
     download_release_binary(&client, &tag, &target, &tmp)?;
     let installed = install_over_current(&tmp)?;
     let _ = std::fs::remove_file(&tmp);
-    write_channel(channel)?;
+    // Record the channel *after* the install, because the file has to describe the
+    // binary that is really in place. If it cannot be written, say so loudly rather
+    // than returning a bare error: the binary has already been replaced, and a
+    // stale record would make `--version` lie and `--update` follow the wrong
+    // channel from here on.
+    if let Err(e) = write_channel(channel) {
+        return Err(format!(
+            "Indent {plain} ({channel}) was installed, but the channel record could not \
+             be written: {e}\n  Run `indent --switch-to-{channel}` again once the install \
+             directory is writable."
+        ));
+    }
 
     println!("  ✓ Now running Indent {plain} ({channel})");
     println!("    {}", installed.display());
@@ -19683,7 +19714,20 @@ fn self_update() {
             eprintln!("  Falling back to a source build (this can take a while)...");
         }
     }
-    self_update_from_source();
+    // The source fallback has to land on the same channel, or `--update` on an
+    // experimental install would build the default branch and quietly change
+    // channels. The tag is resolved again here because the binary path may have
+    // failed before it got as far as resolving one.
+    let channel = read_channel();
+    let query = if channel == CHANNEL_EXP { CHANNEL_EXP } else { "latest" };
+    let tag = resolve_release_tag(&reqwest::blocking::Client::new(), query).ok();
+    if channel == CHANNEL_EXP && tag.is_none() {
+        eprintln!("  ⚠ No experimental tag could be resolved, and building the default");
+        eprintln!("    branch would move this install off the experimental channel.");
+        eprintln!("    Run `indent --switch-to-stable` first if that is what you want.");
+        return;
+    }
+    self_update_from_source(tag.as_deref());
 }
 
 /// Download the latest release's prebuilt binary and swap it in.
@@ -19692,11 +19736,17 @@ fn self_update_from_binary() -> Result<(), String> {
         "no prebuilt Indent is published for this platform/architecture".to_string()
     })?;
     let client = reqwest::blocking::Client::new();
-    println!("  Checking for the latest release ...");
-    let tag = resolve_release_tag(&client, "latest")?;
+    // Follow the channel this install is on. Resolving "latest" always meant
+    // *stable*, so `indent --update` on an experimental build moved the user back
+    // onto stable without saying so — the opposite of what `--switch-to-exp`
+    // promised and of what the flag docs claimed.
+    let channel = read_channel();
+    let query = if channel == CHANNEL_EXP { CHANNEL_EXP } else { "latest" };
+    println!("  Checking for the latest {channel} release ...");
+    let tag = resolve_release_tag(&client, query)?;
     let plain = tag.trim_start_matches('v').to_string();
     if plain == INDENT_VERSION {
-        println!("  ✓ Already up to date (Indent {plain}).");
+        println!("  ✓ Already up to date (Indent {plain}, {channel}).");
         return Ok(());
     }
     println!("  Downloading Indent {tag} ({target}) ...");
@@ -19705,7 +19755,7 @@ fn self_update_from_binary() -> Result<(), String> {
 
     let current = install_over_current(&tmp)?;
     let _ = std::fs::remove_file(&tmp);
-    println!("  ✓ Updated to Indent {plain}!");
+    println!("  ✓ Updated to Indent {plain} ({channel})!");
     println!("  (Backup saved to {}.bak)", current.display());
     Ok(())
 }
@@ -19718,13 +19768,18 @@ fn self_update_from_binary() -> Result<(), String> {
 fn install_over_current(source: &std::path::Path) -> Result<PathBuf, String> {
     let current = std::env::current_exe()
         .map_err(|e| format!("cannot locate the running indent binary: {e}"))?;
-    let backup = format!("{}.bak", current.display());
-    std::fs::copy(&current, &backup).ok();
-
+    // `current_exe` gives the resolved path, so on a symlinked install this
+    // replaces the target rather than the link. That is what the current layout
+    // wants; a layout that pointed a symlink at a versioned directory would need
+    // the link rewritten instead.
     let dir = current.parent().unwrap_or(Path::new("."));
     let staged = dir.join(format!(".indent.new.{}", std::process::id()));
     std::fs::copy(source, &staged)
         .map_err(|e| format!("cannot stage the new binary in {}: {e}", dir.display()))?;
+    // Only now that the new binary is staged — a `.bak` sitting beside a binary
+    // that was never replaced is just confusing.
+    let backup = format!("{}.bak", current.display());
+    std::fs::copy(&current, &backup).ok();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -19744,7 +19799,7 @@ fn install_over_current(source: &std::path::Path) -> Result<PathBuf, String> {
 }
 
 /// Slow fallback: clone the repo and build with cargo.
-fn self_update_from_source() {
+fn self_update_from_source(tag: Option<&str>) {
     let repo_url = "https://github.com/xytrolabs/indent.git";
     let tmp = std::env::temp_dir().join("indent-update");
     
@@ -19754,9 +19809,15 @@ fn self_update_from_source() {
     // working copy (git pull) fails whenever it has local changes (e.g. a
     // dirty Cargo.lock), so we simply discard it and re-clone each run.
     let _ = std::fs::remove_dir_all(&tmp);
-    let git_result = Command::new("git")
-        .args(&["clone", "--depth", "1", repo_url, tmp.to_str().unwrap_or("/tmp/indent-update")])
-        .output();
+    let tmp_str = tmp.to_str().unwrap_or("/tmp/indent-update");
+    let mut clone_args = vec!["clone", "--depth", "1"];
+    if let Some(t) = tag {
+        // Shallow-cloning the tag is what keeps an experimental install on its
+        // channel; without it the fallback built the default branch.
+        clone_args.extend_from_slice(&["--branch", t]);
+    }
+    clone_args.extend_from_slice(&[repo_url, tmp_str]);
+    let git_result = Command::new("git").args(&clone_args).output();
     
     match git_result {
         Ok(out) if out.status.success() => {},
@@ -19867,10 +19928,14 @@ fn usage() {
     eprintln!("  --debug [--break N[,M]]   Debug with breakpoints");
     eprintln!("  --no-cache                Ignore the __incache__ parsed-program cache");
     eprintln!("  --clear-cache             Delete __incache__ directories in this project");
-    eprintln!("  --update                  Update Indent to the latest version");
+    eprintln!("  --update                  Update to the latest version of your channel");
     eprintln!("  --channel                 Show which release channel this install is on");
     eprintln!("  --switch-to-exp           Switch to the experimental (unstable) channel");
     eprintln!("  --switch-to-stable        Switch back to the stable channel");
+    eprintln!();
+    eprintln!("  A channel belongs to an INDENT_HOME. Inside an active `nest` — which sets");
+    eprintln!("  INDENT_HOME — the channel and the replaced binary are the nest's, not the");
+    eprintln!("  global install's, which is what makes `nest install` per-project.");
     eprintln!("  --version, -V             Print version");
     eprintln!("  --help, -h                Show this help");
     eprintln!();
@@ -20306,47 +20371,6 @@ fn normalize_spaces(line: &str) -> String {
     out
 }
 
-fn touch_lines(stmt: &Stmt) {
-    match stmt {
-        // Boxed payloads — see `stmt_line` above.
-        Stmt::DefClass(d) => {
-            let _ = d.line;
-        }
-        Stmt::AssignSlice(d) => {
-            let _ = d.line;
-        }
-        Stmt::Say { line, .. }
-        | Stmt::DefVar { line, .. }
-        | Stmt::MakeType { line, .. }
-        | Stmt::Assign { line, .. }
-        | Stmt::AssignOp { line, .. }
-        | Stmt::AssignIndex { line, .. }
-        | Stmt::DefFun { line, .. }
-        | Stmt::Give { line, .. }
-        | Stmt::IfChain { line, .. }
-        | Stmt::Match { line, .. }
-        | Stmt::DoChain { line, .. }
-        | Stmt::Repeat { line, .. }
-        | Stmt::Stop { line }
-        | Stmt::Next { line }
-        | Stmt::Reset { line }
-        | Stmt::Import { line, .. }
-        | Stmt::Call { line, .. }
-        | Stmt::BareExpr { line, .. }
-        | Stmt::Flag { line, .. }
-        | Stmt::Yield { line, .. }
-        | Stmt::Decorator { line, .. }
-        | Stmt::Open { line, .. }
-        | Stmt::Loop { line, .. }
-        | Stmt::Await { line, .. }
-        | Stmt::Wait { line, .. }
-        | Stmt::Launch { line, .. }
-        | Stmt::AsyncWith { line, .. } => {
-            let _ = *line;
-        }
-    }
-}
-
 fn parse_project_env_line(line: &str) -> Option<(String, String)> {
     let mut raw = line.trim();
     if raw.is_empty() || raw.starts_with('#') {
@@ -20637,9 +20661,13 @@ fn download_release_binary(
         .bytes()
         .map_err(|e| format!("failed to read downloaded binary: {e}"))?;
 
-    // Before anything is unpacked or installed: the archive has to be the one
-    // the release published.
-    verify_release_checksum(client, tag, &asset, bytes.as_ref())?;
+    // Before anything is unpacked or installed: the archive has to be the one the
+    // release published. On failure the caller never reaches its own
+    // `remove_file`, so clean up here rather than leave a bad archive behind.
+    if let Err(e) = verify_release_checksum(client, tag, &asset, bytes.as_ref()) {
+        let _ = std::fs::remove_file(dest);
+        return Err(e);
+    }
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
@@ -21178,13 +21206,10 @@ fn main() {
     }
 
     match runtime.run_file(&abs) {
-        Ok(()) => {
-            for f in runtime.funcs.values() {
-                for s in f.body.iter() {
-                    touch_lines(s);
-                }
-            }
-        }
+        // A `touch_lines` walk over every function body used to run here. Every
+        // one of its arms was `let _ = line`, so it had no effect anyone could
+        // observe — it only made the AST look like it was being read.
+        Ok(()) => {}
         Err(err) => {
             if debug && err == DEBUGGER_STOP_MSG {
                 println!("Indent debug session ended.");
@@ -21523,6 +21548,17 @@ mod tests {
         // "no answer" rather than a wrong answer.
         assert!(parse_checksum_for(sums, "indent-v2.4.0-aarch64-apple-darwin.tar.gz").is_none());
         assert!(parse_checksum_for("deadbeef  x.tar.gz", "x.tar.gz").is_none());
+
+        // Published sums files record names as `./indent-...`, because the release
+        // workflow hashes `find . -maxdepth 1`. Real releases have failed on this,
+        // so it gets its own assertion.
+        let published = "\
+             cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  ./indent-v2.3.0-x86_64-unknown-linux-gnu.tar.gz\n";
+        assert_eq!(
+            parse_checksum_for(published, "indent-v2.3.0-x86_64-unknown-linux-gnu.tar.gz")
+                .as_deref(),
+            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+        );
     }
 
     #[test]

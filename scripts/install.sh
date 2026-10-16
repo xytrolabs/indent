@@ -296,7 +296,10 @@ TOOLEOF
   if [[ -z "$SUMS_BODY" ]]; then
     yellow "⚠ No SHA256SUMS.txt for this release — installing unverified"
   elif command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
-    EXPECTED="$(printf "%s\n" "$SUMS_BODY" | awk -v a="$ASSET_NAME" '{ n=$2; sub(/^\*/, "", n); if (n==a && length($1)==64) { print $1; exit } }')"
+    # `$2` may carry a `*` (binary mode) and a `./` prefix — the release workflow
+    # hashes the output of `find . -maxdepth 1`, so published names look like
+    # `./indent-v2.3.0-x86_64-unknown-linux-gnu.tar.gz`.
+    EXPECTED="$(printf "%s\n" "$SUMS_BODY" | awk -v a="$ASSET_NAME" '{ n=$2; sub(/^\*/, "", n); sub(/^\.\//, "", n); if (n==a && length($1)==64) { print $1; exit } }')"
     if [[ -z "$EXPECTED" ]]; then
       red "SHA256SUMS.txt has no entry for ${ASSET_NAME}."
       echo "  Nothing was installed."
