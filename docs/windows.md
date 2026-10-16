@@ -151,6 +151,27 @@ understands that Windows doesn't set `HOME` the way Unix does).
 
 ## Common Windows Issues
 
+### "indent" runs but does nothing (or `VCRUNTIME140.dll was not found`)
+Older Indent releases (2.3.0 and earlier) linked the C runtime **dynamically**,
+so `indent.exe` required the *Microsoft Visual C++ Redistributable*. On a clean
+Windows install that isn't present, the program cannot start — you either see a
+dialog saying **"The code execution cannot proceed because VCRUNTIME140.dll was
+not found"**, or `indent` just returns to the prompt with no output.
+
+Install the runtime:
+
+```powershell
+winget install --id Microsoft.VCRedist.2015+.x64 -e
+# or download: https://aka.ms/vs/17/release/vc_redist.x64.exe
+```
+
+Then open a **new** terminal and run `indent --version`.
+
+> ✅ **Fixed in newer builds.** From 2.4 onwards the released `indent.exe` links
+> the C runtime **statically**, so it has no external dependency and runs on a
+> clean Windows install. If you hit this on 2.3.0 or earlier, upgrading (or
+> installing the redistributable above) resolves it.
+
 ### "The term 'indent' is not recognized"
 Your `%USERPROFILE%\.local\bin` isn't on your PATH, or you haven't opened a new
 terminal. Re-run the installer and answer **Y** when it asks to add PATH, then

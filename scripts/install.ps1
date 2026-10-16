@@ -364,24 +364,107 @@ if ($stdInstalled) {
 }
 
 # ---- create launcher ----
+# Written as ASCII (not the host's default encoding) so cmd.exe parses it the
+# same on every machine, and it fails *loudly* if the runtime is missing rather
+# than doing nothing.
 @"
 @echo off
 setlocal
+set "INDENT_EXE=$BinDir\indent.exe"
+if not exist "%INDENT_EXE%" (
+    echo indent: the Indent runtime was not found at "%INDENT_EXE%" 1>&2
+    echo         Re-run the installer, or set INDENT_EXE to the right path.
+    exit /b 1
+)
 rem Include site-packages, packages, and std in INDENT_PATH (like Python's sys.path)
 set "INDENT_PATH=$PkgDir;$StdDir;$IndentHome\site-packages;%INDENT_PATH%"
-"$BinDir\indent.exe" %*
+"%INDENT_EXE%" %*
 endlocal
-"@ | Set-Content -Path (Join-Path $LauncherDir "indent.cmd")
+"@ | Set-Content -Path (Join-Path $LauncherDir "indent.cmd") -Encoding ASCII
 
 @"
 @echo off
 setlocal
+set "INDENT_EXE=$BinDir\indent.exe"
+if not exist "%INDENT_EXE%" (
+    echo indent: the Indent runtime was not found at "%INDENT_EXE%" 1>&2
+    exit /b 1
+)
 set "INDENT_PATH=$PkgDir;$StdDir;$IndentHome\site-packages;%INDENT_PATH%"
-"$BinDir\indent.exe" --debug %*
+"%INDENT_EXE%" --debug %*
 endlocal
-"@ | Set-Content -Path (Join-Path $LauncherDir "indent-debug.cmd")
+"@ | Set-Content -Path (Join-Path $LauncherDir "indent-debug.cmd") -Encoding ASCII
 
 Write-Host "✓ Created launcher: $LauncherDir\indent.cmd" -ForegroundColor Green
+
+# ---- self-check: make sure the runtime actually runs ----
+# A copy that exists but cannot start (missing runtime DLLs, blocked by AV,
+# wrong architecture) shows up to the user as "installed, but indent does
+# nothing". Run it once here so the failure is reported loudly instead.
+$exePath = Join-Path $BinDir "indent.exe"
+$runtimeOk = $false
+if (Test-Path $exePath) {
+    try {
+        $verOutput = & $exePath --version 2>&1 | Out-String
+        if ($verOutput -match "(?i)indent\s+\d") {
+            $runtimeOk = $true
+        }
+    } catch { }
+}
+if ($runtimeOk) {
+    Write-Host "✓ Runtime works: $($verOutput.Trim())" -ForegroundColor Green
+} else {
+    Write-Host ""
+    Write-Host "⚠  indent.exe was installed but did not run." -ForegroundColor Yellow
+    Write-Host "    Running 'indent' returns to the prompt with no output until this is fixed." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    The usual cause is a missing 'Microsoft Visual C++ Redistributable'" -ForegroundColor Yellow
+    Write-Host "    (the error is 'VCRUNTIME140.dll was not found'). This release needs it;" -ForegroundColor Yellow
+    Write-Host "    newer releases bundle the runtime and do not." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Try to fix it for the user: the redistributable is a normal winget package.
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "→ Installing the Visual C++ Redistributable automatically..." -ForegroundColor Cyan
+        try {
+            winget install --id Microsoft.VCRedist.2015+.x64 -e `
+                --accept-source-agreements --accept-package-agreements --silent | Out-Null
+        } catch { }
+        $verOutput = ""
+        try { $verOutput = & $exePath --version 2>&1 | Out-String } catch { }
+        if ($verOutput -match "(?i)indent\s+\d") {
+            $runtimeOk = $true
+            Write-Host "✓ Fixed - runtime works now: $($verOutput.Trim())" -ForegroundColor Green
+        }
+    }
+
+    if (-not $runtimeOk) {
+        Write-Host "    Install it manually, then open a NEW terminal and run 'indent':" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "      winget install --id Microsoft.VCRedist.2015+.x64 -e" -ForegroundColor Cyan
+        Write-Host "      # or download: https://aka.ms/vs/17/release/vc_redist.x64.exe" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "    If it still does not run, please report the output of:" -ForegroundColor Yellow
+        Write-Host "      & `"$exePath`" --version" -ForegroundColor Cyan
+        Write-Host ""
+    }
+}
+
+# Confirm the launcher resolves and runs (this is what `indent` on PATH uses).
+$launcherPath = Join-Path $LauncherDir "indent.cmd"
+if (Test-Path $launcherPath) {
+    try {
+        $launcherOut = cmd /c "`"$launcherPath`" --version" 2>&1 | Out-String
+        if ($launcherOut -match "(?i)indent\s+\d") {
+            Write-Host "✓ Launcher works: $launcherPath" -ForegroundColor Green
+        } else {
+            Write-Host "⚠  The launcher ran but produced no version output:" -ForegroundColor Yellow
+            Write-Host "      $($launcherOut.Trim())" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "⚠  Could not run the launcher: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 # ---- auto-configure registry ----
 $ConfigDir = Join-Path $env:USERPROFILE ".config\indent"
@@ -403,6 +486,7 @@ Write-Host "  Stdlib:    $StdDir"
 Write-Host ""
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($null -eq $userPath) { $userPath = "" }
 if ($userPath -notlike "*$LauncherDir*") {
     Write-Host "⚠  Add to your user PATH:" -ForegroundColor Yellow
     Write-Host ""
@@ -411,9 +495,11 @@ if ($userPath -notlike "*$LauncherDir*") {
     Write-Host ""
     $response = Read-Host "  Add to PATH now? [Y/n]"
     if ($response -eq "" -or $response -match "^[Yy]") {
-        [Environment]::SetEnvironmentVariable("Path", $userPath + ";$LauncherDir", "User")
+        $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $LauncherDir } else { $userPath.TrimEnd(';') + ";" + $LauncherDir }
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
         $env:Path = $env:Path + ";$LauncherDir"
         Write-Host "✓ PATH configured" -ForegroundColor Green
+        Write-Host "  Open a NEW terminal (not this one) before running 'indent'." -ForegroundColor Cyan
     }
 } else {
     Write-Host "✓ PATH already configured" -ForegroundColor Green

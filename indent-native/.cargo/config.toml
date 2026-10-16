@@ -1,0 +1,23 @@
+# Build configuration for the Indent native runtime.
+#
+# Statically link the C runtime on Windows.
+#
+# By default an `*-pc-windows-msvc` build links the C runtime *dynamically*,
+# which means the released `indent.exe` imports `VCRUNTIME140.dll` (and friends)
+# from the Visual C++ Redistributable. On a Windows machine that does not have
+# that redistributable installed, the executable fails to start at all — the
+# process never runs, so from a terminal you just get your prompt back with no
+# output and no error, which looks exactly like "indent is installed but does
+# nothing".
+#
+# `+crt-static` links the runtime into the binary instead, so `indent.exe` is
+# self-contained and runs on a clean Windows install. This only affects the
+# Windows targets; Linux and macOS builds are unchanged.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
