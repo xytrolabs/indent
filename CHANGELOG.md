@@ -1,5 +1,74 @@
 # Indent Changelog
 
+## 2.4.1 — 2026-10-16 (experimental — `exp` channel)
+
+This one is aimed at the **`exp` channel** rather than stable. It closes out the
+mechanical phase of the memory plan and lands the measurement scaffolding the plan
+asks for *first*, so the phases that follow can be judged on numbers instead of
+impressions. It is published as a GitHub *prerelease*, so `releases/latest` still
+resolves to 2.4.0 and no stable install is moved onto it by accident.
+
+### The safety net the plan asks for first
+
+Phase 0 of the plan is headed "1–2 weeks, do not skip", because *"you cannot
+safely rewrite `Value`, `Frame`, and the dispatch loop without a way to know you
+didn't break semantics."* 2.4.0 shipped the representation work without it. It
+exists now:
+
+- `scripts/golden/` pins the **text** real programs print: value formatting,
+  control flow, the copy-on-write guarantees, and a torture file covering nested
+  functions, generators, inheritance dispatch, mutation through aliases, the
+  in-place append paths, dict key ordering, unicode and error messages verbatim.
+  Every fixture runs through **both engines** (the VM and `INDENT_VM=0`) three
+  times and must match byte for byte, so "the compiled path agrees with the
+  interpreter" is a check rather than an assumption.
+- `benchmarks/baselines.json` records 158 cases; `benchmarks/check_baselines.py`
+  compares against them with a 15% tolerance. `benchmarks/verify.sh` claimed to
+  "measure performance against the recorded baseline" without ever recording one,
+  so a 20% cost was invisible unless someone remembered the old figure.
+
+Worth knowing, because none of it was written down: `say true` prints `TRUE`,
+strings inside containers print **unquoted**, dict keys print in **sorted** order,
+and `len("héllo 🚀")` counts codepoints, not bytes.
+
+### The mechanical phase, finished
+
+- The named-colour palette is built once per process instead of once per runtime.
+  Neutral in the suite's timing (5250 ms before, 5303 ms after), but it removes
+  twenty-two allocations from every `Runtime::new`, and the test runner builds one
+  per test file.
+- Two items on the plan's list turned out to be **already done** and are now
+  recorded rather than left looking open: integer formatting is a hand-rolled
+  `itoa` (`write_int`, no `format!`), and builtin dispatch already borrows the
+  caller's string, folding a copy only when the case differs — the unconditional
+  `to_ascii_lowercase()` the plan flags was removed well before 2.4.0.
+- **Holding a `StdoutLock` for the life of an `ExecContext` was measured and
+  rejected.** 100 000 `say`s cost 33 ms against 24 ms for the same loop with a
+  single `say`, so a print is ~90 ns and nearly all of it is the write itself.
+  Holding the lock would serialise other threads' output for as long as a context
+  runs — in a server, one request that prints would block every other thread's
+  `say` — to save a fraction of 90 ns. The plan calls this "no semantic change";
+  for a multi-threaded program that is not true.
+
+### New benchmarks, with recorded baselines
+
+- `bench_dict_heavy` — JSON parse → navigate → serialise, plus large-dict insert
+  and lookup.
+- `bench_string_ops` — build by concatenation, then split, join, replace and case
+  folding, each stage timed separately because they stress different paths.
+- `bench_concurrency` — 100 spawned tasks gathered, the same work through
+  `parallel`, and the sequential spawn-and-wait path.
+
+### Still open, and next
+
+Phase 4 (symbol interning and `Rc`, a one-way door on the AST and the cache
+format), the rest of Phase 6 (specialisation, inline caches, constant pool) and
+Phase 7 (NaN-boxing). A real heap profile is also still missing: this machine has
+no `valgrind`, `heaptrack`, `perf` or `hyperfine`, so `benchmarks/rss.sh` (peak RSS
+via `getrusage`) stands in for it — a substitute, not an equivalent.
+
+---
+
 ## 2.4.0 — 2026-10-16 (lighter on memory, and two release channels)
 
 ### Containers share their buffers
@@ -959,8 +1028,6 @@ AIR now ships **47 packages** (up from 7). New additions include:
 - **AIR package resolution**: the runtime now searches `~/.local/share/indent/air-packages/` by default, so `air install`-ed packages import without setting `INDENT_PATH`.
 
 ---
-
-# Indent Changelog
 
 ## 1.4.1 — 2026-08-04
 

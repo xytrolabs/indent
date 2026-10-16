@@ -1087,8 +1087,22 @@ impl Value {
     }
 }
 
+/// The eleven named colors that `var c = RED` resolves to.
+///
+/// Built once and then *cloned* per runtime. It used to be rebuilt on every
+/// `Runtime::new` — eleven keys and eleven values allocated each time, and the
+/// test suite constructs a runtime per test file, so a 500-file suite built 11 000
+/// strings to hold eleven colors. Now that `Value::Str` shares its bytes, a clone
+/// shares every value and only the map keys are copied; the palette itself is the
+/// same table `color_to_rgb` already carries, so nothing here is information the
+/// program cannot already reach.
 fn default_color_vars() -> Map<String, Value> {
-    let palette = [
+    static PALETTE: LazyLock<Map<String, Value>> = LazyLock::new(build_color_vars);
+    PALETTE.clone()
+}
+
+fn build_color_vars() -> Map<String, Value> {
+    const PALETTE: [(&str, &str); 11] = [
         ("RED", "#ff4d4d"),
         ("GREEN", "#32c671"),
         ("BLUE", "#3b82f6"),
@@ -1103,11 +1117,8 @@ fn default_color_vars() -> Map<String, Value> {
     ];
 
     // Sized up front: eleven inserts into an empty map reallocated three times.
-    // The palette itself is the table `color_to_rgb` already carries, so this is
-    // convenience rather than information — once `Value::Str` can share its bytes
-    // these entries should be resolved on demand instead of built per runtime.
-    let mut out = Map::with_capacity_and_hasher(palette.len(), Default::default());
-    for (name, hex) in palette {
+    let mut out = Map::with_capacity_and_hasher(PALETTE.len(), Default::default());
+    for (name, hex) in PALETTE {
         out.insert(name.to_string(), Value::Str(hex.to_string()));
     }
     out

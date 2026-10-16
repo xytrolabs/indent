@@ -1,0 +1,44 @@
+#! bench_string_ops.ind — the string workload Phase 0 asks for: build a large
+#! string, then split, join and replace it. Each stage is timed separately because
+#! they stress different paths (in-place growth, allocation of many small strings,
+#! and a full scan-and-copy), and a change that helps one can hurt another.
+
+var N int = 2000
+var unit string = "the quick brown fox jumps over the lazy dog 0123456789 "
+
+#! ---- build by repeated concatenation (the in-place growth path) ----
+var t0 float = time_perf_counter
+var big string = ""
+var i int = 0
+while i < N
+    big is big + unit
+    i += 1
+var t1 float = time_perf_counter
+say "build " + string(len(big)) + " chars: " + string(t1 - t0) + "s"
+
+#! ---- split into many small strings ----
+var t2 float = time_perf_counter
+var parts dynamic = split(big, " ")
+var t3 float = time_perf_counter
+say "split " + string(len(parts)) + " parts: " + string(t3 - t2) + "s"
+
+#! ---- join them back ----
+var t4 float = time_perf_counter
+var back string = join(parts, " ")
+var t5 float = time_perf_counter
+say "join " + string(len(back)) + " chars: " + string(t5 - t4) + "s"
+
+#! ---- replace, which scans and copies the whole buffer ----
+var t6 float = time_perf_counter
+var swapped string = replace(big, "fox", "cat")
+var t7 float = time_perf_counter
+say "replace: " + string(t7 - t6) + "s"
+
+#! ---- case folding, upper and lower on the whole buffer ----
+var t8 float = time_perf_counter
+var shouted string = upper(big)
+var whispered string = lower(big)
+var t9 float = time_perf_counter
+say "upper+lower: " + string(t9 - t8) + "s"
+
+say "checks " + string(len(swapped)) + " " + string(len(shouted)) + " " + string(len(whispered))
