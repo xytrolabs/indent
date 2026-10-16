@@ -21019,8 +21019,14 @@ mod tests {
 
     /// Perf guardrail: `Value` is moved constantly — every variable read, every
     /// argument, every list element and every map entry. It was 128 bytes until
-    /// the `Object` maps were boxed; anything that pushes it back up is a silent
-    /// tax on the whole interpreter, so fail loudly instead.
+    /// the `Object` maps were boxed, then 56 until the string payload became an
+    /// `Arc` (which dropped the largest variant from 24 bytes to 8 and the whole
+    /// enum to 32); anything that pushes it back up is a silent tax on the whole
+    /// interpreter, so fail loudly instead.
+    ///
+    /// The bound is 40 rather than 32 so that the next change which needs a few
+    /// bytes is not blocked by a test — but not 64, which would let the string
+    /// allocation creep back inside the enum un-noticed.
     #[test]
     fn value_size_guardrail() {
         let value = std::mem::size_of::<Value>();
@@ -21034,8 +21040,8 @@ mod tests {
             std::mem::size_of::<Frame>(),
         );
         assert!(
-            value <= 64,
-            "Value grew to {value} bytes (was 56). Box large variants — every \
+            value <= 40,
+            "Value grew to {value} bytes (was 32). Box large variants — every \
              variable read, argument and list element moves this."
         );
     }
