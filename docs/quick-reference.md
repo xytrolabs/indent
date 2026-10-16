@@ -428,8 +428,11 @@ indent lint file.ind         # Lint code
 indent repl                  # Interactive REPL
 indent test tests/           # Run tests (expects a directory)
 indent --debug file.ind      # Debug mode
-indent --update              # Update to latest version
-indent --version             # Show version
+indent --update              # Update to latest version (stays on your channel)
+indent --version             # Show version and release channel
+indent --channel             # Which channel this install follows
+indent --switch-to-exp       # Switch to the experimental (unstable) channel
+indent --switch-to-stable    # Switch back to the stable channel
 
 # v2.2 tooling
 indent --watch file.ind      # Hot reload: re-run on every save
@@ -509,4 +512,4 @@ Available modules:
 8. `set varname type` converts types: `set x string`
 9. `group([1,2,3])` creates a Group (unique collection) — `set` is the type-conversion keyword, not a group builder
 10. Imports resolve: same dir → parents → `.nest/` → `INDENT_PATH` → `~/.local/share/indent/site-packages/`
-11. `indent --update` keeps you on the latest version
+11. `indent --update` keeps you on the latest version of your channel (`indent --switch-to-exp` opts in to unstable builds, `--switch-to-stable` returns)

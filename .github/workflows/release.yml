@@ -390,6 +390,9 @@ jobs:
       # heredoc terminator must sit at column 0, which a YAML block scalar
       # cannot express — inline heredocs make this whole file invalid YAML.
       - name: Update Homebrew formula
+        # Stable releases only. The formula is the stable channel's front door,
+        # and an experimental tag must not be able to point it at a prerelease.
+        if: ${{ !contains(github.ref_name, '-') }}
         run: |
           set -euo pipefail
           bash scripts/update-homebrew-formula.sh "${GITHUB_REF_NAME}" dist
@@ -401,3 +404,7 @@ jobs:
           files: |
             dist/*
           generate_release_notes: true
+          # A tag with a hyphen after the version (v2.4.1-exp.1) is an
+          # experimental build: published as a prerelease so that
+          # `releases/latest` keeps resolving to the newest stable release.
+          prerelease: ${{ contains(github.ref_name, '-') }}

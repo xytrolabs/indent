@@ -23,6 +23,11 @@ REPO="${DEFAULT_REPO}"
 LOCAL_MODE=0
 BUILD_FROM_SOURCE=0
 INDENT_VERSION="${INDENT_VERSION:-latest}"
+# Release channel: `stable` (the default) or `exp`. Both come from the same
+# pipeline and pass the same gates; `exp` follows tagged prereleases, which are
+# published as GitHub prereleases so that `releases/latest` keeps meaning
+# "the newest stable" and nobody is moved onto an unstable build by accident.
+INDENT_CHANNEL="${INDENT_CHANNEL:-stable}"
 
 bold()   { printf '\033[1m%s\033[0m' "$1"; }
 green()  { printf '\033[32m%s\033[0m' "$1"; }
@@ -36,12 +41,13 @@ Indent Language Installer — Xytro Labs
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.sh | bash
-  bash install.sh [--local] [--version VER] [--repo OWNER/REPO]
+  bash install.sh [--local] [--version VER] [--channel stable|exp] [--repo OWNER/REPO]
 
 Options:
   --local               Install from a local cargo build
   --build-from-source   Compile from source (requires Rust). Never done implicitly.
   --version VER         Install a specific release version (default: latest)
+  --channel stable|exp  Release channel: stable (default) or experimental
   --repo OWNER/REPO     GitHub repository for releases
   --help, -h            Show this help
 HELPEOF
@@ -52,12 +58,22 @@ while [[ $# -gt 0 ]]; do
     --local) LOCAL_MODE=1 ;;
     --build-from-source) BUILD_FROM_SOURCE=1 ;;
     --version) INDENT_VERSION="$2"; shift ;;
+    --channel) INDENT_CHANNEL="$2"; shift ;;
     --repo) REPO="$2"; shift ;;
     --help|-h) show_help; exit 0 ;;
     *) warn "Unknown option: $1"; show_help; exit 2 ;;
   esac
   shift
 done
+
+case "$INDENT_CHANNEL" in
+  stable|exp) ;;
+  *)
+    red "Unknown channel: ${INDENT_CHANNEL}"
+    echo "  Use --channel stable or --channel exp."
+    exit 2
+    ;;
+esac
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -111,15 +127,40 @@ if [[ "$LOCAL_MODE" -eq 1 ]]; then
   chmod +x "${BIN_DIR}/indent"
   green "✓ Installed from local build"
 else
-  echo "→ Fetching Indent ${INDENT_VERSION}..."
-  if [[ "$INDENT_VERSION" == "latest" ]]; then
-    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+  if [[ "$INDENT_CHANNEL" == "exp" ]]; then
+    echo "→ Fetching the newest experimental build..."
   else
+    echo "→ Fetching Indent ${INDENT_VERSION}..."
+  fi
+  if [[ "$INDENT_VERSION" != "latest" ]]; then
     API_URL="https://api.github.com/repos/${REPO}/releases/tags/${INDENT_VERSION}"
+  elif [[ "$INDENT_CHANNEL" == "exp" ]]; then
+    # Releases come back newest-first. Filtering on the tag shape rather than on
+    # the `prerelease` flag keeps this to a single grep: an experimental tag
+    # carries a hyphen after the version (v2.4.1-exp.1), a stable one does not.
+    API_URL="https://api.github.com/repos/${REPO}/releases?per_page=30"
+  else
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
   fi
 
   RELEASE_JSON="$(curl "${CURL_OPTS[@]}" "$API_URL" 2>/dev/null || true)"
-  DOWNLOAD_URL="$(printf "%s" "$RELEASE_JSON" | grep -oE "https://[^\"]*indent-v[^\"]*-${TARGET}\\.tar\\.gz" | head -n1 || true)"
+  if [[ "$INDENT_CHANNEL" == "exp" && "$INDENT_VERSION" == "latest" ]]; then
+    EXP_TAG="$(printf "%s" "$RELEASE_JSON" | grep -oE '"tag_name": *"v[0-9][^"]*-[^"]*"' | head -n1 | sed -E 's/.*"(v[^"]+)".*/\1/' || true)"
+    if [[ -z "$EXP_TAG" ]]; then
+      red "No experimental build has been published yet in ${REPO}."
+      echo ""
+      echo "  The experimental channel follows tagged prereleases such as v2.4.1-exp.1."
+      echo "  Install the stable channel, or pin a specific one with --version <tag>:"
+      echo "        https://github.com/${REPO}/releases"
+      exit 1
+    fi
+    DOWNLOAD_URL="$(printf "%s" "$RELEASE_JSON" | grep -oE "https://[^\"]*indent-${EXP_TAG}-${TARGET}\\.tar\\.gz" | head -n1 || true)"
+    if [[ -z "$DOWNLOAD_URL" ]]; then
+      DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${EXP_TAG}/indent-${EXP_TAG}-${TARGET}.tar.gz"
+    fi
+  else
+    DOWNLOAD_URL="$(printf "%s" "$RELEASE_JSON" | grep -oE "https://[^\"]*indent-v[^\"]*-${TARGET}\\.tar\\.gz" | head -n1 || true)"
+  fi
 
   if [[ -z "$DOWNLOAD_URL" ]]; then
     # Never force a compile. Some users have no toolchain and no way to install
@@ -244,6 +285,38 @@ TOOLEOF
   TMP_DIR="$(mktemp -d)"
   trap 'rm -rf "$TMP_DIR"' EXIT
   curl "${CURL_OPTS[@]}" "$DOWNLOAD_URL" -o "${TMP_DIR}/indent.tar.gz"
+
+  # Check the archive against the release's SHA256SUMS.txt before unpacking it.
+  # A mismatch is fatal. A release that publishes no sums file only warns:
+  # releases before 2.3.0 predate it, and refusing them would be worse than
+  # trusting them.
+  ASSET_NAME="${DOWNLOAD_URL##*/}"
+  SUMS_URL="${DOWNLOAD_URL%/*}/SHA256SUMS.txt"
+  SUMS_BODY="$(curl "${CURL_OPTS[@]}" "$SUMS_URL" 2>/dev/null || true)"
+  if [[ -z "$SUMS_BODY" ]]; then
+    yellow "⚠ No SHA256SUMS.txt for this release — installing unverified"
+  elif command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+    EXPECTED="$(printf "%s\n" "$SUMS_BODY" | awk -v a="$ASSET_NAME" '{ n=$2; sub(/^\*/, "", n); if (n==a && length($1)==64) { print $1; exit } }')"
+    if [[ -z "$EXPECTED" ]]; then
+      red "SHA256SUMS.txt has no entry for ${ASSET_NAME}."
+      echo "  Nothing was installed."
+      exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+      ACTUAL="$(sha256sum "${TMP_DIR}/indent.tar.gz" | awk '{print $1}')"
+    else
+      ACTUAL="$(shasum -a 256 "${TMP_DIR}/indent.tar.gz" | awk '{print $1}')"
+    fi
+    if [[ "$(printf "%s" "$ACTUAL" | tr 'A-F' 'a-f')" != "$(printf "%s" "$EXPECTED" | tr 'A-F' 'a-f')" ]]; then
+      red "Checksum mismatch for ${ASSET_NAME}!"
+      echo "  expected ${EXPECTED}"
+      echo "  got      ${ACTUAL}"
+      echo "  Nothing was installed."
+      exit 1
+    fi
+    green "✓ Checksum verified"
+  fi
+
   tar -xzf "${TMP_DIR}/indent.tar.gz" -C "$TMP_DIR"
 
   # Release archives are self-contained: they ship std/ and the companion
@@ -262,6 +335,10 @@ TOOLEOF
   fi
   cp "$BIN_SRC" "${BIN_DIR}/indent"
   chmod +x "${BIN_DIR}/indent"
+  # Record the channel this install follows, so `indent --version` and
+  # `indent --channel` can report it and `indent --update` keeps following it.
+  # (A local build or a source build records nothing, which reads as stable.)
+  printf '%s\n' "$INDENT_CHANNEL" > "${INDENT_HOME}/channel"
   green "✓ Downloaded indent"
 
   # Install companion tools from the same release

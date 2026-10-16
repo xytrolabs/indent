@@ -1,5 +1,62 @@
 # Indent Changelog
 
+## 2.4.0 — unreleased (lighter on memory, and two release channels)
+
+### Containers share their buffers
+
+Every value that held a collection owned it, so *reading* a variable deep-copied it.
+Collections are now copy-on-write throughout — strings, lists, dictionaries and
+groups. A read is a refcount bump; the first write after a second name exists makes
+that writer a private copy. That is the same pass-by-value behaviour the language
+always had, deferred to the write instead of paid on every read.
+
+| Workload | before | **2.4.0** |
+|---|---|---|
+| Peak RSS holding 200 copies of one 200 KB string | 84.7 MB | **12.6 MB** |
+| Passing a 201 KB string to a function | 130 µs | **7.7 µs** |
+| `len()` of a 20 000-item list | 0.0767 s | **0.0000424 s** |
+| `has_key()` on a 5 000-key dict | 0.0711 s | **0.0000659 s** |
+| Startup importing five `std` modules | 3.51 ms | **2.49 ms** |
+| Peak RSS, 20 000 statements of three call arguments each | 30.1 MB | **19.8 MB** |
+
+`Value` is 32 bytes (was 56) and every statement is 112 (was 152); guardrail tests
+fail the build if either grows back. The costs are documented rather than hidden:
+code that *synthesises* many small strings pays one allocation for the shared header
+(`s[3]` ≈ +20%, `s is s + "x"` ≈ +7 ns per step, still linear).
+
+### Release channels: stable and experimental
+
+Two channels now come out of the same pipeline and the same gates.
+
+- **stable** is the default, and is what `releases/latest` resolves to.
+- **exp** follows tagged prereleases such as `v2.4.1-exp.1`, which are published as
+  GitHub *prereleases* — so an existing stable install is never moved onto an
+  experimental build by accident.
+
+```sh
+# Install a channel (stable is the default)
+curl -fsSL https://indent.xytro.site/install.sh | bash -s -- --channel exp
+
+# Switch an existing install, and back again
+indent --switch-to-exp
+indent --switch-to-stable
+indent --channel          # which channel am I on?
+```
+
+`indent --version` reports the channel (`indent 2.4.0 (stable)`), the choice is
+recorded beside the binary so `indent --update` keeps following it, and both the
+installer and the switcher verify the release's `SHA256SUMS.txt` before installing
+anything. The binary being replaced is kept as `<path>.bak`.
+
+Cut an experimental build by pushing an `-exp` tag; the workflow marks it a
+prerelease and skips the Homebrew formula, which belongs to stable:
+
+```sh
+git tag v2.4.1-exp.1 && git push origin v2.4.1-exp.1
+```
+
+---
+
 ## 2.3.0 — 2026-10-14 (the performance release) 🚀
 
 > Major optimizations and general improvements coming to Indent in 2.3!

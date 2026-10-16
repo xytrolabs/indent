@@ -19435,6 +19435,210 @@ fn parse_return_type(raw: &str) -> Option<String> {
     }
 }
 
+// ---- Release channels ----
+//
+// Two channels share one release pipeline. A stable release is tagged `v2.4.0`;
+// an experimental one is `v2.4.1-exp.1` and is published as a GitHub *prerelease*,
+// so `releases/latest` keeps pointing at stable and an existing install is never
+// moved onto an experimental build by accident. Which channel this installation
+// is on lives in a file beside the binary rather than being compiled in, because
+// the same binary can be installed either way — and a missing file means stable,
+// which is what every install predating channels is.
+
+const CHANNEL_STABLE: &str = "stable";
+const CHANNEL_EXP: &str = "exp";
+
+/// `~/.local/share/indent`, honouring `INDENT_HOME`.
+fn indent_home_dir() -> PathBuf {
+    if let Some(home) = env::var_os("INDENT_HOME") {
+        return PathBuf::from(home);
+    }
+    let base = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(".local").join("share").join("indent")
+}
+
+fn channel_file() -> PathBuf {
+    indent_home_dir().join("channel")
+}
+
+/// The channel a `channel` file's contents name. Anything else — including no
+/// file at all — means stable, which is what every install predating channels is.
+fn parse_channel(contents: Option<&str>) -> String {
+    match contents {
+        Some(s) if s.trim().eq_ignore_ascii_case(CHANNEL_EXP) => CHANNEL_EXP.to_string(),
+        _ => CHANNEL_STABLE.to_string(),
+    }
+}
+
+/// The channel this installation is on.
+fn read_channel() -> String {
+    parse_channel(fs::read_to_string(channel_file()).ok().as_deref())
+}
+
+fn write_channel(channel: &str) -> Result<(), String> {
+    let path = channel_file();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    fs::write(&path, format!("{channel}\n"))
+        .map_err(|e| format!("cannot record the channel in {}: {e}", path.display()))
+}
+
+/// Is this an experimental (prerelease) tag? The convention the workflow relies
+/// on: `v2.4.1-exp.1` carries a hyphen after the version, `v2.4.0` does not.
+fn is_exp_tag(tag: &str) -> bool {
+    tag.trim_start_matches('v').contains('-')
+}
+
+/// Pick a release tag out of a GitHub tags response for one channel.
+///
+/// Pure, so the rule is testable without a network. The response is newest-first.
+/// The channel test is the part that matters: choosing purely on "starts with a
+/// digit" was enough while there was one channel, and with two it would hand a
+/// stable install the newest `-exp` tag.
+fn pick_release_tag(body: &str, channel: &str) -> Result<String, String> {
+    let json: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| format!("failed to parse tags response: {e}"))?;
+    let tags = json
+        .as_array()
+        .ok_or_else(|| "GitHub tags response was not a list".to_string())?;
+    let want_exp = channel == CHANNEL_EXP;
+    tags.iter()
+        .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+        .find(|name| {
+            let n = name.trim_start_matches('v');
+            let is_version =
+                !n.is_empty() && n.chars().next().map_or(false, |c| c.is_ascii_digit());
+            is_version && is_exp_tag(name) == want_exp
+        })
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            if want_exp {
+                "no experimental build has been published yet".to_string()
+            } else {
+                "no version tags found on GitHub".to_string()
+            }
+        })
+}
+
+/// The digest recorded for `asset` in a `SHA256SUMS.txt` body
+/// (`<64 hex digits>  <file name>`, with an optional leading `*`).
+fn parse_checksum_for(sums: &str, asset: &str) -> Option<String> {
+    for line in sums.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(digest), Some(name)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if name.trim_start_matches('*') == asset && digest.len() == 64 {
+            return Some(digest.to_string());
+        }
+    }
+    None
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Check a downloaded archive against the release's `SHA256SUMS.txt`.
+///
+/// A mismatch is a hard error: the file exists to catch a truncated or
+/// substituted download, and "close enough" is not a thing here. A release that
+/// publishes no `SHA256SUMS.txt` only warns — releases before 2.3.0 predate it,
+/// and refusing to install those would be worse than trusting them.
+fn verify_release_checksum(
+    client: &reqwest::blocking::Client,
+    tag: &str,
+    asset: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let url = format!(
+        "https://github.com/xytrolabs/indent/releases/download/{tag}/SHA256SUMS.txt"
+    );
+    let resp = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, "indent")
+        .send()
+        .map_err(|e| format!("could not fetch SHA256SUMS.txt: {e}"))?;
+    if resp.status().as_u16() != 200 {
+        eprintln!("  ⚠ {tag} publishes no SHA256SUMS.txt — install continues unverified");
+        return Ok(());
+    }
+    let body = resp
+        .text()
+        .map_err(|e| format!("failed to read SHA256SUMS.txt: {e}"))?;
+    let expected = parse_checksum_for(&body, asset)
+        .ok_or_else(|| format!("SHA256SUMS.txt for {tag} has no entry for {asset}"))?;
+    let actual = sha256_hex(bytes);
+    if !actual.eq_ignore_ascii_case(&expected) {
+        return Err(format!(
+            "checksum mismatch for {asset}\n  expected {expected}\n  got      {actual}\n  \
+             Nothing was installed."
+        ));
+    }
+    println!("  ✓ Checksum verified ({asset})");
+    Ok(())
+}
+
+/// Report a channel switch's failure the way the rest of the CLI does, and exit
+/// non-zero so a script can tell that nothing was changed.
+fn exit_on_switch_result(result: Result<(), String>) {
+    if let Err(e) = result {
+        eprintln!("  ✗ {e}");
+        std::process::exit(1);
+    }
+}
+
+/// `indent --switch-to-exp` / `indent --switch-to-stable`.
+///
+/// The same machinery as `--update`, with two differences: the release is chosen
+/// by channel, and the choice is recorded so `--version` and `--channel` can
+/// report it. The previous binary is kept as `<path>.bak` by `install_over_current`.
+fn switch_channel(channel: &str) -> Result<(), String> {
+    let target = indent_target_triple().ok_or_else(|| {
+        "no prebuilt Indent is published for this platform/architecture".to_string()
+    })?;
+    let client = reqwest::blocking::Client::new();
+    println!("⚡ Indent channel: {channel}");
+
+    let query = if channel == CHANNEL_EXP { CHANNEL_EXP } else { "latest" };
+    let tag = resolve_release_tag(&client, query)?;
+    let plain = tag.trim_start_matches('v').to_string();
+
+    if plain == INDENT_VERSION && read_channel() == channel {
+        println!("  ✓ Already on {channel} (Indent {plain}).");
+        return Ok(());
+    }
+
+    println!("  Downloading Indent {plain} for {target} ...");
+    let tmp = std::env::temp_dir().join(format!(
+        "indent-switch-{channel}-{}",
+        std::process::id()
+    ));
+    download_release_binary(&client, &tag, &target, &tmp)?;
+    let installed = install_over_current(&tmp)?;
+    let _ = std::fs::remove_file(&tmp);
+    write_channel(channel)?;
+
+    println!("  ✓ Now running Indent {plain} ({channel})");
+    println!("    {}", installed.display());
+    if channel == CHANNEL_EXP {
+        println!("  Experimental builds are unstable by definition —");
+        println!("  `indent --switch-to-stable` returns to the stable channel.");
+    }
+    Ok(())
+}
+
 /// `indent --update`: prefer the prebuilt release binary (fast, no Rust needed);
 /// fall back to a source build only if no prebuilt release is available.
 fn self_update() {
@@ -19466,33 +19670,42 @@ fn self_update_from_binary() -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("indent-update-{}", std::process::id()));
     download_release_binary(&client, &tag, &target, &tmp)?;
 
+    let current = install_over_current(&tmp)?;
+    let _ = std::fs::remove_file(&tmp);
+    println!("  ✓ Updated to Indent {plain}!");
+    println!("  (Backup saved to {}.bak)", current.display());
+    Ok(())
+}
+
+/// Put `source` in place of the running `indent`, keeping one backup.
+///
+/// Overwriting a running executable in place fails on Linux ("Text file busy"),
+/// so the new binary is staged in the *same* directory — a rename within one
+/// filesystem is atomic — and then renamed over the target.
+fn install_over_current(source: &std::path::Path) -> Result<PathBuf, String> {
     let current = std::env::current_exe()
         .map_err(|e| format!("cannot locate the running indent binary: {e}"))?;
     let backup = format!("{}.bak", current.display());
     std::fs::copy(&current, &backup).ok();
 
-    // Overwriting a running executable in place fails on Linux ("Text file
-    // busy"), so stage in the same directory and rename over it.
-    let current_dir = current.parent().unwrap_or(Path::new("."));
-    let staged = current_dir.join(format!(".indent.new.{}", std::process::id()));
-    std::fs::copy(&tmp, &staged)
-        .map_err(|e| format!("cannot stage new binary — try running with sudo: {e}"))?;
+    let dir = current.parent().unwrap_or(Path::new("."));
+    let staged = dir.join(format!(".indent.new.{}", std::process::id()));
+    std::fs::copy(source, &staged)
+        .map_err(|e| format!("cannot stage the new binary in {}: {e}", dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
     }
-    let _ = std::fs::remove_file(&tmp);
 
     match std::fs::rename(&staged, &current) {
-        Ok(_) => {
-            println!("  ✓ Updated to Indent {plain}!");
-            println!("  (Backup saved to {})", backup);
-            Ok(())
-        }
+        Ok(_) => Ok(current),
         Err(e) => {
             let _ = std::fs::remove_file(&staged);
-            Err(format!("cannot replace binary — try running with sudo: {e}"))
+            Err(format!(
+                "cannot replace the binary — check that {} is writable: {e}",
+                current.display()
+            ))
         }
     }
 }
@@ -19622,6 +19835,9 @@ fn usage() {
     eprintln!("  --no-cache                Ignore the __incache__ parsed-program cache");
     eprintln!("  --clear-cache             Delete __incache__ directories in this project");
     eprintln!("  --update                  Update Indent to the latest version");
+    eprintln!("  --channel                 Show which release channel this install is on");
+    eprintln!("  --switch-to-exp           Switch to the experimental (unstable) channel");
+    eprintln!("  --switch-to-stable        Switch back to the stable channel");
     eprintln!("  --version, -V             Print version");
     eprintln!("  --help, -h                Show this help");
     eprintln!();
@@ -20317,12 +20533,13 @@ fn normalize_version_tag(v: &str) -> String {
     }
 }
 
-/// Resolve "latest" (or an explicit version) to a concrete release tag.
+/// Resolve "latest", "exp", or an explicit version to a concrete release tag.
 fn resolve_release_tag(
     client: &reqwest::blocking::Client,
     version: &str,
 ) -> Result<String, String> {
-    if version.eq_ignore_ascii_case("latest") {
+    let want_exp = version.eq_ignore_ascii_case(CHANNEL_EXP);
+    if version.eq_ignore_ascii_case("latest") || want_exp {
         // Use the git-tags endpoint (newest first) rather than releases/latest,
         // which only works once a formal release has been published. A tag is
         // enough to reach its CI-built assets under releases/download/<tag>/.
@@ -20341,19 +20558,13 @@ fn resolve_release_tag(
                 "GitHub returned {status} while finding the latest version: {body}"
             ));
         }
-        let json: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| format!("failed to parse tags response: {e}"))?;
-        let tags = json
-            .as_array()
-            .ok_or_else(|| "GitHub tags response was not a list".to_string())?;
-        tags.iter()
-            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
-            .find(|name| {
-                let n = name.trim_start_matches('v');
-                !n.is_empty() && n.chars().next().map_or(false, |c| c.is_ascii_digit())
-            })
-            .map(|s| s.to_string())
-            .ok_or_else(|| "no version tags found on GitHub".to_string())
+        // The channel decides which tags are eligible. Choosing purely on "looks
+        // like a version" was enough while there was one channel; with two, it
+        // would hand a stable install the newest `-exp` tag.
+        pick_release_tag(
+            &body,
+            if want_exp { CHANNEL_EXP } else { CHANNEL_STABLE },
+        )
     } else {
         Ok(normalize_version_tag(version))
     }
@@ -20370,8 +20581,9 @@ fn download_release_binary(
     let is_windows = target.ends_with("windows-msvc");
     let bin_name = if is_windows { "indent.exe" } else { "indent" };
     let ext = if is_windows { "zip" } else { "tar.gz" };
+    let asset = format!("indent-{tag}-{target}.{ext}");
     let url = format!(
-        "https://github.com/xytrolabs/indent/releases/download/{tag}/indent-{tag}-{target}.{ext}"
+        "https://github.com/xytrolabs/indent/releases/download/{tag}/{asset}"
     );
 
     let resp = client
@@ -20391,6 +20603,10 @@ fn download_release_binary(
     let bytes = resp
         .bytes()
         .map_err(|e| format!("failed to read downloaded binary: {e}"))?;
+
+    // Before anything is unpacked or installed: the archive has to be the one
+    // the release published.
+    verify_release_checksum(client, tag, &asset, bytes.as_ref())?;
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
@@ -20505,12 +20721,44 @@ fn main() {
     }
 
     if args[1] == "--version" || args[1] == "-V" || args[1] == "version" {
-        println!("indent {}", INDENT_VERSION);
+        // Once there are two channels, which one you are running is part of the
+        // answer to "what version is this".
+        println!("indent {} ({})", INDENT_VERSION, read_channel());
         return;
     }
 
     if args[1] == "--update" || args[1] == "update" {
         self_update();
+        return;
+    }
+
+    // Channel switching. The choice is recorded beside the binary, so `--version`
+    // and `--channel` report it from then on, and `--update` keeps following the
+    // channel you are on.
+    if args[1] == "--switch-to-exp" || args[1] == "--switch-to-experimental" {
+        exit_on_switch_result(switch_channel(CHANNEL_EXP));
+        return;
+    }
+
+    if args[1] == "--switch-to-stable" {
+        exit_on_switch_result(switch_channel(CHANNEL_STABLE));
+        return;
+    }
+
+    if args[1] == "--channel" {
+        let channel = read_channel();
+        println!("channel: {channel}   (indent {INDENT_VERSION})");
+        if channel == CHANNEL_EXP {
+            println!(
+                "Experimental builds are unstable by definition; \
+                 `indent --switch-to-stable` returns to the stable channel."
+            );
+        } else {
+            println!(
+                "`indent --switch-to-exp` opts in to the experimental channel; \
+                 `--switch-to-stable` undoes it."
+            );
+        }
         return;
     }
 
@@ -21181,6 +21429,79 @@ mod tests {
             arg <= 56,
             "ArgItem grew to {arg} bytes (was 48). It sits in a Vec, once per \
              argument of every call, so this is paid per argument."
+        );
+    }
+
+    /// The rule that decides which release a channel follows. The interesting
+    /// case is the middle one: with an experimental tag newest, a stable install
+    /// must skip it — picking on "looks like a version" alone would not.
+    #[test]
+    fn release_tag_picking_respects_the_channel() {
+        let tags = r#"[
+            {"name": "v2.4.1-exp.2"},
+            {"name": "v2.4.1-exp.1"},
+            {"name": "v2.4.0"},
+            {"name": "v2.3.0"}
+        ]"#;
+        assert_eq!(pick_release_tag(tags, "stable").unwrap(), "v2.4.0");
+        assert_eq!(pick_release_tag(tags, "exp").unwrap(), "v2.4.1-exp.2");
+
+        // No experimental tag published yet is an error for exp, not a
+        // silent fallback onto stable.
+        let stable_only = r#"[{"name": "v2.4.0"}]"#;
+        assert_eq!(pick_release_tag(stable_only, "stable").unwrap(), "v2.4.0");
+        assert!(pick_release_tag(stable_only, "exp").is_err());
+
+        // A non-version tag is never a candidate, on either channel.
+        let junk = r#"[{"name": "nightly"}, {"name": "v2.4.0"}]"#;
+        assert_eq!(pick_release_tag(junk, "stable").unwrap(), "v2.4.0");
+    }
+
+    #[test]
+    fn experimental_tags_are_recognised() {
+        assert!(is_exp_tag("v2.4.1-exp.1"));
+        assert!(is_exp_tag("2.4.1-rc.1"));
+        assert!(!is_exp_tag("v2.4.0"));
+        assert!(!is_exp_tag("v2.4.10"));
+    }
+
+    #[test]
+    fn channel_file_contents_are_parsed_leniently() {
+        assert_eq!(parse_channel(Some("exp\n")), "exp");
+        assert_eq!(parse_channel(Some("  EXP  ")), "exp");
+        assert_eq!(parse_channel(Some("stable")), "stable");
+        // No file, or a file we do not understand, is stable rather than exp:
+        // the failure mode has to be "did not opt in".
+        assert_eq!(parse_channel(None), "stable");
+        assert_eq!(parse_channel(Some("")), "stable");
+        assert_eq!(parse_channel(Some("nightly\n")), "stable");
+    }
+
+    #[test]
+    fn sha256sums_lines_are_read() {
+        let sums = "\
+             aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  other.tar.gz\n\
+             bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *indent-v2.4.0-x86_64-unknown-linux-gnu.tar.gz\n";
+        assert_eq!(
+            parse_checksum_for(sums, "indent-v2.4.0-x86_64-unknown-linux-gnu.tar.gz").as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        // A name that is not listed, and a digest of the wrong length, are both
+        // "no answer" rather than a wrong answer.
+        assert!(parse_checksum_for(sums, "indent-v2.4.0-aarch64-apple-darwin.tar.gz").is_none());
+        assert!(parse_checksum_for("deadbeef  x.tar.gz", "x.tar.gz").is_none());
+    }
+
+    #[test]
+    fn sha256_hex_matches_a_known_vector() {
+        // Empty input is the one hash everyone can check by hand.
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 
