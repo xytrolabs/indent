@@ -461,14 +461,7 @@ enum Stmt {
         index_expr: String,
         value: ValueSource,
     },
-    AssignSlice {
-        line: usize,
-        name: String,
-        start_expr: Option<String>,
-        end_expr: Option<String>,
-        step_expr: Option<String>,
-        value: ValueSource,
-    },
+    AssignSlice(Box<AssignSliceStmt>),
     DefFun {
         line: usize,
         name: String,
@@ -528,14 +521,7 @@ enum Stmt {
         target_type: String,
         name: String,
     },
-    DefClass {
-        line: usize,
-        name: String,
-        parent: Option<String>,
-        fields: Vec<ClassField>,
-        methods: Vec<Stmt>,
-        is_dataclass: bool,
-    },
+    DefClass(Box<DefClassStmt>),
     Flag { line: usize, expr: String },
     /// Async event loop: `loop { ... }` — runs until all futures complete
     Loop {
@@ -580,6 +566,43 @@ enum Stmt {
     },
 }
 
+/// The payload of a slice assignment, boxed out of `Stmt`.
+///
+/// `Stmt` was 152 bytes for *every* statement, and this variant was the reason:
+/// three optional bound expressions plus a `ValueSource` is 152 bytes on its own.
+/// Measured payloads (temporary layout probe, since removed): `AssignSlice` 152,
+/// `DefClass` 112, `DoChain` 104, `DefVar`/`AssignOp`/`AssignIndex` 104, `DefFun`
+/// 96 — and the shapes that appear most often, `Say` and `BareExpr`, only 32.
+///
+/// So the two variants above 104 are the two worth boxing: doing that takes
+/// `Stmt` to 104 while adding an allocation only for slice assignments and class
+/// definitions, both rare. Boxing further would mean boxing the common
+/// assignment shapes, which trades an allocation per statement for 16-48 inline
+/// bytes — and the allocation (pointer plus the allocator's header) costs more
+/// than the inline bytes it saves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AssignSliceStmt {
+    line: usize,
+    name: String,
+    start_expr: Option<String>,
+    end_expr: Option<String>,
+    step_expr: Option<String>,
+    value: ValueSource,
+}
+
+/// The payload of a class definition, boxed out of `Stmt` for the same reason as
+/// `AssignSliceStmt`: two `Vec`s, two `String`s and a bool came to 112 bytes, and
+/// a class is defined once per program while every statement paid that width.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DefClassStmt {
+    line: usize,
+    name: String,
+    parent: Option<String>,
+    fields: Vec<ClassField>,
+    methods: Vec<Stmt>,
+    is_dataclass: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum RepeatMode {
     Infinite,
@@ -614,7 +637,11 @@ enum SubscriptAssignTarget {
 enum ArgItem {
     Positional(String),
     Named { name: String, expr: String },
-    DefVar(Stmt),
+    /// Boxed: this variant embeds a `Stmt`, which made `ArgItem` 152 bytes — so
+    /// *every* argument of *every* call in the AST cost 152 bytes (a four-argument
+    /// call, 608). Inline-`var` arguments are rare, so the box is essentially never
+    /// paid while the saving applies to every call argument there is.
+    DefVar(Box<Stmt>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2027,7 +2054,13 @@ impl Runtime {
 ///    single whitespace token, so `= "Not Found"` parses as one default instead
 ///    of producing a parameter named `Found"`. An AST cached by format 2 is not
 ///    merely stale, it is wrong, so it must not be reused even within a version.
-const AST_CACHE_FORMAT: u32 = 3;
+/// `3` -> `4`: `Stmt::AssignSlice` and `Stmt::DefClass` became tuple variants
+/// holding a `Box`, and `ArgItem::DefVar` gained a box. That changes the
+/// serialised shape of those nodes, so a cache written by an older build of the
+/// same version would deserialise into a *different* program rather than fail —
+/// exactly the hazard the build check exists for, but the build string (2.4.0) is
+/// unchanged here, so the format number is what has to move.
+const AST_CACHE_FORMAT: u32 = 4;
 const AST_CACHE_MAGIC: &[u8; 8] = b"INDENTC2";
 const AST_CACHE_DIR: &str = "__incache__";
 
@@ -3186,14 +3219,15 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             ctx.set_var(name, converted);
             Ok(Control::None)
         }
-        Stmt::DefClass {
-            name,
-            parent,
-            fields,
-            methods,
-            is_dataclass,
-            ..
-        } => {
+        Stmt::DefClass(data) => {
+            let DefClassStmt {
+                name,
+                parent,
+                fields,
+                methods,
+                is_dataclass,
+                ..
+            } = &**data;
             let mut method_map = HashMap::new();
             for m in methods {
                 if let Stmt::DefFun {
@@ -3321,14 +3355,15 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             ctx.set_var(name, updated);
             Ok(Control::None)
         }
-        Stmt::AssignSlice {
-            line,
-            name,
-            start_expr,
-            end_expr,
-            step_expr,
-            value,
-        } => {
+        Stmt::AssignSlice(data) => {
+            let AssignSliceStmt {
+                line,
+                name,
+                start_expr,
+                end_expr,
+                step_expr,
+                value,
+            } = &**data;
             let replacement = eval_value_source(value, ctx)?;
             let target = ctx
                 .get_var(name)
@@ -3635,14 +3670,16 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
 
 fn stmt_line(stmt: &Stmt) -> usize {
     match stmt {
+        // These two carry their payload in a box, so they cannot join the `|`
+        // chain below, which binds `line` out of each pattern directly.
+        Stmt::DefClass(d) => d.line,
+        Stmt::AssignSlice(d) => d.line,
         Stmt::Say { line, .. }
         | Stmt::DefVar { line, .. }
         | Stmt::MakeType { line, .. }
-        | Stmt::DefClass { line, .. }
         | Stmt::Assign { line, .. }
         | Stmt::AssignOp { line, .. }
         | Stmt::AssignIndex { line, .. }
-        | Stmt::AssignSlice { line, .. }
         | Stmt::DefFun { line, .. }
         | Stmt::Give { line, .. }
         | Stmt::IfChain { line, .. }
@@ -17805,14 +17842,14 @@ impl Parser {
                 }
             }
 
-            return Ok(Stmt::DefClass {
+            return Ok(Stmt::DefClass(Box::new(DefClassStmt {
                 line: line.line_no,
                 name,
                 parent,
                 fields,
                 methods,
                 is_dataclass,
-            });
+            })));
         }
 
         // Indent-1 def.fun: — REMOVED in 1.2
@@ -18060,14 +18097,14 @@ impl Parser {
                     start_expr,
                     end_expr,
                     step_expr,
-                } => Stmt::AssignSlice {
+                } => Stmt::AssignSlice(Box::new(AssignSliceStmt {
                     line: line.line_no,
                     name,
                     start_expr,
                     end_expr,
                     step_expr,
                     value,
-                },
+                })),
             });
         }
 
@@ -18513,7 +18550,7 @@ impl Parser {
 
             if cur.text.starts_with("def.var:") {
                 let stmt = self.parse_stmt(child_indent)?;
-                args.push(ArgItem::DefVar(stmt));
+                args.push(ArgItem::DefVar(Box::new(stmt)));
                 continue;
             }
 
@@ -19960,14 +19997,19 @@ fn normalize_spaces(line: &str) -> String {
 
 fn touch_lines(stmt: &Stmt) {
     match stmt {
+        // Boxed payloads — see `stmt_line` above.
+        Stmt::DefClass(d) => {
+            let _ = d.line;
+        }
+        Stmt::AssignSlice(d) => {
+            let _ = d.line;
+        }
         Stmt::Say { line, .. }
         | Stmt::DefVar { line, .. }
         | Stmt::MakeType { line, .. }
-        | Stmt::DefClass { line, .. }
         | Stmt::Assign { line, .. }
         | Stmt::AssignOp { line, .. }
         | Stmt::AssignIndex { line, .. }
-        | Stmt::AssignSlice { line, .. }
         | Stmt::DefFun { line, .. }
         | Stmt::Give { line, .. }
         | Stmt::IfChain { line, .. }
@@ -21056,6 +21098,27 @@ mod tests {
             value <= 40,
             "Value grew to {value} bytes (was 32). Box large variants — every \
              variable read, argument and list element moves this."
+        );
+
+        // `Stmt` is the other width every statement in every program pays for, and
+        // it was 152 bytes: `AssignSlice` (three optional bound expressions plus a
+        // `ValueSource`) was 152 on its own and `DefClass` 112, while the shapes
+        // that actually dominate — `Say`, `BareExpr` — are 32. Boxing just those
+        // two takes it to 112, and allocates only for a slice assignment or a
+        // class definition. `ArgItem` was 152 for the same reason (it embedded a
+        // whole `Stmt`), so *every argument of every call* cost 152 bytes of AST;
+        // boxing that payload takes it to 48.
+        let stmt = std::mem::size_of::<Stmt>();
+        let arg = std::mem::size_of::<ArgItem>();
+        assert!(
+            stmt <= 120,
+            "Stmt grew to {stmt} bytes (was 112). One variant wider than the common \
+             shapes makes every statement in every program that wide — box its payload."
+        );
+        assert!(
+            arg <= 56,
+            "ArgItem grew to {arg} bytes (was 48). It sits in a Vec, once per \
+             argument of every call, so this is paid per argument."
         );
     }
 
