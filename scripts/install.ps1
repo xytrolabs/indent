@@ -30,10 +30,18 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$BuildFromSource,
     [Parameter(Mandatory = $false)]
-    [string]$Version = "latest"
+    [string]$Version = "latest",
+    [Parameter(Mandatory = $false)]
+    [string]$Channel = "stable"
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Channel -notin @("stable", "exp")) {
+    Write-Host "Unknown channel: $Channel" -ForegroundColor Red
+    Write-Host "  Use -Channel stable or -Channel exp."
+    exit 2
+}
 $ProgressPreference = "SilentlyContinue"
 
 # GitHub requires TLS 1.2+. Windows PowerShell 5.1 (the `powershell.exe` that
@@ -220,7 +228,12 @@ if ($Local) {
     Write-Host "→ Fetching Indent $Version..."
     $installed = $false
     try {
-        if ($Version -eq "latest") {
+        if ($Channel -eq "exp" -and $Version -eq "latest") {
+            # Experimental builds are tagged v2.4.1-exp.1 and published as GitHub
+            # prereleases, so they never become "latest". This endpoint lists
+            # releases newest-first, and the tag shape picks the experimental ones.
+            $api = "https://api.github.com/repos/$Repo/releases?per_page=30"
+        } elseif ($Version -eq "latest") {
             $api = "https://api.github.com/repos/$Repo/releases/latest"
         } else {
             $api = "https://api.github.com/repos/$Repo/releases/tags/$Version"
@@ -235,6 +248,16 @@ if ($Local) {
             "Accept" = "application/vnd.github+json"
         }
         $release = Invoke-RestMethod -Uri $api -TimeoutSec 60 -Headers $apiHeaders -UserAgent "indent-installer"
+        if ($Channel -eq "exp" -and $Version -eq "latest") {
+            $release = $release | Where-Object { $_.tag_name -match '^v[0-9].*-' } | Select-Object -First 1
+            if (-not $release) {
+                Write-Host "No experimental build has been published yet in $Repo." -ForegroundColor Red
+                Write-Host "  The experimental channel follows tagged prereleases such as v2.4.1-exp.1."
+                Write-Host "        https://github.com/$Repo/releases"
+                exit 1
+            }
+            Write-Host "  Experimental build: $($release.tag_name)" -ForegroundColor Yellow
+        }
         # Windows releases are .zip archives containing indent.exe. Match by
         # exact target first, then fall back to any windows/arch .zip so naming
         # variants (pc-windows-msvc vs windows) both work.
@@ -264,6 +287,9 @@ if ($Local) {
             $exe = Get-ChildItem -Path $tmp -Recurse -Filter "indent.exe" | Select-Object -First 1
             if ($exe) {
                 Copy-Item $exe.FullName (Join-Path $BinDir "indent.exe") -Force
+                # Record the channel where `indent` looks for it, so `--version`
+                # and `--channel` report it and `--update` keeps following it.
+                Set-Content -Path (Join-Path $IndentHome "channel") -Value $Channel
                 Write-Host "✓ Downloaded indent" -ForegroundColor Green
                 foreach ($tool in @("air")) {
                     # A release archive ships `air.ps1`, a bare `air` (the shell
