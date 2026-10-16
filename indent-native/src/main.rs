@@ -474,7 +474,14 @@ enum Stmt {
         name: String,
         params: Vec<FunctionParam>,
         return_type: Option<String>,
-        body: Vec<Stmt>,
+        /// The body is behind an `Arc` because a `fun` statement is *executed*:
+        /// `Stmt::DefFun` builds a `FunctionDef` whose body is the same statements,
+        /// so an owned `Vec` meant a deep copy of the whole body per execution —
+        /// and the parser was copying it a second time to keep a handle for
+        /// `stmts_contain_yield`. Two `Arc` increments now replace both, and a
+        /// body cloned from the AST cache (which deserialises it) is shared too.
+        /// Serialised form is unchanged: `serde`'s `rc` feature writes the value.
+        body: Arc<Vec<Stmt>>,
         is_generator: bool,
         is_async: bool,
     },
@@ -622,7 +629,11 @@ struct FunctionParam {
 struct FunctionDef {
     params: Vec<FunctionParam>,
     return_type: Option<String>,
-    body: Vec<Stmt>,
+    /// Shared with the `Stmt::DefFun` it was built from, so defining a function is
+    /// a refcount bump rather than a copy of its body. `FunctionDef` is not
+    /// serialised (it is built from the AST at run time), so this costs nothing
+    /// at the cache boundary.
+    body: Arc<Vec<Stmt>>,
     is_generator: bool,
     /// The body as instructions, compiled on the first call that needs it.
     ///
@@ -13461,7 +13472,7 @@ fn spawn_builtin_future(builtin_name: &str, args: Vec<Value>) -> Result<Value, S
 /// A lightweight green thread: a function body plus an instruction pointer and
 /// its own locals. Suspendable at `await` statements.
 struct Coro {
-    body: Vec<Stmt>,
+    body: Arc<Vec<Stmt>>,
     ip: usize,
     locals: Map<String, Value>,
     result: Value,
@@ -13470,7 +13481,7 @@ struct Coro {
 }
 
 impl Coro {
-    fn new(body: Vec<Stmt>) -> Self {
+    fn new(body: Arc<Vec<Stmt>>) -> Self {
         Self {
             body,
             ip: 0,
@@ -17644,13 +17655,14 @@ impl Parser {
                     })
                     .collect();
                 let body = self.parse_nested_block(line.indent)?;
+                let is_generator = stmts_contain_yield(&body);
                 return Ok(Stmt::DefFun {
                     line: line.line_no,
                     name,
                     params,
                     return_type,
-                    body: body.clone(),
-                    is_generator: stmts_contain_yield(&body),
+                    body: body.into(),
+                    is_generator,
                     is_async: def_is_async,
                 });
             }
@@ -17665,7 +17677,7 @@ impl Parser {
                         name,
                         params: vec![],
                         return_type,
-                        body: vec![],
+                        body: Arc::new(Vec::new()),
                         is_generator: false,
                         is_async: def_is_async,
                     });
@@ -17710,13 +17722,14 @@ impl Parser {
                 body.push(self.parse_stmt(child_indent)?);
             }
 
+            let is_generator = stmts_contain_yield(&body);
             return Ok(Stmt::DefFun {
                 line: line.line_no,
                 name,
                 params,
                 return_type,
-                body: body.clone(),
-                is_generator: stmts_contain_yield(&body),
+                body: body.into(),
+                is_generator,
                 is_async: def_is_async,
             });
         }
@@ -20782,7 +20795,7 @@ fn main() {
     match runtime.run_file(&abs) {
         Ok(()) => {
             for f in runtime.funcs.values() {
-                for s in &f.body {
+                for s in f.body.iter() {
                     touch_lines(s);
                 }
             }
