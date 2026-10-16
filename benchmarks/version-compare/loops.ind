@@ -1,9 +1,13 @@
-#! Straight-line integer arithmetic in a loop: no allocation, no calls. Integer
-#! arithmetic only — `i / 2` would make the expression float, and assigning that to
-#! an `int` accumulator is a type error on every release.
+#! Straight-line integer arithmetic in a loop: no allocation, no calls.
+#!
+#! 50 000 iterations, not more: `LOOP_MAX_ITERS` is 100 000 and a `while` past it
+#! fails with "Repeat while loop exceeded safety limit" on every release, which
+#! would make this workload an error path rather than a measurement. Integer
+#! arithmetic only — `i / 2` makes the expression a float, and assigning that to an
+#! `int` accumulator is a type error everywhere.
 var acc int = 0
 var i int = 0
-while i < 500000
+while i < 50000
     acc is acc + (i * 3) - i
     i is i + 1
 say "checks " + string(acc)
