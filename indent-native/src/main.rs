@@ -728,12 +728,30 @@ enum Callable {
 }
 
 #[derive(Debug, Clone)]
+/// One name in an imported module's namespace.
+///
+/// A module used to keep three parallel maps — variables, functions, and the
+/// callables it imported from other modules — which meant three bucket arrays,
+/// and a function's name stored twice (once in `funcs`, once in `callables`) to
+/// say the same thing. One map holds one bucket array and one key per name.
+///
+/// Precedence, which is the part that has to be stated rather than assumed,
+/// because a single entry per name forces a choice the old three maps never had
+/// to make. `Func` outranks `Imported` so that a module's own function wins over
+/// an imported one of the same name (the old injection loop skipped exactly that
+/// case), and both outrank `Value` so that `get X from Y` still resolves a name
+/// that is a function rather than a variable. A module with a *variable* and a
+/// *function* sharing a name loses the variable from its namespace; that is not
+/// a shape any module in `std/` has, and it is the one case this fold changes.
+enum ModuleEntry {
+    Value(Value),
+    Func(Arc<FunctionDef>),
+    Imported(Callable),
+}
+
+#[derive(Debug, Clone)]
 struct ModuleInstance {
-    vars: Map<String, Value>,
-    funcs: Map<String, Arc<FunctionDef>>,
-    // Functions this module imported from other modules (via `get X from Y`).
-    // Preserved so a module's functions can call its own imports.
-    callables: Map<String, Callable>,
+    entries: Map<String, ModuleEntry>,
 }
 
 /// A list's elements, shared by every binding that holds them.
@@ -1593,7 +1611,13 @@ fn resolve_context_value(name: &str, ctx: &ExecContext<'_>) -> Option<Value> {
                 cur = fields[slot].clone();
             }
             Value::Module(ref m) => {
-                cur = m.vars.get(*p)?.clone();
+                // Only a variable is a value here. A function of this name used to
+                // miss the `vars` lookup and fail the interpolation, and it still
+                // does — the entry type just says so explicitly now.
+                cur = match m.entries.get(*p)? {
+                    ModuleEntry::Value(v) => v.clone(),
+                    _ => return None,
+                };
             }
             _ => return None,
         }
@@ -6694,20 +6718,23 @@ fn import_stmt(
                     .modules
                     .insert(module_name.to_string(), module.clone());
             }
-            if let Some(f) = module.funcs.get(symbol) {
-                let callable = Callable::External {
-                    module: module.clone(),
-                    name: symbol.to_string(),
-                };
-                ctx.rt.callables.insert(bind, callable);
-                let _ = f;
-            } else if let Some(v) = module.vars.get(symbol) {
-                ctx.rt.vars.insert(bind, v.clone());
-            } else {
-                return Err(format!(
-                    "Module '{}' does not export '{}'",
-                    module_name, symbol
-                ));
+            match module.entries.get(symbol) {
+                Some(ModuleEntry::Func(_)) => {
+                    let callable = Callable::External {
+                        module: module.clone(),
+                        name: symbol.to_string(),
+                    };
+                    ctx.rt.callables.insert(bind, callable);
+                }
+                Some(ModuleEntry::Value(v)) => {
+                    ctx.rt.vars.insert(bind, v.clone());
+                }
+                _ => {
+                    return Err(format!(
+                        "Module '{}' does not export '{}'",
+                        module_name, symbol
+                    ));
+                }
             }
         }
     }
@@ -6758,11 +6785,23 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
     ctx.rt.module_loading.lock().unwrap().remove(&canonical);
     run_result?;
 
-    let module = Arc::new(ModuleInstance {
-        vars: module_runtime.vars,
-        funcs: module_runtime.funcs,
-        callables: module_runtime.callables,
-    });
+    let mut module_runtime = module_runtime;
+    let mut entries = Map::with_capacity_and_hasher(
+        module_runtime.vars.len() + module_runtime.funcs.len() + module_runtime.callables.len(),
+        Default::default(),
+    );
+    // Insertion order sets the precedence documented on `ModuleEntry`: variables
+    // first, then imports, then the module's own functions last so they win.
+    for (name, value) in module_runtime.vars.drain() {
+        entries.insert(name, ModuleEntry::Value(value));
+    }
+    for (name, callable) in module_runtime.callables.drain() {
+        entries.insert(name, ModuleEntry::Imported(callable));
+    }
+    for (name, f) in module_runtime.funcs.drain() {
+        entries.insert(name, ModuleEntry::Func(f));
+    }
+    let module = Arc::new(ModuleInstance { entries });
 
     ctx.rt
         .module_cache
@@ -6980,7 +7019,10 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         // Declared positional parameters of the target, when knowable.
         let params: Option<Vec<FunctionParam>> = match &callable {
             Callable::Local(f) => Some(f.params.clone()),
-            Callable::External { module, name } => module.funcs.get(name).map(|f| f.params.clone()),
+            Callable::External { module, name } => match module.entries.get(name) {
+                Some(ModuleEntry::Func(f)) => Some(f.params.clone()),
+                _ => None,
+            },
             Callable::Builtin(_) => None,
         };
         if let Some(params) = params {
@@ -7530,9 +7572,19 @@ fn invoke_method_on_value(
 
     // 2b. Module function invocation
     if let Value::Module(ref m) = target_val {
-        if let Some(func_def) = m.funcs.get(method) {
+        if let Some(ModuleEntry::Func(func_def)) = m.entries.get(method) {
             let mut temp_rt = Runtime::bare(PathBuf::from("."));
-            temp_rt.vars = m.vars.clone();
+            // The module's variables seed the temporary runtime; a function or an
+            // import sharing a name is not one, and the old `vars` map did not
+            // hold it either.
+            temp_rt.vars = m
+                .entries
+                .iter()
+                .filter_map(|(k, e)| match e {
+                    ModuleEntry::Value(v) => Some((k.clone(), v.clone())),
+                    _ => None,
+                })
+                .collect();
             ctx.rt.lend_tables_to(&mut temp_rt);
             let out = invoke_function(
                 func_def,
@@ -7617,12 +7669,13 @@ fn resolve_member_access_ref(target: &Value, field: &str) -> Result<Value, Strin
             }
         }
         Value::Module(m) => {
-            if let Some(v) = m.vars.get(field) {
-                Ok(v.clone())
-            } else if m.funcs.contains_key(field) {
-                Ok(Value::Func(field.to_string()))
-            } else {
-                Err(format!("Module has no attribute '{field}'"))
+            // A variable is read; an own function's name is handed back as a
+            // `Value::Func`, which is what the old `funcs` check produced. An
+            // imported name is neither — it used to fall through to the error.
+            match m.entries.get(field) {
+                Some(ModuleEntry::Value(v)) => Ok(v.clone()),
+                Some(ModuleEntry::Func(_)) => Ok(Value::Func(field.to_string())),
+                _ => Err(format!("Module has no attribute '{field}'")),
             }
         }
         Value::ListShared(items) => {
@@ -7684,7 +7737,7 @@ fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, Str
         let module = ctx
             .get_module(left)
             .ok_or_else(|| format!("Undefined module '{}'", left))?;
-        if module.funcs.contains_key(right) {
+        if matches!(module.entries.get(right), Some(ModuleEntry::Func(_))) {
             return Ok(Callable::External {
                 module,
                 name: right.to_string(),
@@ -7706,7 +7759,7 @@ fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, Str
     module_names.sort();
     for name in module_names {
         if let Some(module) = ctx.rt.modules.get(name) {
-            if module.funcs.contains_key(callee) {
+            if matches!(module.entries.get(callee), Some(ModuleEntry::Func(_))) {
                 return Ok(Callable::External {
                     module: module.clone(),
                     name: callee.to_string(),
@@ -7725,40 +7778,40 @@ fn invoke_external_function(
     named: &HashMap<String, Value>,
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
-    let f = module
-        .funcs
-        .get(name)
-        .ok_or_else(|| format!("Module function '{}' not found", name))?;
+    let f = match module.entries.get(name) {
+        Some(ModuleEntry::Func(f)) => f,
+        _ => return Err(format!("Module function '{}' not found", name)),
+    };
 
     // Temporarily inject module symbols so module functions can compose
     // with sibling module functions and module-level variables.
     let mut previous_callables: HashMap<String, Option<Callable>> = HashMap::new();
 
-    // 1) Inject the functions this module imported from other modules, so a
-    //    module function can call its own `get X from other` imports.
-    for (name, callable) in &module.callables {
-        if module.funcs.contains_key(name) {
-            continue; // own functions are injected in step 2 as externals
-        }
-        previous_callables.insert(name.clone(), ctx.rt.callables.get(name).cloned());
-        ctx.rt.callables.insert(name.clone(), callable.clone());
-    }
-
-    // 2) Inject the module's own functions.
-    for func_name in module.funcs.keys() {
-        previous_callables.insert(func_name.clone(), ctx.rt.callables.get(func_name).cloned());
-        ctx.rt.callables.insert(
-            func_name.clone(),
-            Callable::External {
-                module: module.clone(),
-                name: func_name.clone(),
-            },
-        );
-    }
-
-    for (var_name, var_value) in &module.vars {
-        if !ctx.rt.vars.contains_key(var_name) {
-            ctx.rt.vars.insert(var_name.clone(), var_value.clone());
+    // One pass over the single map. The old code walked `callables` and then
+    // `funcs`, and had to skip a name that was in both; a name has one entry now,
+    // and `Func` outranks `Imported` when the module is built, so that case cannot
+    // arise and the order of these arms does not matter.
+    for (name, entry) in &module.entries {
+        match entry {
+            ModuleEntry::Func(_) => {
+                previous_callables.insert(name.clone(), ctx.rt.callables.get(name).cloned());
+                ctx.rt.callables.insert(
+                    name.clone(),
+                    Callable::External {
+                        module: module.clone(),
+                        name: name.clone(),
+                    },
+                );
+            }
+            ModuleEntry::Imported(callable) => {
+                previous_callables.insert(name.clone(), ctx.rt.callables.get(name).cloned());
+                ctx.rt.callables.insert(name.clone(), callable.clone());
+            }
+            ModuleEntry::Value(var_value) => {
+                if !ctx.rt.vars.contains_key(name) {
+                    ctx.rt.vars.insert(name.clone(), var_value.clone());
+                }
+            }
         }
     }
 
@@ -13232,14 +13285,21 @@ fn spawn_task_builtin(
 
         // Inject the external module so its functions are callable.
         if let Some(ref m) = module_ref {
-            for (n, c) in &m.callables {
-                if !rt.callables.contains_key(n.as_str()) {
-                    rt.callables.insert(n.clone(), c.clone());
-                }
-            }
-            for (n, v) in &m.vars {
-                if !rt.vars.contains_key(n.as_str()) {
-                    rt.vars.insert(n.clone(), v.clone());
+            // Exactly what the two old loops injected: imported callables, and
+            // variables. The module's own functions were never seeded here.
+            for (n, entry) in &m.entries {
+                match entry {
+                    ModuleEntry::Imported(c) => {
+                        if !rt.callables.contains_key(n.as_str()) {
+                            rt.callables.insert(n.clone(), c.clone());
+                        }
+                    }
+                    ModuleEntry::Value(v) => {
+                        if !rt.vars.contains_key(n.as_str()) {
+                            rt.vars.insert(n.clone(), v.clone());
+                        }
+                    }
+                    ModuleEntry::Func(_) => {}
                 }
             }
         }
@@ -15577,12 +15637,14 @@ fn resolve_var_chain(parts: &[String], ctx: &mut ExecContext<'_>) -> Result<Valu
         match cur {
             Value::Module(ref m) => {
                 let module_name = parts[0].clone();
-                if let Some(v) = m.vars.get(p) {
-                    cur = v.clone();
-                } else if m.funcs.contains_key(p) {
-                    return Err(format!("Module '{}' has function '{}' — use 'get {} from {}' to import it", module_name, p, p, module_name));
-                } else {
-                    return Err(format!("Module '{}' has no attribute '{}'", module_name, p));
+                match m.entries.get(p) {
+                    Some(ModuleEntry::Value(v)) => cur = v.clone(),
+                    Some(ModuleEntry::Func(_)) => {
+                        return Err(format!("Module '{}' has function '{}' — use 'get {} from {}' to import it", module_name, p, p, module_name));
+                    }
+                    _ => {
+                        return Err(format!("Module '{}' has no attribute '{}'", module_name, p));
+                    }
                 }
             }
             Value::DictShared(ref map) => {
