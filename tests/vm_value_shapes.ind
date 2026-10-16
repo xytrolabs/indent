@@ -1,0 +1,86 @@
+#! The shapes a statement's *value* can have, and what each one means.
+#!
+#! The parser hands a `var` or an assignment one of two things: an expression, or a
+#! call it could not tell from a bare name. The second covers `var n int = len text`
+#! — a space-call, so an ordinary call with arguments — and `var best = dir`, where
+#! the source is just a name: `eval_value_source` calls it when it can and reads it
+#! as a variable when the call fails, and only the frames can say which it is.
+#!
+#! Compiling only the expression shape left the commonest statement in the language —
+#! `var x = y` — outside every compiled body. All of these hold on both engines, and
+#! `INDENT_VM_TRACE=1` reports none of them as refused.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+fun zero
+    give 42
+
+#! ---- 1. a declaration from a bare name, and from a call by name ----
+var total int = 0
+var called int = 0
+repeat i in [1, 2, 3]
+    var v int = i
+    total is total + v
+    var z int = zero
+    called is called + z
+var ok1a boolean = total == 6
+assert ok1a "a declaration from a bare name reads the variable"
+var ok1b boolean = called == 126
+assert ok1b "a declaration from a bare name calls it when it is a function"
+
+#! ---- 2. a space-call declaration ----
+var text dynamic = "abcd"
+var bySpace int = 0
+repeat i in [1, 2]
+    var n int = len text
+    bySpace is bySpace + n
+var ok2 boolean = bySpace == 8
+assert ok2 "a space-call declaration compiles as a call"
+
+#! ---- 3. an assignment from a bare name ----
+var src int = 7
+var copied int = 0
+repeat i in [1, 2]
+    copied is src
+var ok3 boolean = copied == 7
+assert ok3 "an assignment from a bare name reads the variable"
+
+#! ---- 4. an indexed assignment from a bare name ----
+var slot dynamic = {"k": 0}
+var sink int = 0
+repeat i in [1, 2, 3]
+    slot["k"] is src
+    sink is sink + slot["k"]
+var ok4 boolean = sink == 21
+assert ok4 "an indexed assignment from a bare name reads the variable"
+
+#! ---- 6. a declaration from a member read ----
+#! `record.id` is the same source shape as a zero-argument call, and it is a member
+#! read whenever it is not a call: a zero-argument *call* on a dotted name would
+#! have been written `record.id()`, which the parser hands over as an expression.
+var record dynamic = {"id": "abc", "n": 3}
+var joined dynamic = ""
+var counted2 int = 0
+repeat i in [1, 2]
+    var mid dynamic = record.id
+    var n2 int = record.n
+    joined is joined + mid
+    counted2 is counted2 + n2
+var ok6a boolean = joined == "abcabc"
+assert ok6a "a declaration from a member read reads the member"
+var ok6b boolean = counted2 == 6
+assert ok6b "and the member it reads keeps its own type"
+
+#! ---- 7. a name that is neither callable nor defined fails the same way ----
+var caught boolean = false
+do:
+    repeat i in [1]
+        var missing dynamic = nothing_at_all_here
+catch as err:
+    caught is true
+var ok5 boolean = caught
+assert ok5 "a bare name that is neither callable nor defined still raises"

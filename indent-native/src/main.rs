@@ -3644,6 +3644,25 @@ enum VmInstr {
     /// `reset`: put the innermost loop's counter back to zero and jump to
     /// `target`, its start, so the loop begins again without a bump.
     ResetLoop { slot: u16, target: usize },
+    /// A declaration whose value the parser could not tell from a bare name.
+    ///
+    /// `var best = dir` and `var best = dir()` are the same source to the parser,
+    /// and `eval_value_source` answers both the same way: it calls the name, and
+    /// when that fails it reads the name as a variable instead. Which of the two it
+    /// is depends on the frames — a name can be a function in one scope and a
+    /// variable in another — so the choice cannot be made here. This instruction
+    /// keeps it, and pushes whichever of the two the tree-walker would have got.
+    ///
+    /// `slot` is where the name lives as a variable, and the value is read from
+    /// there *before* the call is attempted: a failed call does not leave the frames
+    /// as it found them, and the fallback must not be able to see that. A dotted
+    /// name — `msg.id` — is a member read when it is not a call, so `field` is read
+    /// off the base value, and `slot` is the *base* variable's.
+    CallOrRead {
+        name: String,
+        slot: u16,
+        field: Option<String>,
+    },
 }
 
 /// A compiled loop, as `vm_compile_stmts` sees it while it builds the body.
@@ -3846,6 +3865,58 @@ fn vm_compile_args(args: &[ArgItem], prog: &mut VmProgram, rt: &Runtime) -> bool
         }
     }
     true
+}
+
+/// Compile a statement's value, which the parser gives either as an expression or
+/// as a call it could not tell from a bare name.
+///
+/// A space-call — `len text` — is a call with arguments, and `vm_stmt_call_ok` is
+/// the same gate a statement call takes. A bare name — `dir` — is the ambiguous
+/// form: `eval_value_source` calls the name when it can and reads it as a variable
+/// when the call fails, so it becomes a `CallOrRead` and the choice stays at run
+/// time. That covers every shape `Stmt::Assign` already took; the compiler used to
+/// take only the expression one, which left `var x = y` and `var n = len text` —
+/// and so their whole enclosing body — on the tree-walker.
+fn vm_compile_value(value: &ValueSource, prog: &mut VmProgram, rt: &Runtime) -> bool {
+    match value {
+        ValueSource::Expr(text) => vm_compile_text(text, prog, rt),
+        ValueSource::Call { callee, args } if args.is_empty() => {
+            // The ambiguous form: `var best = dir`, `x is y`, and a member read like
+            // `msg.id`, none of which the parser can tell from a zero-argument call.
+            // A dotted one keeps the member read as its fallback — a zero-argument
+            // *call* on one would have been written `msg.id()`, which arrives as an
+            // expression — and a deeper chain is left to the tree-walker.
+            let (base, field) = match callee.split_once('.') {
+                Some((base, field)) if !field.contains('.') => (base, Some(field.to_string())),
+                Some(_) => return false,
+                None => (callee.as_str(), None),
+            };
+            if !is_bare_identifier(base) {
+                return false;
+            }
+            // The name is registered as a slot so the hand-over keeps it current —
+            // that is where the instruction reads the variable from.
+            let slot = vm_slot(&mut prog.slots, base);
+            prog.owned.push(slot);
+            prog.instrs.push(VmInstr::CallOrRead {
+                name: callee.clone(),
+                slot,
+                field,
+            });
+            true
+        }
+        ValueSource::Call { callee, args } if vm_stmt_call_ok(callee, args, rt) => {
+            if !vm_compile_args(args, prog, rt) {
+                return false;
+            }
+            prog.instrs.push(VmInstr::Call {
+                callee: callee.clone(),
+                argc: args.len() as u16,
+            });
+            true
+        }
+        _ => false,
+    }
 }
 
 /// The frame slot to read `target` from *in place*, when it is a bare variable.
@@ -4720,27 +4791,12 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                         continue;
                     }
                 }
-                match value {
-                    ValueSource::Expr(text) => {
-                        if !vm_compile_text(text, prog, rt) {
-                            return false;
-                        }
-                    }
-                    // `eval_value_source` reads a zero-argument source as a
-                    // variable before it tries a call, so only the form with
-                    // explicit arguments is compiled.
-                    ValueSource::Call { callee, args }
-                        if !args.is_empty() && vm_stmt_call_ok(callee, args, rt) =>
-                    {
-                        if !vm_compile_args(args, prog, rt) {
-                            return false;
-                        }
-                        prog.instrs.push(VmInstr::Call {
-                            callee: callee.clone(),
-                            argc: args.len() as u16,
-                        });
-                    }
-                    ValueSource::Call { .. } => return false,
+                // Every value shape, the same ones a declaration takes — including
+                // the bare name, whose call-or-read choice `CallOrRead` keeps at run
+                // time. This used to compile only a call with explicit arguments,
+                // which sent `x is y` and `x is append ys z`… to the tree-walker.
+                if !vm_compile_value(value, prog, rt) {
+                    return false;
                 }
                 let s = vm_slot(&mut prog.slots, name);
                 prog.instrs.push(VmInstr::StoreSlot(s));
@@ -4754,11 +4810,7 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 value,
                 ..
             } if is_bare_identifier(name) => {
-                let text = match value {
-                    ValueSource::Expr(text) => text,
-                    _ => return false,
-                };
-                if !vm_compile_text(text, prog, rt) {
+                if !vm_compile_value(value, prog, rt) {
                     return false;
                 }
                 if !vm_compile_text(index_expr, prog, rt) {
@@ -4787,11 +4839,15 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 ty,
                 value,
             } if is_bare_identifier(name) => {
-                let text = match value {
-                    ValueSource::Expr(text) => text,
-                    _ => return false,
-                };
-                if !vm_compile_text(text, prog, rt) {
+                // A value reaches these two either as an expression or as a call the
+                // parser could not tell from one, and both shapes compile the same
+                // way a plain assignment compiles them: a space-call — `len text` —
+                // is an ordinary call, and a bare name is the form
+                // `eval_value_source` reads as a variable when the call fails, so it
+                // gets an instruction that keeps that choice at run time. Compiling
+                // only the expression shape left the commonest statement in the
+                // language out of every compiled body.
+                if !vm_compile_value(value, prog, rt) {
                     return false;
                 }
                 let slot = if prog.loops.is_empty() {
@@ -4996,6 +5052,11 @@ fn vm_names_bound(prog: &VmProgram, ctx: &ExecContext<'_>) -> bool {
 /// a builtin on a container from copying the whole container twice per call.
 fn vm_call_runs_user_code(callee: &str, args: &[Value], ctx: &ExecContext<'_>) -> bool {
     if ctx.rt.classes.contains_key(callee) {
+        return true;
+    }
+    // A dotted callee — `msg.id()` — is a method on a module, an object or an
+    // instance, so it runs Indent code however it resolves.
+    if callee.contains('.') {
         return true;
     }
     if args.iter().any(|a| matches!(a, Value::Object { .. })) {
@@ -5496,6 +5557,50 @@ fn vm_run(
                         sp += 1;
                         ip += 1;
                     }
+                    VmInstr::CallOrRead { name, slot, field } => {
+                        // The value the name has as a *variable*, taken before the
+                        // call is attempted. A failed `exec_call` does not leave the
+                        // frames as it found them — the hand-over then reads the
+                        // emptied binding back into the slot — so the fallback has to
+                        // be a value that was captured first. Reading the slot is also
+                        // the right place for it: slots, not frames, are the body's
+                        // store between boundaries.
+                        let as_variable = values[*slot as usize].clone();
+                        // The hand-over is only for a call that can run Indent code: a
+                        // builtin cannot read a frame, and a variable is not going to
+                        // be called at all. A dotted name is given it too — if it is a
+                        // call it reaches a method.
+                        let user_code = field.is_some() || vm_call_runs_user_code(name, &[], ctx);
+                        if user_code {
+                            vm_flush_slots(prog, &mut values, ctx);
+                        }
+                        let called = exec_call(name, &[], ctx);
+                        if user_code {
+                            vm_pull_slots(prog, &mut values, ctx);
+                        }
+                        let v = match called {
+                            Ok(v) => v,
+                            // The read `eval_value_source` falls back to. A dotted
+                            // source is a member of the value the base had, not a frame
+                            // lookup: `msg.id` names a key of `msg`.
+                            Err(_) => match field {
+                                Some(field) => resolve_member_access_ref(&as_variable, field)?,
+                                // A name that is neither has to fail the way it fails
+                                // in the tree-walker, message included.
+                                None => {
+                                    if matches!(as_variable, Value::Empty)
+                                        && ctx.get_var(name).is_none()
+                                    {
+                                        return Err(format!("Unknown identifier '{name}'"));
+                                    }
+                                    as_variable
+                                }
+                            },
+                        };
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
+                        sp += 1;
+                        ip += 1;
+                    }
                     VmInstr::IterNext {
                         items,
                         index,
@@ -5760,6 +5865,7 @@ fn vm_instr_stack_effect(instr: &VmInstr) -> (usize, usize) {
         VmInstr::Const(_)
         | VmInstr::LoadSlot(_)
         | VmInstr::Interpolate(_)
+        | VmInstr::CallOrRead { .. }
         | VmInstr::MemberSlot { .. } => (0, 1),
         VmInstr::StoreSlot(_)
         | VmInstr::Pop
