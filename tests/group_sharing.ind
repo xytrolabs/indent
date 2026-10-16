@@ -1,0 +1,133 @@
+#! group_sharing.ind — a group shares its element buffer, so every mutation must
+#! be copy-on-write.
+#!
+#! A group (`group([...])`) is backed by the same shared buffer a list is, which
+#! makes `var b dynamic = a` an O(1) pointer copy instead of a deep copy. The
+#! whole point of the change is that this is invisible: two names for a group a
+#! program only ever reads cost one buffer, and the moment either name is written
+#! through, the writer gets a buffer of its own and the other name cannot see it.
+#!
+#! That "the other name cannot see it" is the part a compiler cannot check for us
+#! — `Arc` simply refuses to hand out a `&mut` while a second handle exists, but
+#! it cannot tell a legitimate `make_mut` from a write that was supposed to land
+#! in the original. These assertions pin the observable rule: the helper
+#! functions and `+` return a *new* group and never touch their arguments, and an
+#! alias left alone still means what it meant.
+#!
+#! Groups are declared here rather than in the expression fuzzer because they are
+#! thin on the ground in the corpus: before this file, no test called `group` at
+#! all, so §16's set container was the one container the gate could not see.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. building a group deduplicates and keeps insertion order ----
+#! A group is not indexable, so order is checked through the one thing that
+#! exposes it: iteration.
+fun joined g
+    var out string = ""
+    repeat v in g
+        out is out + v + ","
+    give out
+
+var colors dynamic = group(["red", "blue", "red"])
+var ok1a boolean = len(colors) == 2
+assert ok1a "a repeated element is stored once"
+var ok1b boolean = joined(colors) == "red,blue,"
+assert ok1b "the first occurrence keeps its position and the duplicate is gone"
+
+#! ---- 2. membership ----
+var ok2a boolean = contains(colors, "red")
+var ok2b boolean = not contains(colors, "green")
+assert ok2a "contains finds a member"
+assert ok2b "and does not invent one"
+var ok2c boolean = set_contains(colors, "blue")
+assert ok2c "set_contains agrees with contains"
+
+#! ---- 3. `len` walks the buffer, not the elements ----
+var bulk dynamic = []
+var i int = 0
+while i < 2000
+    var slot int = i % 500
+    bulk is append bulk slot
+    i is i + 1
+var many dynamic = group(bulk)
+var ok3a boolean = len(many) == 500
+assert ok3a "group(bulk) collapses the 2000 values onto 500"
+
+#! ---- 4. set_add returns a new group ----
+var with_yellow dynamic = set_add(colors, "yellow")
+var ok4a boolean = len(colors) == 2
+assert ok4a "set_add leaves its argument alone"
+var ok4b boolean = len(with_yellow) == 3
+var ok4c boolean = set_contains(with_yellow, "yellow")
+assert ok4b "the returned group has the new element"
+assert ok4c "and the caller can see it"
+var ok4d boolean = not set_contains(colors, "yellow")
+assert ok4d "the original still cannot"
+
+#! ---- 5. an alias is not a second copy until it is written through ----
+var alias dynamic = colors
+var ok5a boolean = joined(alias) == "red,blue,"
+assert ok5a "reading through an alias sees the same group"
+var grown dynamic = set_add(alias, "green")
+var ok5b boolean = len(colors) == 2
+assert ok5b "growing the alias did not grow the group it named"
+var ok5c boolean = len(alias) == 2
+assert ok5c "and the alias was not grown in place either"
+var ok5d boolean = len(grown) == 3
+assert ok5d "only the returned group grew"
+
+#! ---- 6. `+` unions without mutating either operand ----
+var more dynamic = group(["green", "blue"])
+var all dynamic = colors + more
+var ok6a boolean = len(all) == 3
+assert ok6a "union covers both sides once"
+var ok6b boolean = len(colors) == 2
+var ok6c boolean = len(more) == 2
+assert ok6b "union left its left operand alone"
+assert ok6c "union left its right operand alone"
+var ok6d boolean = joined(all) == "red,blue,green,"
+assert ok6d "union keeps the left side's order, then the right's"
+
+#! ---- 7. the algebra helpers ----
+var ok7a boolean = len(set_intersection(colors, more)) == 1
+assert ok7a "intersection is the one shared member"
+var ok7b boolean = len(set_difference(colors, more)) == 1
+assert ok7b "difference is the one member only the left has"
+var ok7c boolean = set_contains(set_difference(colors, more), "red")
+assert ok7c "and it is the right member"
+var ok7d boolean = len(set_union(colors, more)) == 3
+assert ok7d "set_union equals the `+` result"
+var ok7e boolean = len(set_remove(colors, "red")) == 1
+assert ok7e "set_remove drops the member"
+var ok7f boolean = len(colors) == 2
+assert ok7f "and leaves the original alone too"
+
+#! ---- 8. iterating a group ----
+var ok8 boolean = joined(all) == "red,blue,green,"
+assert ok8 "repeat walks a group in order"
+
+#! ---- 9. a group is not a list ----
+var ok9a boolean = len(group([1, 1, 2])) == 2
+assert ok9a "numeric duplicates collapse"
+var ok9b boolean = len(group(group([1, 2, 2]))) == 2
+assert ok9b "grouping a group is idempotent"
+var ok9c boolean = len(group([])) == 0
+assert ok9c "the empty group is empty"
+var ok9d boolean = is_missing(group([]))
+assert ok9d "and reads as missing"
+
+#! ---- 10. clear gives back an empty group, not a broken handle ----
+var cleared dynamic = clear(colors)
+var ok10a boolean = len(cleared) == 0
+assert ok10a "clear returns an empty group"
+var ok10b boolean = len(colors) == 2
+assert ok10b "clear does not empty the group it was given"
+var ok10c boolean = len(set_add(cleared, "x")) == 1
+assert ok10c "the cleared group is still usable"
+
+say "group_sharing: all checks passed"

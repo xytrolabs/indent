@@ -823,7 +823,10 @@ enum Value {
     /// constructor below: only *patterns* have to know the elements are behind an
     /// `Arc`, and keeping the two apart is what let this change be mechanical.
     ListShared(SharedList),
-    Set(Vec<Value>),  // ordered set — unique values, insertion order
+    /// The shared set. Its storage is the same ordered, unique `Vec<Value>` a list
+    /// uses, so it shares the same payload type rather than restating the
+    /// `Arc`/`make_mut` machinery for the third time.
+    SetShared(SharedList),
     /// The shared dictionary, for the same reason and by the same route as
     /// `ListShared`: `len(d)` or `has_key d k` on a 5 000-entry dict was copying the
     /// whole table on every call.
@@ -864,6 +867,12 @@ impl Value {
     #[allow(non_snake_case)]
     fn Dict(entries: SmallDict) -> Value {
         Value::DictShared(entries.into())
+    }
+
+    /// Build a set. Named `Set` for the same reason as `List` above.
+    #[allow(non_snake_case)]
+    fn Set(elements: Vec<Value>) -> Value {
+        Value::SetShared(elements.into())
     }
 }
 
@@ -1149,7 +1158,7 @@ impl fmt::Display for Value {
                     .join(", ");
                 write!(f, "[{joined}]")
             }
-            Value::Set(items) => {
+            Value::SetShared(items) => {
                 let joined = items
                     .iter()
                     .map(|x| format!("{x}"))
@@ -1196,7 +1205,7 @@ impl Value {
             Value::Float(v) => *v != 0.0,
             Value::Str(v) => !v.is_empty(),
             Value::ListShared(v) => !v.is_empty(),
-            Value::Set(v) => !v.is_empty(),
+            Value::SetShared(v) => !v.is_empty(),
             Value::DictShared(v) => !v.is_empty(),
             Value::Func(_) => true,
             Value::Module(_) => true,
@@ -1221,7 +1230,7 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
             Value::ListShared(_) => "list",
-            Value::Set(_) => "group",
+            Value::SetShared(_) => "group",
             Value::DictShared(_) => "dict",
             Value::Func(_) => "function",
             Value::Module(_) => "module",
@@ -1283,7 +1292,7 @@ fn is_missing_value(value: &Value) -> bool {
         Value::Empty => true,
         Value::Str(v) => v.is_empty(),
         Value::ListShared(v) => v.is_empty(),
-        Value::Set(v) => v.is_empty(),
+        Value::SetShared(v) => v.is_empty(),
         Value::DictShared(v) => v.is_empty(),
         _ => false,
     }
@@ -1363,7 +1372,7 @@ fn iterable_items_owned_typed(value: Value, generators: bool) -> Option<Vec<Valu
         // a list the caller owns still does not copy — but a shared one is read, not
         // moved away from, and that is the one case that copies.
         Value::ListShared(v) => Some(v.into_vec()),
-        Value::Set(v) => Some(v),
+        Value::SetShared(v) => Some(v.into_vec()),
         Value::DictShared(mut m)
             if generators && m.get("__generator__").map_or(false, |v| v.to_bool()) =>
         {
@@ -1382,7 +1391,7 @@ fn iterable_items(value: &Value) -> Option<Vec<Value>> {
         // A read of an iterable is an owned snapshot, so it copies the elements —
         // which is exactly what the caller asked for.
         Value::ListShared(v) => Some(v.to_vec()),
-        Value::Set(v) => Some(v.clone()),
+        Value::SetShared(v) => Some(v.to_vec()),
         Value::DictShared(m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
             match m.get("__gen_values__") {
                 Some(Value::ListShared(v)) => Some(v.to_vec()),
@@ -6950,7 +6959,7 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
             "last" => Some("last"),
             _ => None,
         },
-        Value::Set(_) => match method {
+        Value::SetShared(_) => match method {
             "add" => Some("set_add"),
             "remove" => Some("set_remove"),
             "contains" | "has" | "includes" => Some("set_contains"),
@@ -7445,7 +7454,7 @@ fn resolve_member_access_ref(target: &Value, field: &str) -> Result<Value, Strin
                 Err(format!("String has no property '{field}'"))
             }
         }
-        Value::Set(s) => {
+        Value::SetShared(s) => {
             if field == "length" || field == "len" || field == "size" {
                 Ok(Value::Int(s.len() as i64))
             } else {
@@ -8358,7 +8367,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             let out = match &positional[0] {
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
                 Value::ListShared(v) => Value::Int(v.len() as i64),
-                Value::Set(v) => Value::Int(v.len() as i64),
+                Value::SetShared(v) => Value::Int(v.len() as i64),
                 Value::DictShared(v) => Value::Int(v.len() as i64),
                 _ => return Some(Err(format!("len expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
             };
@@ -8373,7 +8382,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let items = match &positional[0] {
                 Value::ListShared(v) => v.to_vec(),
-                Value::Set(v) => v.clone(),
+                Value::SetShared(v) => v.to_vec(),
                 _ => return Some(Err(format!("group expects a list, got {}", positional[0].type_name()))),
             };
             let mut seen: HashSet<String> = HashSet::new();
@@ -8394,7 +8403,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let items = match &positional[0] {
                 Value::ListShared(v) => v.to_vec(),
-                Value::Set(v) => v.clone(),  // set of set = dedup again
+                Value::SetShared(v) => v.to_vec(),  // set of set = dedup again
                 _ => return Some(Err(format!("set expects a list, got {}", positional[0].type_name()))),
             };
             // Deduplicate, preserving insertion order
@@ -9435,7 +9444,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
 
             match &positional[0] {
                 Value::ListShared(_) => Some(Ok(Value::List(vec![]))),
-                Value::Set(_) => Some(Ok(Value::Set(vec![]))),
+                Value::SetShared(_) => Some(Ok(Value::Set(vec![]))),
                 Value::DictShared(_) => Some(Ok(Value::Dict(HashMap::new().into()))),
                 Value::Str(_) => Some(Ok(Value::Str(String::new()))),
                 _ => Some(Err(format!("clear expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
@@ -9446,13 +9455,13 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("set.add expects exactly 1 argument: the element to add".to_string()));
             }
             match &positional[0] {
-                Value::Set(items) => {
+                Value::SetShared(items) => {
                     let mut new_items = items.clone();
                     let key = format!("{}", positional[1]);
                     if !items.iter().any(|v| format!("{}", v) == key) {
                         new_items.push(positional[1].clone());
                     }
-                    Some(Ok(Value::Set(new_items)))
+                    Some(Ok(Value::SetShared(new_items)))
                 }
                 _ => Some(Err(format!("add expects a set, got {}", positional[0].type_name()))),
             }
@@ -9462,7 +9471,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("set.remove expects exactly 1 argument: the element to remove".to_string()));
             }
             match &positional[0] {
-                Value::Set(items) => {
+                Value::SetShared(items) => {
                     let key = format!("{}", positional[1]);
                     let new_items: Vec<Value> = items.iter()
                         .filter(|v| format!("{}", v) != key)
@@ -9478,7 +9487,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("set.contains expects exactly 1 argument".to_string()));
             }
             match &positional[0] {
-                Value::Set(items) => {
+                Value::SetShared(items) => {
                     let key = format!("{}", positional[1]);
                     Some(Ok(Value::Bool(items.iter().any(|v| format!("{}", v) == key))))
                 }
@@ -9489,8 +9498,8 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             if positional.len() != 2 {
                 return Some(Err(format!("{} expects exactly 2 set arguments", callee)));
             }
-            let a = match &positional[0] { Value::Set(v) => v.clone(), _ => return Some(Err(format!("{} expects a set, got {}", callee, positional[0].type_name()))) };
-            let b = match &positional[1] { Value::Set(v) => v.clone(), _ => return Some(Err(format!("{} expects a set, got {}", callee, positional[1].type_name()))) };
+            let a = match &positional[0] { Value::SetShared(v) => v.clone(), _ => return Some(Err(format!("{} expects a set, got {}", callee, positional[0].type_name()))) };
+            let b = match &positional[1] { Value::SetShared(v) => v.clone(), _ => return Some(Err(format!("{} expects a set, got {}", callee, positional[1].type_name()))) };
             let b_keys: HashSet<String> = b.iter().map(|v| format!("{}", v)).collect();
             let result: Vec<Value> = if callee == "set_union" {
                 // a ∪ b : all from a, then b items not already present
@@ -10092,7 +10101,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Bool(_) => "boolean",
                 Value::Str(_) => "string",
                 Value::ListShared(_) => "list",
-                Value::Set(_) => "group",
+                Value::SetShared(_) => "group",
                 Value::DictShared(_) => "dict",
                 Value::Func(_) => "function",
                 Value::Object { .. } => "object",
@@ -10113,7 +10122,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 "is_int" => matches!(positional[0], Value::Int(_)),
                 "is_float" => matches!(positional[0], Value::Float(_)),
                 "is_bool" => matches!(positional[0], Value::Bool(_)),
-                "is_group" => matches!(positional[0], Value::Set(_)),
+                "is_group" => matches!(positional[0], Value::SetShared(_)),
                 "is_generator" => matches!(&positional[0], Value::DictShared(m) if m.get("__generator__").map_or(false, |v| v.to_bool())),
                 "is_number" => matches!(positional[0], Value::Int(_) | Value::Float(_)),
                 _ => false,
@@ -12882,7 +12891,7 @@ fn value_to_toml(v: &Value) -> Option<toml::Value> {
         Value::ListShared(items) => Some(toml::Value::Array(
             items.iter().filter_map(value_to_toml).collect(),
         )),
-        Value::Set(items) => Some(toml::Value::Array(
+        Value::SetShared(items) => Some(toml::Value::Array(
             items.iter().filter_map(value_to_toml).collect(),
         )),
         Value::DictShared(d) => {
@@ -14093,7 +14102,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::Bool(v) => JsonValue::from(*v),
         Value::Str(v) => JsonValue::from(v.clone()),
         Value::ListShared(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
-        Value::Set(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
+        Value::SetShared(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::DictShared(items) => {
             let mut out = JsonMap::new();
             for (k, v) in items {
@@ -14843,7 +14852,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to list")),
         },
         "group" | "set" => match value {
-            Value::Set(_) => Ok(value),
+            Value::SetShared(_) => Ok(value),
             Value::ListShared(v) => {
                 let mut seen: HashSet<String> = HashSet::new();
                 let mut unique: Vec<Value> = Vec::new();
@@ -15200,7 +15209,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                                     return Ok(Value::Int(s.chars().count() as i64))
                                 }
                                 Value::ListShared(v) => return Ok(Value::Int(v.len() as i64)),
-                                Value::Set(v) => return Ok(Value::Int(v.len() as i64)),
+                                Value::SetShared(v) => return Ok(Value::Int(v.len() as i64)),
                                 Value::DictShared(v) => return Ok(Value::Int(v.len() as i64)),
                                 _ => {} // other types: normal path reports the error
                             }
@@ -15262,7 +15271,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
             let iter = eval_ast(iterable, ctx)?;
             let items = match iter {
                 Value::ListShared(v) => v.into_vec(),
-                Value::Set(v) => v,
+                Value::SetShared(v) => v.into_vec(),
                 _ => return Err("Comprehension iterable must be a list or set".to_string()),
             };
             match kind.as_str() {
@@ -15891,7 +15900,7 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
                 x.extend(y);
                 Ok(Value::ListShared(x))
             }
-            (Value::Set(mut x), Value::Set(y)) => {
+            (Value::SetShared(mut x), Value::SetShared(y)) => {
                 // Union: add y elements not already in x
                 for item in y {
                     let key = format!("{}", item);
@@ -15899,7 +15908,7 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
                         x.push(item);
                     }
                 }
-                Ok(Value::Set(x))
+                Ok(Value::SetShared(x))
             }
             (Value::DictShared(mut x), Value::DictShared(y)) => {
                 x.extend(y.into_inner());
@@ -15997,7 +16006,7 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
 fn contains_value(container: &Value, item: &Value) -> Result<bool, String> {
     match container {
         Value::ListShared(items) => Ok(items.iter().any(|v| eq_values(v, item))),
-        Value::Set(items) => Ok(items.iter().any(|v| eq_values(v, item))),
+        Value::SetShared(items) => Ok(items.iter().any(|v| eq_values(v, item))),
         Value::DictShared(map) => {
             let key = match item {
                 Value::Str(s) => s,
@@ -16095,7 +16104,7 @@ fn eq_values(a: &Value, b: &Value) -> bool {
                     .zip(y.iter())
                     .all(|(left, right)| eq_values(left, right))
         }
-        (Value::Set(x), Value::Set(y)) => {
+        (Value::SetShared(x), Value::SetShared(y)) => {
             x.len() == y.len()
                 && x.iter().all(|item| {
                     let key = format!("{}", item);
