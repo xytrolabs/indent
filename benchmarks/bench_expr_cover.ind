@@ -1,0 +1,78 @@
+#! Cost probe: loop bodies that used to send the whole loop back to the
+#! tree-walker.
+#!
+#! Each body below contains an expression form the compiler did not accept — an
+#! index, a dict index, a method call, a dotted name, a dict literal,
+#! interpolation, a slice — and a single refusal took the entire body with it, so
+#! every one of these measured ~1.0 against the tree-walker no matter how much of
+#! the body was compilable. They are all compiled now, so the ratio is the gain.
+
+var N int = 100000
+
+var xs dynamic = []
+var i int = 0
+repeat 100
+    xs is append xs i
+    i is i + 1
+
+#! Indexing a list that is in a variable.
+var acc int = 0
+var t0 float = time_perf_counter
+repeat N
+    acc is acc + xs[Reps % 100]
+var t1 float = time_perf_counter
+say "index list    " + string((t1 - t0) * 1000000000.0 / float(N)) + " ns/op"
+
+#! Indexing a dictionary.
+var box dynamic = {"n": 3, "items": xs}
+var got int = 0
+var t2 float = time_perf_counter
+repeat N
+    got is got + box["n"]
+var t3 float = time_perf_counter
+say "index dict    " + string((t3 - t2) * 1000000000.0 / float(N)) + " ns/op"
+
+#! A dotted name, which is a two-part chain to the parser.
+var dotted int = 0
+var t4 float = time_perf_counter
+repeat N
+    dotted is dotted + box.n
+var t5 float = time_perf_counter
+say "dotted name   " + string((t5 - t4) * 1000000000.0 / float(N)) + " ns/op"
+
+#! A method call per iteration.
+var word = "hello"
+var shouted dynamic = ""
+var t6 float = time_perf_counter
+repeat N
+    shouted is word.upper()
+var t7 float = time_perf_counter
+say "method call   " + string((t7 - t6) * 1000000000.0 / float(N)) + " ns/op"
+
+#! A dict literal per iteration, read straight back.
+var made int = 0
+var fresh dynamic = {}
+var t8 float = time_perf_counter
+repeat N
+    fresh is {"n": Reps}
+    made is made + fresh["n"]
+var t9 float = time_perf_counter
+say "dict literal  " + string((t9 - t8) * 1000000000.0 / float(N)) + " ns/op"
+
+#! Interpolation per iteration.
+var rendered dynamic = ""
+var t10 float = time_perf_counter
+repeat N
+    rendered is "n%Reps%"
+var t11 float = time_perf_counter
+say "interpolate   " + string((t11 - t10) * 1000000000.0 / float(N)) + " ns/op"
+
+#! A slice per iteration.
+var sliced dynamic = []
+var t12 float = time_perf_counter
+repeat N
+    sliced is xs[0:2]
+var t13 float = time_perf_counter
+say "slice         " + string((t13 - t12) * 1000000000.0 / float(N)) + " ns/op"
+
+say "checks " + string(acc > 0) + " " + string(got) + " " + string(dotted) + " " + string(made) + " " + string(len(sliced))

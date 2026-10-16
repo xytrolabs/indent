@@ -3582,6 +3582,43 @@ enum VmInstr {
     AppendSlot { slot: u16, callee: String },
     /// Pop a value and concatenate it onto frame slot `slot` in place.
     ConcatSlot(u16),
+    /// Pop one operand and push the result of a unary operator.
+    Unary(String),
+    /// Pop one value and push its truth as a boolean.
+    ToBool,
+    /// Peek at the top of the stack: jump when it is falsy, leaving it there, so
+    /// `and` can keep its left operand until the right one is known.
+    JumpIfFalseKeep(usize),
+    /// The same for a truthy condition, which is what `or` needs.
+    JumpIfTrueKeep(usize),
+    /// Pop `n` values and push them as a list, in order.
+    MakeList(u16),
+    /// Pop `2n` values (key, value, key, value) and push them as a dictionary.
+    MakeDict(u16),
+    /// Push a literal that contains `%`, interpolated.
+    Interpolate(String),
+    /// Pop an index and a container, push the element.
+    Index,
+    /// Pop only the index and read the element out of frame slot `slot`.
+    ///
+    /// The container is borrowed rather than copied, which is the difference
+    /// between O(1) and O(n) per read: `xs[i]` in a loop used to clone the whole
+    /// list to hand back one element.
+    IndexSlot(u16),
+    /// Pop step, end, start and container, and push the slice.
+    Slice,
+    /// Pop only step, end and start, and slice frame slot `slot` in place.
+    SliceSlot(u16),
+    /// Pop a container and push one of its members.
+    MemberGet(String),
+    /// Push a member of frame slot `slot`, without copying the container.
+    MemberSlot { slot: u16, field: String },
+    /// Pop `argc` arguments and a receiver, and push the method's result.
+    MethodCall { method: String, argc: u16 },
+    /// The same, but the receiver is a frame slot's variable: the instance is
+    /// moved out of it, run against, and put back, so a method that assigns a
+    /// field reaches the instance the variable holds.
+    PlaceMethodCall { slot: u16, method: String, argc: u16 },
 }
 
 /// A compiled loop body: instructions plus the names of the frame slots they
@@ -3722,34 +3759,118 @@ fn vm_compile_args(args: &[ArgItem], prog: &mut VmProgram, rt: &Runtime) -> bool
     true
 }
 
+/// The frame slot to read `target` from *in place*, when it is a bare variable.
+///
+/// `None` means the caller has to evaluate it as a value instead. Reading a
+/// container out of its slot rather than pushing a copy is what keeps `xs[i]`,
+/// `xs.length`, `s[1:3]` and `p.method()` O(1) in a compiled body rather than
+/// O(size of the container) — the same split the tree-walker makes with
+/// `get_var_ref` and `resolve_index_ref`.
+fn vm_slot_target(target: &Expr, prog: &mut VmProgram) -> Option<u16> {
+    match target {
+        Expr::Var(names) if names.len() == 1 => {
+            // `argument`/`argument2` resolve from `frame.args`, not `frame.vars`.
+            if positional_alias_index(&names[0]).is_some() {
+                return None;
+            }
+            Some(match prog.reps_stack.last() {
+                Some(inner) if names[0] == "Reps" => *inner,
+                _ => vm_slot(&mut prog.slots, &names[0]),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Compile an expression, postfix. Returns false for anything unsupported, in
 /// which case the caller must discard `out`.
+///
+/// Every expression form is compiled except comprehensions and lambdas: a
+/// comprehension binds an item name in a frame of its own, and a lambda carries
+/// its body as an AST the runtime would have to keep. Everything else — indexing,
+/// slicing, members, method calls, interpolation, list and dict literals,
+/// ternaries, unary operators and short-circuit `and`/`or` — used to send the
+/// whole enclosing body back to the tree-walker, which meant a single method call
+/// anywhere in a loop cost the loop its compilation.
 fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
     match e {
         Expr::Int(v) => prog.instrs.push(VmInstr::Const(Value::Int(*v))),
         Expr::Float(v) => prog.instrs.push(VmInstr::Const(Value::Float(*v))),
         Expr::Bool(v) => prog.instrs.push(VmInstr::Const(Value::Bool(*v))),
         Expr::Empty => prog.instrs.push(VmInstr::Const(Value::Empty)),
-        // `eval_ast` interpolates only when the literal contains `%`; matching
-        // that gate is what keeps the value identical.
-        Expr::Str(v) if !v.contains('%') => {
-            prog.instrs.push(VmInstr::Const(Value::Str(v.clone())))
+        Expr::Str(v) => {
+            // `eval_ast` interpolates only when the literal contains `%`; a
+            // literal without one is a constant, and one with one needs the
+            // runtime to read the variables it names.
+            if v.contains('%') {
+                prog.instrs.push(VmInstr::Interpolate(v.clone()));
+            } else {
+                prog.instrs.push(VmInstr::Const(Value::Str(v.clone())));
+            }
         }
-        Expr::Var(names) if names.len() == 1 => {
-            // `argument`/`argument2` resolve from `frame.args`, not `frame.vars`,
-            // so they are not slot-able; a body that uses them goes back to the
-            // tree-walker rather than risk resolving them differently.
-            if positional_alias_index(&names[0]).is_some() {
+        Expr::Var(names) if names.len() == 1 => match vm_slot_target(e, prog) {
+            Some(slot) => prog.instrs.push(VmInstr::LoadSlot(slot)),
+            None => return false,
+        },
+        // A two-part name — `d.key`, `obj.field`, `mod.func` — is the shape the
+        // parser gives a dotted read, and it is common enough in a loop body that
+        // refusing it cost the whole body its compilation. The root is read from
+        // its slot and one member is taken, which is exactly what
+        // `resolve_var_chain` does for the same two parts.
+        Expr::Var(names) if names.len() == 2 => {
+            let root = Expr::Var(vec![names[0].clone()]);
+            match vm_slot_target(&root, prog) {
+                Some(slot) => prog.instrs.push(VmInstr::MemberSlot {
+                    slot,
+                    field: names[1].clone(),
+                }),
+                None => return false,
+            }
+        }
+        // Deeper chains stay in the tree-walker.
+        Expr::Var(_) => return false,
+        Expr::Unary { op, rhs } => {
+            if !vm_compile_expr(rhs, prog) {
                 return false;
             }
-            // `Reps` is the innermost enclosing loop level, so a nested body reads
-            // its own counter — the same shadowing the tree-walker's loop frame
-            // gives it.
-            let s = match prog.reps_stack.last() {
-                Some(inner) if names[0] == "Reps" => *inner,
-                _ => vm_slot(&mut prog.slots, &names[0]),
-            };
-            prog.instrs.push(VmInstr::LoadSlot(s));
+            prog.instrs.push(VmInstr::Unary(op.clone()));
+        }
+        Expr::Binary { op, lhs, rhs } if op == "and" || op == "or" => {
+            // Short-circuit, as `eval_ast` does: the right operand is only
+            // evaluated when the left one does not decide the answer. Compiling
+            // these into `Bin` would evaluate both sides, which is a different
+            // program — a guard like `has_key(d, "k") and d["k"] == 1` would fail
+            // on the right operand instead of short-circuiting past it.
+            if !vm_compile_expr(lhs, prog) {
+                return false;
+            }
+            let keep_jump = prog.instrs.len();
+            prog.instrs.push(if op == "and" {
+                VmInstr::JumpIfFalseKeep(0)
+            } else {
+                VmInstr::JumpIfTrueKeep(0)
+            });
+            if !vm_compile_expr(rhs, prog) {
+                return false;
+            }
+            prog.instrs.push(VmInstr::ToBool);
+            let exit_jump = prog.instrs.len();
+            prog.instrs.push(VmInstr::Jump(0));
+            // The left operand decided it: drop it and push the answer.
+            let decided = prog.instrs.len();
+            prog.instrs.push(VmInstr::Pop);
+            prog.instrs.push(VmInstr::Const(Value::Bool(op == "or")));
+            let end = prog.instrs.len();
+            match &mut prog.instrs[keep_jump] {
+                VmInstr::JumpIfFalseKeep(target) | VmInstr::JumpIfTrueKeep(target) => {
+                    *target = decided;
+                }
+                _ => return false,
+            }
+            match &mut prog.instrs[exit_jump] {
+                VmInstr::Jump(target) => *target = end,
+                _ => return false,
+            }
         }
         Expr::Binary { op, lhs, rhs } => {
             if !vm_compile_expr(lhs, prog) {
@@ -3759,6 +3880,134 @@ fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
                 return false;
             }
             prog.instrs.push(VmInstr::Bin(op.clone()));
+        }
+        Expr::Ternary {
+            cond,
+            true_expr,
+            false_expr,
+        } => {
+            if !vm_compile_expr(cond, prog) {
+                return false;
+            }
+            let to_false = prog.instrs.len();
+            prog.instrs.push(VmInstr::JumpIfFalse(0));
+            if !vm_compile_expr(true_expr, prog) {
+                return false;
+            }
+            let past = prog.instrs.len();
+            prog.instrs.push(VmInstr::Jump(0));
+            let on_false = prog.instrs.len();
+            if !vm_compile_expr(false_expr, prog) {
+                return false;
+            }
+            let end = prog.instrs.len();
+            match &mut prog.instrs[to_false] {
+                VmInstr::JumpIfFalse(target) => *target = on_false,
+                _ => return false,
+            }
+            match &mut prog.instrs[past] {
+                VmInstr::Jump(target) => *target = end,
+                _ => return false,
+            }
+        }
+        Expr::List(items) => {
+            for item in items {
+                if !vm_compile_expr(item, prog) {
+                    return false;
+                }
+            }
+            prog.instrs.push(VmInstr::MakeList(items.len() as u16));
+        }
+        Expr::Dict(pairs) => {
+            for (key, value) in pairs {
+                if !vm_compile_expr(key, prog) {
+                    return false;
+                }
+                if !vm_compile_expr(value, prog) {
+                    return false;
+                }
+            }
+            prog.instrs.push(VmInstr::MakeDict(pairs.len() as u16));
+        }
+        Expr::Index { target, index } => match vm_slot_target(target, prog) {
+            Some(slot) => {
+                if !vm_compile_expr(index, prog) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::IndexSlot(slot));
+            }
+            None => {
+                if !vm_compile_expr(target, prog) || !vm_compile_expr(index, prog) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::Index);
+            }
+        },
+        Expr::Slice {
+            target,
+            start,
+            end,
+            step,
+        } => {
+            let slot = vm_slot_target(target, prog);
+            if slot.is_none() && !vm_compile_expr(target, prog) {
+                return false;
+            }
+            // A missing bound is the `Empty` the tree-walker's slice parser
+            // accepts for "no bound".
+            for bound in [start, end, step] {
+                match bound {
+                    Some(expr) => {
+                        if !vm_compile_expr(expr, prog) {
+                            return false;
+                        }
+                    }
+                    None => prog.instrs.push(VmInstr::Const(Value::Empty)),
+                }
+            }
+            match slot {
+                Some(slot) => prog.instrs.push(VmInstr::SliceSlot(slot)),
+                None => prog.instrs.push(VmInstr::Slice),
+            }
+        }
+        Expr::Member { target, field } => match vm_slot_target(target, prog) {
+            Some(slot) => prog.instrs.push(VmInstr::MemberSlot {
+                slot,
+                field: field.clone(),
+            }),
+            None => {
+                if !vm_compile_expr(target, prog) {
+                    return false;
+                }
+                prog.instrs.push(VmInstr::MemberGet(field.clone()));
+            }
+        },
+        Expr::MethodCall {
+            target,
+            method,
+            args,
+        } => {
+            let slot = vm_slot_target(target, prog);
+            if slot.is_none() && !vm_compile_expr(target, prog) {
+                return false;
+            }
+            for arg in args {
+                if !vm_compile_expr(arg, prog) {
+                    return false;
+                }
+            }
+            let argc = args.len() as u16;
+            match slot {
+                Some(slot) => prog.instrs.push(VmInstr::PlaceMethodCall {
+                    slot,
+                    method: method.clone(),
+                    argc,
+                }),
+                None => prog.instrs.push(VmInstr::MethodCall {
+                    method: method.clone(),
+                    argc,
+                }),
+            }
         }
         // Arguments are pushed left to right, so the instruction pops `argc`
         // values and passes them on in source order.
@@ -4597,6 +4846,198 @@ fn vm_run(
                         }
                         let v = result?;
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::Unary(op) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let v = stack[sp].clone();
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = apply_unary(op, v)?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::ToBool => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let truth = stack[sp].to_bool();
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = Value::Bool(truth);
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::JumpIfFalseKeep(target) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let jump = !stack[sp].to_bool();
+                        sp += 1;
+                        ip = if jump { *target } else { ip + 1 };
+                    }
+                    VmInstr::JumpIfTrueKeep(target) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let jump = stack[sp].to_bool();
+                        sp += 1;
+                        ip = if jump { *target } else { ip + 1 };
+                    }
+                    VmInstr::MakeList(n) => {
+                        let n = *n as usize;
+                        sp = sp.checked_sub(n).ok_or_else(vm_underflow)?;
+                        let items: Vec<Value> = stack[sp..sp + n].to_vec();
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = Value::List(items);
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::MakeDict(n) => {
+                        let n = *n as usize;
+                        sp = sp.checked_sub(2 * n).ok_or_else(vm_underflow)?;
+                        let mut out = SmallDict::new();
+                        for pair in 0..n {
+                            let key = stack[sp + pair * 2].clone();
+                            let value = stack[sp + pair * 2 + 1].clone();
+                            let key = match key {
+                                Value::Str(s) => s,
+                                // The tree-walker's message for the same mistake.
+                                _ => return Err("Dictionary keys must evaluate to string values".to_string()),
+                            };
+                            out.insert(key, value);
+                        }
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = Value::Dict(out);
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::Interpolate(text) => {
+                        // Interpolation reads variables, so it has to see them the
+                        // way the frames do.
+                        vm_flush_slots(prog, &mut values, ctx);
+                        let rendered = interpolate_string(text, ctx);
+                        vm_pull_slots(prog, &mut values, ctx);
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = Value::Str(rendered);
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::Index => {
+                        sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
+                        let target = stack[sp].clone();
+                        let index = stack[sp + 1].clone();
+                        // Only an Object can define `get_item`, and that is user
+                        // code; everything else is a plain read.
+                        let result = if matches!(target, Value::Object { .. }) {
+                            vm_flush_slots(prog, &mut values, ctx);
+                            let out = match call_object_method_value(
+                                &target,
+                                "get_item",
+                                std::slice::from_ref(&index),
+                                ctx,
+                            ) {
+                                Some(r) => r,
+                                None => resolve_index(target, index),
+                            };
+                            vm_pull_slots(prog, &mut values, ctx);
+                            out
+                        } else {
+                            resolve_index(target, index)
+                        };
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = result?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::IndexSlot(slot) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let index = stack[sp].clone();
+                        let is_object = matches!(values[*slot as usize], Value::Object { .. });
+                        let result = if is_object {
+                            let target = values[*slot as usize].clone();
+                            vm_flush_slots(prog, &mut values, ctx);
+                            let out = match call_object_method_value(
+                                &target,
+                                "get_item",
+                                std::slice::from_ref(&index),
+                                ctx,
+                            ) {
+                                Some(r) => r,
+                                None => resolve_index(target, index),
+                            };
+                            vm_pull_slots(prog, &mut values, ctx);
+                            out
+                        } else {
+                            resolve_index_ref(&values[*slot as usize], index)
+                        };
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = result?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::Slice => {
+                        sp = sp.checked_sub(4).ok_or_else(vm_underflow)?;
+                        let target = stack[sp].clone();
+                        let start = parse_optional_slice_bound(&stack[sp + 1], "slice start")?;
+                        let end = parse_optional_slice_bound(&stack[sp + 2], "slice end")?;
+                        let step = parse_slice_step_value(&stack[sp + 3])?;
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? =
+                            slice_builtin(&target, start, end, step)?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::SliceSlot(slot) => {
+                        sp = sp.checked_sub(3).ok_or_else(vm_underflow)?;
+                        let start = parse_optional_slice_bound(&stack[sp], "slice start")?;
+                        let end = parse_optional_slice_bound(&stack[sp + 1], "slice end")?;
+                        let step = parse_slice_step_value(&stack[sp + 2])?;
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? =
+                            slice_builtin(&values[*slot as usize], start, end, step)?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::MemberGet(field) => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let target = stack[sp].clone();
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? =
+                            resolve_member_access_ref(&target, field)?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::MemberSlot { slot, field } => {
+                        let value = resolve_member_access_ref(&values[*slot as usize], field)?;
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = value;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::MethodCall { method, argc } => {
+                        let n = *argc as usize;
+                        sp = sp.checked_sub(n + 1).ok_or_else(vm_underflow)?;
+                        let receiver = stack[sp].clone();
+                        let args: Vec<Value> = stack[sp + 1..sp + 1 + n].to_vec();
+                        vm_flush_slots(prog, &mut values, ctx);
+                        let result = invoke_method_on_value(receiver, method, &args, ctx);
+                        vm_pull_slots(prog, &mut values, ctx);
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = result?;
+                        sp += 1;
+                        ip += 1;
+                    }
+                    VmInstr::PlaceMethodCall { slot, method, argc } => {
+                        let n = *argc as usize;
+                        sp = sp.checked_sub(n).ok_or_else(vm_underflow)?;
+                        let args: Vec<Value> = stack[sp..sp + n].to_vec();
+                        let name = prog.slots[*slot as usize].clone();
+                        // A receiver that is a variable tries the place dispatch
+                        // first — that is what lets a method assign its own field
+                        // — and the value path only when the name is not a class
+                        // method (a function-valued field, or a builtin method).
+                        // The receiver for the value path is read *before* the
+                        // hand-over, because the flush empties the slot.
+                        let is_class_method = matches!(
+                            ctx.get_var_ref(&name),
+                            Some(Value::Object { class, .. })
+                                if class.methods.keys().any(|m| m.eq_ignore_ascii_case(method))
+                        );
+                        let by_value = if is_class_method {
+                            None
+                        } else {
+                            Some(values[*slot as usize].clone())
+                        };
+                        vm_flush_slots(prog, &mut values, ctx);
+                        let result = match by_value {
+                            Some(receiver) => invoke_method_on_value(receiver, method, &args, ctx),
+                            None => invoke_method_on_place(&name, method, &args, ctx)
+                                .unwrap_or(Ok(Value::Empty)),
+                        };
+                        vm_pull_slots(prog, &mut values, ctx);
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = result?;
                         sp += 1;
                         ip += 1;
                     }
@@ -5986,9 +6427,37 @@ fn invoke_method_on_value(
     }
 }
 
-fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<'_>) -> Result<Value, String> {
-    match target_val {
-        Value::Dict(ref map) => {
+/// Apply a unary operator, with the messages the tree-walker produces.
+///
+/// Shared with `eval_ast` so the compiled and tree-walking engines cannot drift:
+/// an unsupported operator or a wrong operand type has to report the same thing
+/// whichever engine ran the body.
+fn apply_unary(op: &str, v: Value) -> Result<Value, String> {
+    match op {
+        "-" => match v {
+            Value::Int(i) => Ok(Value::Int(-i)),
+            Value::Float(f) => Ok(Value::Float(-f)),
+            _ => Err(format!("Unary '-' expects a number but got {}: {}", v.type_name(), v)),
+        },
+        "+" => match v {
+            Value::Int(_) | Value::Float(_) => Ok(v),
+            _ => Err(format!("Unary '+' expects a number but got {}: {}", v.type_name(), v)),
+        },
+        "not" => Ok(Value::Bool(!v.to_bool())),
+        "~" => match v {
+            Value::Int(i) => Ok(Value::Int(!i)),
+            _ => Err(format!("Bitwise NOT '~' expects int, got {}: {}", v.type_name(), v)),
+        },
+        _ => Err(format!("Unsupported unary operator '{op}'")),
+    }
+}
+
+/// Read a member without consuming the container. Everything the by-value
+/// version does except the copy of the container itself, so a compiled
+/// `xs.length` in a loop does not clone the list to count it.
+fn resolve_member_access_ref(target: &Value, field: &str) -> Result<Value, String> {
+    match target {
+        Value::Dict(map) => {
             if let Some(v) = map.get(field) {
                 Ok(v.clone())
             } else if field == "length" || field == "len" || field == "size" {
@@ -6004,7 +6473,7 @@ fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<
                 Err(format!("Object has no field '{field}'"))
             }
         }
-        Value::Module(ref m) => {
+        Value::Module(m) => {
             if let Some(v) = m.vars.get(field) {
                 Ok(v.clone())
             } else if m.funcs.contains_key(field) {
@@ -6013,7 +6482,7 @@ fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<
                 Err(format!("Module has no attribute '{field}'"))
             }
         }
-        Value::List(ref items) => {
+        Value::List(items) => {
             if field == "length" || field == "len" {
                 Ok(Value::Int(items.len() as i64))
             } else if field == "first" {
@@ -6024,22 +6493,26 @@ fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<
                 Err(format!("List has no property '{field}'"))
             }
         }
-        Value::Str(ref s) => {
+        Value::Str(s) => {
             if field == "length" || field == "len" {
                 Ok(Value::Int(s.chars().count() as i64))
             } else {
                 Err(format!("String has no property '{field}'"))
             }
         }
-        Value::Set(ref s) => {
+        Value::Set(s) => {
             if field == "length" || field == "len" || field == "size" {
                 Ok(Value::Int(s.len() as i64))
             } else {
                 Err(format!("Set has no property '{field}'"))
             }
         }
-        _ => Err(format!("Cannot access '.{field}' on {} value", target_val.type_name())),
+        _ => Err(format!("Cannot access '.{field}' on {} value", target.type_name())),
     }
+}
+
+fn resolve_member_access(target_val: Value, field: &str, _ctx: &mut ExecContext<'_>) -> Result<Value, String> {
+    resolve_member_access_ref(&target_val, field)
 }
 
 fn invoke_callable_value(
@@ -13815,23 +14288,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
         }
         Expr::Unary { op, rhs } => {
             let v = eval_ast(rhs, ctx)?;
-            match op.as_str() {
-                "-" => match v {
-                    Value::Int(i) => Ok(Value::Int(-i)),
-                    Value::Float(f) => Ok(Value::Float(-f)),
-                    _ => Err(format!("Unary '-' expects a number but got {}: {}", v.type_name(), v)),
-                },
-                "+" => match v {
-                    Value::Int(_) | Value::Float(_) => Ok(v),
-                    _ => Err(format!("Unary '+' expects a number but got {}: {}", v.type_name(), v)),
-                },
-                "not" => Ok(Value::Bool(!v.to_bool())),
-                "~" => match v {
-                    Value::Int(i) => Ok(Value::Int(!i)),
-                    _ => Err(format!("Bitwise NOT '~' expects int, got {}: {}", v.type_name(), v)),
-                },
-                _ => Err(format!("Unsupported unary operator '{op}'")),
-            }
+            apply_unary(op, v)
         }
         Expr::Binary { op, lhs, rhs } => {
             // Python-style short-circuit: for `and`/`or`, only evaluate the
@@ -13999,7 +14456,14 @@ fn resolve_var_chain(parts: &[String], ctx: &mut ExecContext<'_>) -> Result<Valu
                     return Err(format!("Object has no field '{p}'"));
                 }
             }
-            _ => return Err(format!("Cannot access '.{}' on {} value", p, cur.type_name())),
+            // Everything else is a member of a value, and the rules for that live
+            // in one place — `resolve_member_access_ref` — so a dotted name and an
+            // `Expr::Member` cannot disagree about what `.length` or `.first`
+            // means. Before this, the list, string and set arms there were
+            // unreachable from a dotted name, so `xs.length` on a list failed
+            // while the same field on the same container worked after a
+            // non-name target such as a call or a literal.
+            _ => cur = resolve_member_access_ref(&cur, p)?,
         }
     }
     Ok(cur)

@@ -1,0 +1,182 @@
+#! vm_expr_semantics.ind — the expression forms the compiler now accepts.
+#!
+#! These used to send their whole enclosing body back to the tree-walker: a
+#! single method call anywhere in a loop cost the loop its compilation. They are
+#! compiled now, so each of them has to produce exactly what the tree-walker
+#! produces — and the loop bodies here are deliberately busy, because a body that
+#! refuses to compile would silently test the other engine.
+#!
+#! Every check runs twice: `bash benchmarks/run_suite.sh` runs the whole suite
+#! with `INDENT_VM` on and off, so anything that only holds on one engine fails
+#! here.
+
+fun fail msg
+    say "FAIL: " + msg
+    process_exit 1
+
+fun check cond label
+    if not cond
+        fail label
+    say "  ok: " + label
+
+fun check_eq got expected label
+    var ok = got == expected
+    if not ok
+        var msg = label + ": expected '" + expected + "' got '" + got + "'"
+        fail msg
+    say "  ok: " + label
+
+#! ---- 1. and / or short-circuit inside a loop ----
+#! `Bin` evaluates both operands, which is a different program: the right one
+#! must not run when the left one has already decided. The counter is the proof.
+var calls int = 0
+fun marked
+    calls is calls + 1
+    give true
+
+var no_calls int = 0
+var yes_calls int = 0
+var a boolean = true
+var b boolean = false
+repeat 10
+    a is (false) and (marked())
+    b is (true) or (marked())
+    if not a
+        no_calls is no_calls + 1
+    if b
+        yes_calls is yes_calls + 1
+check (calls == 0) "neither short-circuited operand was evaluated"
+check (no_calls == 10) "false and x is false"
+check (yes_calls == 10) "true or x is true"
+
+#! A guard whose right operand would fail has to short-circuit past it.
+var d dynamic = {"k": 1}
+var guarded boolean = true
+repeat 10
+    guarded is (has_key(d, "missing")) and (d["missing"] == 1)
+check (not guarded) "a guard is not evaluated past its short circuit"
+
+#! ---- 2. indexing, by slot and by value ----
+var xs dynamic = [10, 20, 30, 40]
+var sum int = 0
+var i int = 0
+repeat 4
+    sum is sum + xs[i]
+    i is i + 1
+check (sum == 100) "xs[i] adds every element"
+var two = xs[1]
+check (two == 20) "xs[1] reads the second element"
+
+var dbl int = 0
+repeat 4
+    dbl is dbl + ([5, 6, 7, 8])[2]
+check (dbl == 28) "indexing a literal works"
+
+#! ---- 3. slicing ----
+var slice dynamic = []
+repeat 5
+    slice is xs[1:3]
+check (len(slice) == 2) "a slice inside a loop has the window's length"
+check (slice[0] == 20) "a slice keeps order"
+var stepped dynamic = []
+repeat 5
+    stepped is xs[0:4:2]
+check (len(stepped) == 2) "a slice with a step has the right length"
+
+#! ---- 4. members, through a dotted name and through a non-name target ----
+#! `xs.length` is a dotted *name* to this parser, so it goes through the chain
+#! resolver; a member after anything else — a slice, a literal, a call — is an
+#! `Expr::Member` and goes through the member resolver. The two paths now share
+#! one set of rules.
+var word = "hello"
+var sizes int = 0
+repeat 4
+    sizes is sizes + len(xs)
+    sizes is sizes + len(word)
+check (sizes == 36) "len() in a loop counts both containers"
+
+var lens int = 0
+var box dynamic = {"items": xs}
+repeat 4
+    lens is lens + len(box.items)
+check (lens == 16) "a dotted name reads a dict key in a loop"
+
+var firsts dynamic = []
+var literal dynamic = ["a", "b", "c"]
+var first_literal = "a"
+repeat 3
+    first_literal is literal[0]
+    firsts is append firsts first_literal
+check (len(firsts) == 3) "indexing a literal target in a loop"
+check_eq (string(firsts[0])) "a" "and the element is the first one"
+var slens int = 0
+repeat 3
+    slens is slens + len(xs[0:2])
+check (slens == 6) "a member-carrying call on a slice"
+
+#! ---- 5. method calls ----
+var ups dynamic = []
+var shouted = ""
+repeat 3
+    shouted is word.upper()
+    ups is append ups shouted
+check (len(ups) == 3) "a method call in a loop builds every result"
+check_eq (string(ups[0])) "HELLO" "and the method's answer is the right one"
+
+#! ---- 6. literals, interpolation and ternaries in a loop ----
+var built dynamic = []
+var total int = 0
+var k int = 0
+repeat 5
+    built is append built {"n": k, "sq": k * k}
+    total is total + k
+    k is k + 1
+check (len(built) == 5) "a dict literal in a loop builds every entry"
+check (built[2]["sq"] == 4) "and each entry holds its own value"
+
+var text string = ""
+var t int = 0
+repeat 3
+    text is text + "n%t% "
+    t is t + 1
+check_eq text "n0 n1 n2 " "interpolation inside a loop renders each value"
+
+#! ---- 7. unary operators ----
+var sign int = 0
+var u int = 1
+repeat 3
+    sign is sign + -u
+    u is u + 1
+check (sign == -6) "unary minus in a loop"
+
+var flips int = 0
+var f boolean = false
+repeat 4
+    f is not f
+    if f
+        flips is flips + 1
+check (flips == 2) "unary not in a loop"
+
+#! ---- 8. a method that assigns a field, called on a bare variable ----
+class Tally
+    var n int
+
+    fun bump
+        n is n + 1
+        give n
+
+var counter dynamic = Tally(0)
+var last int = 0
+repeat 5
+    last is counter.bump()
+check (last == 5) "a method in a loop gives back each new value"
+check (counter.n == 5) "and each call wrote the field through"
+
+#! ---- 9. comprehensions still work (they are the one form left to the tree) ----
+var comp dynamic = []
+repeat 3
+    comp is [n * 2 for n in [1, 2, 3]]
+check (len(comp) == 3) "a comprehension in a loop still evaluates"
+check (comp[2] == 6) "and still computes"
+
+say "vm_expr_semantics: all checks passed"
