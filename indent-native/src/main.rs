@@ -740,7 +740,11 @@ fn default_color_vars() -> Map<String, Value> {
         ("WHITE", "#f8fafc"),
     ];
 
-    let mut out = Map::default();
+    // Sized up front: eleven inserts into an empty map reallocated three times.
+    // The palette itself is the table `color_to_rgb` already carries, so this is
+    // convenience rather than information — once `Value::Str` can share its bytes
+    // these entries should be resolved on demand instead of built per runtime.
+    let mut out = Map::with_capacity_and_hasher(palette.len(), Default::default());
     for (name, hex) in palette {
         out.insert(name.to_string(), Value::Str(hex.to_string()));
     }
@@ -5191,9 +5195,21 @@ fn vm_call_runs_user_code(callee: &str, args: &[Value], ctx: &ExecContext<'_>) -
 ///
 /// Growing a string or a list in a loop is how accumulation is spelled in this
 /// language, and `eval_binary` copies its left operand — so a compiled loop that
-/// used it would copy everything accumulated so far on every pass. The first
-/// three arms mutate the slot instead; anything else falls back to `eval_binary`
-/// with the value moved out, which is exactly what the ordinary path decides.
+/// used it would copy everything accumulated so far on every pass. The string, list
+/// and dict arms grow the slot's own buffer instead, and the numeric arms answer
+/// without the string match and the two type-name formattings `eval_binary` opens
+/// with; anything else falls back to `eval_binary` with the value moved out, which
+/// is exactly what the ordinary path decides.
+///
+/// The numeric arms are the hop an accumulator actually takes: `total is total + x`
+/// compiles to this instruction whatever the operand types turn out to be, so a loop
+/// counter or a running sum arrives here on every pass and not at `Bin`. They are
+/// `+`'s own numeric arms, mixed cases included, so nothing is decided differently.
+///
+/// The value is taken out first — a move, not a copy — because a `&mut` borrow of
+/// the slot cannot be held while the result is written back into it. Moving a
+/// `Value` out and back keeps the `String` or `Vec` it owns, so the arms that grow
+/// a buffer still grow that buffer.
 fn vm_concat_slot(
     values: &mut [Value],
     idx: usize,
@@ -5201,25 +5217,44 @@ fn vm_concat_slot(
     ctx: &mut ExecContext<'_>,
 ) -> Result<(), String> {
     use std::fmt::Write as _;
-    match (&mut values[idx], rhs) {
-        (Value::Str(buf), rhs) => {
+    let lhs = std::mem::replace(&mut values[idx], Value::Empty);
+    match (lhs, rhs) {
+        (Value::Str(mut buf), rhs) => {
             // Appending through `Display` is byte-for-byte what
             // `format!("{}{}", buf, rhs)` produced, without the second copy of
             // the accumulated prefix. Writing into a `String` cannot fail.
             let _ = write!(buf, "{}", rhs);
+            values[idx] = Value::Str(buf);
             Ok(())
         }
-        (Value::List(list), Value::List(extra)) => {
+        (Value::List(mut list), Value::List(extra)) => {
             list.extend(extra);
+            values[idx] = Value::List(list);
             Ok(())
         }
-        (Value::Dict(dict), Value::Dict(extra)) => {
+        (Value::Dict(mut dict), Value::Dict(extra)) => {
             dict.extend(extra);
+            values[idx] = Value::Dict(dict);
             Ok(())
         }
-        (slot, rhs) => {
-            let lhs = std::mem::replace(slot, Value::Empty);
-            *slot = eval_binary("+", lhs, rhs, ctx)?;
+        (Value::Int(x), Value::Int(y)) => {
+            values[idx] = Value::Int(x + y);
+            Ok(())
+        }
+        (Value::Float(x), Value::Float(y)) => {
+            values[idx] = Value::Float(x + y);
+            Ok(())
+        }
+        (Value::Int(x), Value::Float(y)) => {
+            values[idx] = Value::Float(x as f64 + y);
+            Ok(())
+        }
+        (Value::Float(x), Value::Int(y)) => {
+            values[idx] = Value::Float(x + y as f64);
+            Ok(())
+        }
+        (lhs, rhs) => {
+            values[idx] = eval_binary("+", lhs, rhs, ctx)?;
             Ok(())
         }
     }
@@ -16923,12 +16958,15 @@ fn preprocess(source: &str) -> Result<Vec<SourceLine>, String> {
             continue;
         }
 
-        let mut clean = strip_inline_comment(raw);
-        // `str::replace` allocates a fresh String even when there is nothing to
-        // replace, on every line of every file that is parsed.
-        if clean.contains('\t') {
-            clean = clean.replace('\t', "    ");
-        }
+        let clean = strip_inline_comment(raw);
+        // Tab expansion only when there is a tab: `str::replace` allocates a fresh
+        // String even when there is nothing to replace, on every line of every file
+        // that is parsed.
+        let clean: std::borrow::Cow<'_, str> = if clean.contains('\t') {
+            std::borrow::Cow::Owned(clean.replace('\t', "    "))
+        } else {
+            std::borrow::Cow::Borrowed(clean)
+        };
         if clean.trim().is_empty() {
             continue;
         }
@@ -16948,52 +16986,47 @@ fn preprocess(source: &str) -> Result<Vec<SourceLine>, String> {
     Ok(out)
 }
 
-fn strip_inline_comment(raw: &str) -> String {
-    // The common case has no comment to strip, so the result is the whole line.
-    // Sizing the buffer up front keeps this to a single allocation per line.
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
+/// The line with an inline `#!` comment removed — borrowed when there is nothing
+/// to cut, which is the common case.
+///
+/// This runs for every line of every file that is parsed, and it used to build a
+/// fresh `String` for each one whether or not the line had a comment. Finding the
+/// cut point first is a scan with no allocation, so a line without a comment costs
+/// nothing at all; the state machine is the same one, it just indexes instead of
+/// appending.
+fn strip_inline_comment(raw: &str) -> &str {
     let mut in_str = false;
     let mut quote = '\0';
     let mut escape = false;
 
-    while let Some(c) = chars.next() {
+    for (i, c) in raw.char_indices() {
         if escape {
-            out.push(c);
             escape = false;
             continue;
         }
         if c == '\\' {
-            out.push(c);
             escape = true;
             continue;
         }
-
         if in_str {
-            out.push(c);
             if c == quote {
                 in_str = false;
             }
             continue;
         }
-
         if c == '"' || c == '\'' {
             in_str = true;
             quote = c;
-            out.push(c);
             continue;
         }
-
-        if c == '#' {
-            if let Some('!') = chars.peek().copied() {
-                break;
-            }
+        // A `#` that is not the start of `#!` is an ordinary character, exactly as
+        // the character-at-a-time version treated it.
+        if c == '#' && raw[i + 1..].starts_with('!') {
+            return &raw[..i];
         }
-
-        out.push(c);
     }
 
-    out
+    raw
 }
 
 struct Parser {
