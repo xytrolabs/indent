@@ -1,0 +1,35 @@
+1
+-17
+0
+1000000000000
+1.5
+0.1
+100.0
+plain
+with "quotes"
+a backslash \ and a tab      here
+
+one hundred percent 100%
+unknown %nope% is preserved
+hello world
+template says world
+TRUE
+FALSE
+empty
+[1, 2, 3]
+[]
+{"a": 1, "b": 2}
+{}
+[1, two, 3.5, TRUE, empty, [7, 8], {"k": v}]
+[1, 2, 3]
+[1, 2, 3, 4]
+[1, 2, 3]
+len 4
+len 4
+loop 0
+loop 1
+loop 2
+from a function
+$250
+Money(cents: 250)
+done

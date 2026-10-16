@@ -1,0 +1,37 @@
+outer 0
+outer 1
+outer 2
+nested 0 0
+nested 0 1
+nested 1 0
+nested 1 1
+nested 2 0
+nested 2 1
+range sum 10
+joined abbccc
+while ended at 3
+if branch
+right branch
+seen 0134
+fib 55
+negative
+zero
+positive
+do ran
+caught the undefined call
+Box(1)
+Box(4)
+4
+[0, 1, 99, 3, 4]
+[1, 99]
+0
+42
+2
+TRUE
+FALSE
+TRUE
+ababababab
+10
+a
+abab
+done

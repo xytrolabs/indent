@@ -1,0 +1,83 @@
+#! say_and_values.ind — golden fixture: exactly how each kind of value prints.
+#!
+#! `say` is the one statement whose result a user can see, so it is the one place
+#! where "the tests pass" is not good enough: an assertion-style test can pass
+#! identically on two *different* programs (it only checks what its author thought
+#! of), while this file pins the text itself. Any divergence between the VM and the
+#! tree-walker shows up here as a byte difference instead of a silent behaviour
+#! change. `scripts/ci/golden-outputs.sh` runs it under both engines.
+
+#! --- numbers ---
+say 1
+say -17
+say 0
+say 1000000000000
+say 1.5
+say 0.1
+say 100.0
+
+#! --- strings ---
+say "plain"
+say "with \"quotes\""
+say "a backslash \\ and a tab \	 here"
+say ""
+say "one hundred percent 100%"
+say "unknown %nope% is preserved"
+
+#! --- names, interpolated into a *value* as well as a literal ---
+var who string = "world"
+say "hello %who%"
+var template string = "template says %who%"
+say template
+
+#! --- the absent value and the booleans ---
+say true
+say false
+say empty
+
+#! --- containers, printed structurally ---
+say [1, 2, 3]
+say []
+say {"a": 1, "b": 2}
+say {}
+var nested dynamic = [1, "two", 3.5, true, empty, [7, 8], {"k": "v"}]
+say nested
+
+#! --- and after a mutation, and after a read that shares the buffer ---
+var xs dynamic = [1, 2, 3]
+var same dynamic = xs
+say same
+xs is append xs 4
+say xs
+say same
+
+#! --- through a function boundary ---
+fun describe v
+    give "len " + string(len(v))
+
+say describe "abcd"
+say describe xs
+
+#! --- inside a loop, which is the compiled path ---
+repeat i in range(3)
+    say "loop " + string(i)
+
+#! --- inside a function body, which is compiled separately ---
+fun announce text
+    say text
+
+announce "from a function"
+
+#! --- and a class that decides its own text ---
+class Money
+    var cents int
+
+    fun to_string
+        give "$" + string(cents)
+
+var m dynamic = Money(250)
+say m
+say string(m)
+
+#! --- ends cleanly, so the exit status is part of the golden too ---
+say "done"

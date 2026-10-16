@@ -1,0 +1,130 @@
+#! control_flow.ind — golden fixture: loops, branches, functions, errors, classes.
+#!
+#! Everything here is text a user can see, produced through the compiled path
+#! (loop bodies and function bodies) and through the tree-walker (whatever the
+#! compiler refuses). Pinning the output is what makes "the VM agrees with the
+#! interpreter" a fact rather than an assumption.
+
+#! --- `repeat N`, the counter, and a nested loop ---
+repeat 3
+    say "outer " + string(Reps)
+
+repeat a in range(3)
+    repeat b in range(2)
+        say "nested " + string(a) + " " + string(b)
+
+#! --- accumulated work, the shape most benchmarks use ---
+var total int = 0
+repeat i in range(5)
+    total is total + i
+say "range sum " + string(total)
+
+var words dynamic = ["a", "bb", "ccc"]
+var joined string = ""
+repeat w in words
+    joined is joined + w
+say "joined " + joined
+
+#! --- `while` and the branch forms ---
+var n int = 0
+while n < 3
+    n is n + 1
+say "while ended at " + string(n)
+
+if n == 3
+    say "if branch"
+otherwise
+    say "otherwise branch"
+
+if n == 99
+    say "wrong branch"
+otherwise
+    say "right branch"
+
+#! --- `stop` and `next` ---
+var seen string = ""
+repeat i in range(10)
+    if i == 2
+        next
+    if i == 5
+        stop
+    seen is seen + string(i)
+say "seen " + seen
+
+#! --- functions: recursion, defaults of control flow, and `give` ---
+fun fib x
+    if x < 2
+        give x
+    give fib(x - 1) + fib(x - 2)
+
+say "fib " + string(fib(10))
+
+fun classify x
+    if x < 0
+        give "negative"
+    if x == 0
+        give "zero"
+    give "positive"
+
+say classify(-5)
+say classify(0)
+say classify(5)
+
+#! --- `do:` with and without an error ---
+do:
+    say "do ran"
+catch as err:
+    say "caught " + string(err)
+
+do:
+    var boom = nosuchfunctionhere(1)
+    say "unreachable"
+catch as err:
+    say "caught the undefined call"
+
+#! --- a class with a method that writes a field, and a special method ---
+class Box
+    var n int
+
+    fun to_string
+        give "Box(" + string(n) + ")"
+
+    fun bump
+        n is n + 1
+        give n
+
+var b dynamic = Box(1)
+say b
+b.bump
+b.bump
+b.bump
+say b
+say b.n
+
+#! --- indexing, slicing, dicts, and in-place writes ---
+var xs dynamic = [0, 1, 2, 3, 4]
+xs[2] is 99
+say xs
+say xs[1:3]
+say xs[0]
+
+var d dynamic = {"k": 1}
+d["k"] is d["k"] + 41
+d["j"] is 2
+say d["k"]
+say d["j"]
+say has_key(d, "j")
+say has_key(d, "missing")
+say contains(xs, 99)
+
+#! --- string building in a loop, and reading it back ---
+var unit string = "ab"
+var built string = ""
+repeat 5
+    built is built + unit
+say built
+say len(built)
+say built[0]
+say built[0:4]
+
+say "done"

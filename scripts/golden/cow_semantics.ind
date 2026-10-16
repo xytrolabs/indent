@@ -1,0 +1,72 @@
+#! cow_semantics.ind — golden fixture: the copy-on-write guarantees of 2.4.
+#!
+#! 2.4 made every collection share its buffer, so a read is a refcount bump and the
+#! copy happens on the first write after a value becomes shared. That is invisible
+#! by design, which is exactly why it needs a golden file: the failure mode is not
+#! a crash but a write that reaches a value it should not have. The observable rule
+#! is printed here — a name left alone keeps meaning what it meant — and the text
+#! is pinned so a future optimisation cannot quietly break it.
+
+#! --- a list is copied on the first write, not on the read ---
+var xs dynamic = [1, 2, 3]
+var ys dynamic = xs
+say ys
+ys is append ys 4
+say xs
+say ys
+
+#! --- the same for a string, and through a function parameter ---
+var s string = "abc"
+var t dynamic = s
+t is t + "d"
+say s
+say t
+
+fun shout text
+    text is text + "!"
+    give text
+
+say shout(s)
+say s
+
+#! --- and for a dict ---
+var d dynamic = {"k": 1}
+var e dynamic = d
+e["k"] is 2
+say d["k"]
+say e["k"]
+
+#! --- writing an element in place does not reach the other name either ---
+var list dynamic = [10, 20]
+var alias dynamic = list
+alias[0] is 99
+say list
+say alias
+
+#! --- the interesting case: the write copies, then both names keep going ---
+var acc dynamic = []
+var snapshot dynamic = acc
+acc is append acc "first"
+acc is append acc "second"
+say snapshot
+say acc
+say len(snapshot)
+say len(acc)
+
+#! --- a nested container is shared too: reading it out does not copy it ---
+var outer dynamic = {"inner": [1, 2, 3]}
+var grabbed dynamic = outer["inner"]
+grabbed is append grabbed 4
+say outer["inner"]
+say grabbed
+
+#! --- a group shares the same buffer, and collapses duplicates on the way in ---
+var g dynamic = group([1, 2, 2])
+var h dynamic = g
+say g
+say h
+say len(g)
+say len(h)
+say len(group([3, 3, 3]))
+
+say "done"

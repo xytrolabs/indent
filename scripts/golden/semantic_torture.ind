@@ -1,0 +1,138 @@
+#! semantic_torture.ind — golden fixture: the shapes a representation change breaks.
+#!
+#! Phase 0 of the plan asks for "a semantic torture test file that deliberately
+#! exercises: nested closures, method dispatch on objects that share fields with
+#! their class, mutation through aliases, generators, recursion, the in-place
+#! append fast paths, dict key ordering, unicode strings, error messages
+#! verbatim." This is that file. It is a golden file rather than an assertion
+#! file on purpose: the failures it hunts are *changed behaviour*, and an
+#! assertion only fails on behaviour its author expected to change.
+
+#! --- nested functions, and a name captured from the enclosing body ---
+fun outer base
+    fun inner step
+        give base + step
+    give inner(2) + inner(3)
+
+say outer(10)
+
+#! --- recursion with an accumulator passed down ---
+fun sumdown n acc
+    if n == 0
+        give acc
+    give sumdown(n - 1, acc + n)
+
+say sumdown(10, 0)
+say sumdown(100, 0)
+
+#! --- a generator: `yield` inside a loop, consumed by `repeat ... in` ---
+fun counter n
+    var i int = 0
+    while i < n
+        yield i
+        i += 1
+
+var gen = counter 4
+var collected string = ""
+repeat v in gen
+    collected is collected + string(v)
+say collected
+
+#! A generator resumed twice must start from the beginning each time it is made.
+var again dynamic = []
+var gen2 = counter 3
+repeat v in gen2
+    again is append again v
+say again
+
+#! --- method dispatch where the method writes a field, through inheritance ---
+class Base
+    var a int
+
+    fun to_string
+        give "Base(" + string(a) + ")"
+
+    fun bump
+        a is a + 1
+        give a
+
+class Child from Base
+    var b int
+
+    fun to_string
+        give "Child(" + string(a) + "," + string(b) + ")"
+
+var c dynamic = Child(1, 2)
+say c
+c.bump
+c.bump
+say c
+say c.a
+
+#! --- mutation through an alias, and through a parameter ---
+var src dynamic = [1, 2]
+var dst dynamic = src
+dst is append dst 3
+say src
+say dst
+
+fun grow xs
+    xs is append xs 99
+    give xs
+
+say grow(src)
+say src
+
+#! --- the in-place append fast paths, aliased and not ---
+var solo dynamic = []
+var k int = 0
+repeat 3
+    solo is append solo k
+    k is k + 1
+say solo
+
+var alias dynamic = solo
+solo is append solo 42
+say solo
+say alias
+
+#! --- dict key ordering, and writes in place ---
+var d dynamic = {"one": 1, "two": 2, "three": 3}
+say d
+d["four"] is 4
+say d
+d["one"] is 11
+say d
+say d["one"]
+say len(d)
+
+#! --- unicode: length, indexing, slicing, and comparison ---
+var accented string = "café"
+var emoji string = "héllo 🚀"
+say accented
+say emoji
+say len(accented)
+say len(emoji)
+say accented[0]
+say accented[0:3]
+say emoji[1]
+say accented == "café"
+say accented == "cafe"
+
+#! --- error messages, verbatim, through do/catch ---
+do:
+    var bad = 1 + {}
+catch as err:
+    say err
+
+do:
+    var missing = notafunction(1)
+catch as err:
+    say err
+
+do:
+    var wrong = append(1, 2)
+catch as err:
+    say err
+
+say "done"

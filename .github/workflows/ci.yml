@@ -30,6 +30,17 @@ jobs:
         working-directory: indent-native
         run: cargo test --verbose
 
+      # Phase 0 of the memory plan: pin the *output* of real programs, in both
+      # engines, so a semantic change cannot pass by merely keeping the
+      # assertion-style suite green. The benchmark baseline deliberately does
+      # not run here — it is machine-specific, so it gates locally instead.
+      - name: Build the binary the golden check drives
+        working-directory: indent-native
+        run: cargo build --release
+
+      - name: Golden outputs (VM and tree-walker)
+        run: sh scripts/ci/golden-outputs.sh
+
       - name: Check formatting (advisory)
         working-directory: indent-native
         run: cargo fmt --check || echo "::warning::main.rs is not rustfmt-clean (non-blocking)"

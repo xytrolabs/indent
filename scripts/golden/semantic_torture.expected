@@ -1,0 +1,33 @@
+25
+55
+5050
+0123
+[0, 1, 2]
+Child(1,2)
+Child(3,2)
+3
+[1, 2]
+[1, 2, 3]
+[1, 2, 99]
+[1, 2]
+[0, 1, 2]
+[0, 1, 2, 42]
+[0, 1, 2]
+{"one": 1, "three": 3, "two": 2}
+{"four": 4, "one": 1, "three": 3, "two": 2}
+{"four": 4, "one": 11, "three": 3, "two": 2}
+11
+4
+café
+héllo 🚀
+4
+7
+c
+caf
+é
+TRUE
+FALSE
+Cannot add int and dict with '+'
+Undefined function 'notafunction'
+append expects a list, got int
+done
