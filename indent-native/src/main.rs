@@ -739,6 +739,53 @@ impl std::ops::Deref for SharedList {
     }
 }
 
+/// A dictionary's entries, shared by every binding that holds them.
+///
+/// Exactly the same change as `SharedList`, and it was measurable for exactly the same
+/// reason: `bench_container_reads` spent 0.0706 s on `300 x len(5k dict)` and again on
+/// `300 x has_key(5k dict)`, both of which only need to *look* at the table.
+#[derive(Debug, Clone, Default)]
+struct SharedDict(Arc<SmallDict>);
+
+impl SharedDict {
+    /// The entries themselves, for a caller that needs to own them.
+    fn into_inner(self) -> SmallDict {
+        match Arc::try_unwrap(self.0) {
+            Ok(dict) => dict,
+            Err(shared) => (*shared).clone(),
+        }
+    }
+}
+
+impl From<SmallDict> for SharedDict {
+    fn from(dict: SmallDict) -> Self {
+        Self(Arc::new(dict))
+    }
+}
+
+impl std::ops::Deref for SharedDict {
+    type Target = SmallDict;
+    fn deref(&self) -> &SmallDict {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SharedDict {
+    fn deref_mut(&mut self) -> &mut SmallDict {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+/// Iterating a borrowed shared dict, delegating to the underlying type's own iterator
+/// rather than restating its item type here.
+impl<'a> IntoIterator for &'a SharedDict {
+    type Item = <&'a SmallDict as IntoIterator>::Item;
+    type IntoIter = <&'a SmallDict as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        (&*self.0).into_iter()
+    }
+}
+
 impl std::ops::DerefMut for SharedList {
     fn deref_mut(&mut self) -> &mut Vec<Value> {
         Arc::make_mut(&mut self.0)
@@ -777,7 +824,10 @@ enum Value {
     /// `Arc`, and keeping the two apart is what let this change be mechanical.
     ListShared(SharedList),
     Set(Vec<Value>),  // ordered set — unique values, insertion order
-    Dict(SmallDict),
+    /// The shared dictionary, for the same reason and by the same route as
+    /// `ListShared`: `len(d)` or `has_key d k` on a 5 000-entry dict was copying the
+    /// whole table on every call.
+    DictShared(SharedDict),
     /// Class instance. The two parts are a pointer to the class's shared
     /// metadata and a slot-indexed array of the values.
     ///
@@ -808,6 +858,12 @@ impl Value {
     #[allow(non_snake_case)]
     fn List(elements: Vec<Value>) -> Value {
         Value::ListShared(elements.into())
+    }
+
+    /// Build a dictionary. Named `Dict` for the same reason as `List` above.
+    #[allow(non_snake_case)]
+    fn Dict(entries: SmallDict) -> Value {
+        Value::DictShared(entries.into())
     }
 }
 
@@ -1101,7 +1157,7 @@ impl fmt::Display for Value {
                     .join(", ");
                 write!(f, "{{{joined}}}")
             }
-            Value::Dict(items) => {
+            Value::DictShared(items) => {
                 let mut keys = items.keys().cloned().collect::<Vec<_>>();
                 keys.sort();
                 let joined = keys
@@ -1141,7 +1197,7 @@ impl Value {
             Value::Str(v) => !v.is_empty(),
             Value::ListShared(v) => !v.is_empty(),
             Value::Set(v) => !v.is_empty(),
-            Value::Dict(v) => !v.is_empty(),
+            Value::DictShared(v) => !v.is_empty(),
             Value::Func(_) => true,
             Value::Module(_) => true,
             Value::Object { .. } => true,
@@ -1166,7 +1222,7 @@ impl Value {
             Value::Str(_) => "string",
             Value::ListShared(_) => "list",
             Value::Set(_) => "group",
-            Value::Dict(_) => "dict",
+            Value::DictShared(_) => "dict",
             Value::Func(_) => "function",
             Value::Module(_) => "module",
             Value::Object { .. } => "object",
@@ -1228,7 +1284,7 @@ fn is_missing_value(value: &Value) -> bool {
         Value::Str(v) => v.is_empty(),
         Value::ListShared(v) => v.is_empty(),
         Value::Set(v) => v.is_empty(),
-        Value::Dict(v) => v.is_empty(),
+        Value::DictShared(v) => v.is_empty(),
         _ => false,
     }
 }
@@ -1308,7 +1364,7 @@ fn iterable_items_owned_typed(value: Value, generators: bool) -> Option<Vec<Valu
         // moved away from, and that is the one case that copies.
         Value::ListShared(v) => Some(v.into_vec()),
         Value::Set(v) => Some(v),
-        Value::Dict(mut m)
+        Value::DictShared(mut m)
             if generators && m.get("__generator__").map_or(false, |v| v.to_bool()) =>
         {
             match m.remove("__gen_values__") {
@@ -1327,7 +1383,7 @@ fn iterable_items(value: &Value) -> Option<Vec<Value>> {
         // which is exactly what the caller asked for.
         Value::ListShared(v) => Some(v.to_vec()),
         Value::Set(v) => Some(v.clone()),
-        Value::Dict(m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
+        Value::DictShared(m) if m.get("__generator__").map_or(false, |v| v.to_bool()) => {
             match m.get("__gen_values__") {
                 Some(Value::ListShared(v)) => Some(v.to_vec()),
                 _ => Some(Vec::new()),
@@ -1351,7 +1407,7 @@ fn resolve_context_value(name: &str, ctx: &ExecContext<'_>) -> Option<Value> {
     let mut cur = ctx.get_var(parts[0])?;
     for p in &parts[1..] {
         match cur {
-            Value::Dict(ref map) => {
+            Value::DictShared(ref map) => {
                 cur = map.get(*p)?.clone();
             }
             Value::Object { ref class, ref fields } => {
@@ -2657,7 +2713,7 @@ fn try_inplace_container_concat(
         _ => return None,
     };
     // One lookup rejects the overwhelming majority of assignments here.
-    if !matches!(ctx.get_var_ref(name), Some(Value::ListShared(_) | Value::Dict(_))) {
+    if !matches!(ctx.get_var_ref(name), Some(Value::ListShared(_) | Value::DictShared(_))) {
         return None;
     }
 
@@ -2674,9 +2730,9 @@ fn try_inplace_container_concat(
             l.extend(r);
             Value::ListShared(l)
         }
-        (Value::Dict(mut d), Value::Dict(r)) => {
-            d.extend(r);
-            Value::Dict(d)
+        (Value::DictShared(mut d), Value::DictShared(r)) => {
+            d.extend(r.into_inner());
+            Value::DictShared(d)
         }
         (lhs, rhs) => match eval_binary("+", lhs, rhs, ctx) {
             Ok(v) => v,
@@ -2748,7 +2804,7 @@ fn try_inplace_member_append(
     // Confirm the member really is a list before evaluating the value, so an
     // expression with side effects can never be evaluated twice.
     let holds_list = match ctx.get_var_ref(root) {
-        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::ListShared(_))),
+        Some(Value::DictShared(m)) => matches!(m.get(field), Some(Value::ListShared(_))),
         Some(Value::Object { class, fields }) => class
             .field_index
             .get(field)
@@ -2766,26 +2822,26 @@ fn try_inplace_member_append(
     let root_val = ctx.take_var(root)?;
 
     let updated = match root_val {
-        Value::Dict(mut m) => {
+        Value::DictShared(mut m) => {
             let mut list = match m.remove(field) {
                 Some(Value::ListShared(l)) => l,
                 Some(other) => {
                     m.insert(field.to_string(), other);
-                    ctx.set_var(root, Value::Dict(m));
+                    ctx.set_var(root, Value::DictShared(m));
                     return None;
                 }
                 None => {
-                    ctx.set_var(root, Value::Dict(m));
+                    ctx.set_var(root, Value::DictShared(m));
                     return None;
                 }
             };
             if let Err(e) = append_items_into(&mut list, item, callee) {
                 m.insert(field.to_string(), Value::ListShared(list));
-                ctx.set_var(root, Value::Dict(m));
+                ctx.set_var(root, Value::DictShared(m));
                 return Some(Err(e));
             }
             m.insert(field.to_string(), Value::ListShared(list));
-            Value::Dict(m)
+            Value::DictShared(m)
         }
         Value::Object { class, mut fields } => {
             // The slot is where the list already is, so this appends into the
@@ -2844,7 +2900,7 @@ fn try_inplace_member_concat(
         _ => return None,
     };
     let holds_list = match ctx.get_var_ref(root) {
-        Some(Value::Dict(m)) => matches!(m.get(field), Some(Value::ListShared(_))),
+        Some(Value::DictShared(m)) => matches!(m.get(field), Some(Value::ListShared(_))),
         Some(Value::Object { class, fields }) => class
             .field_index
             .get(field)
@@ -2869,22 +2925,22 @@ fn try_inplace_member_concat(
 
     let root_val = ctx.take_var(root)?;
     let updated = match root_val {
-        Value::Dict(mut m) => {
+        Value::DictShared(mut m) => {
             let mut list = match m.remove(field) {
                 Some(Value::ListShared(l)) => l,
                 Some(other) => {
                     m.insert(field.to_string(), other);
-                    ctx.set_var(root, Value::Dict(m));
+                    ctx.set_var(root, Value::DictShared(m));
                     return None;
                 }
                 None => {
-                    ctx.set_var(root, Value::Dict(m));
+                    ctx.set_var(root, Value::DictShared(m));
                     return None;
                 }
             };
             list.extend(extra);
             m.insert(field.to_string(), Value::ListShared(list));
-            Value::Dict(m)
+            Value::DictShared(m)
         }
         Value::Object { class, mut fields } => {
             let slot = match class.field_index.get(field) {
@@ -3045,7 +3101,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
             let in_place_container = op == "+="
                 && !name.contains('.')
                 && is_bare_identifier(name)
-                && matches!(ctx.get_var_ref(name), Some(Value::ListShared(_) | Value::Dict(_)));
+                && matches!(ctx.get_var_ref(name), Some(Value::ListShared(_) | Value::DictShared(_)));
             let rhs = eval_value_source(value, ctx)?;
             if in_place_container {
                 if let Some(container) = ctx.take_var(name) {
@@ -3054,9 +3110,9 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                             l.extend(r);
                             Value::ListShared(l)
                         }
-                        (Value::Dict(mut d), Value::Dict(r)) => {
-                            d.extend(r);
-                            Value::Dict(d)
+                        (Value::DictShared(mut d), Value::DictShared(r)) => {
+                            d.extend(r.into_inner());
+                            Value::DictShared(d)
                         }
                         (container, rhs) => eval_binary("+", container, rhs, ctx)
                             .map_err(|e| format!("Line {}: {}", line, e))?,
@@ -5323,9 +5379,9 @@ fn vm_concat_slot(
             values[idx] = Value::ListShared(list);
             Ok(())
         }
-        (Value::Dict(mut dict), Value::Dict(extra)) => {
-            dict.extend(extra);
-            values[idx] = Value::Dict(dict);
+        (Value::DictShared(mut dict), Value::DictShared(extra)) => {
+            dict.extend(extra.into_inner());
+            values[idx] = Value::DictShared(dict);
             Ok(())
         }
         (Value::Int(x), Value::Int(y)) => {
@@ -5746,7 +5802,7 @@ fn vm_run(
                                     .ok_or_else(|| format!("List index out of range: {raw}"))?;
                                 items[idx] = value;
                             }
-                            Value::Dict(map) => {
+                            Value::DictShared(map) => {
                                 let key = match index {
                                     Value::Str(s) => s,
                                     _ => {
@@ -6941,7 +6997,7 @@ fn map_object_method_builtin(receiver: &Value, method: &str) -> Option<&'static 
             "char_code" | "charcode" | "charcodeat" => Some("ord"),
             _ => None,
         },
-        Value::Dict(_) => match method {
+        Value::DictShared(_) => match method {
             "keys" => Some("keys"),
             "values" => Some("values"),
             "items" | "entries" => Some("items"),
@@ -7255,7 +7311,7 @@ fn invoke_method_on_value(
     }
 
     // 2. Dict with function property (JS-style objects)
-    if let Value::Dict(ref map) = target_val {
+    if let Value::DictShared(ref map) = target_val {
         if let Some(Value::Func(fn_name)) = map.get(method) {
             let exprs: Vec<Expr> = args.iter().map(|v| match v {
                 Value::Int(i) => Expr::Int(*i),
@@ -7346,7 +7402,7 @@ fn apply_unary(op: &str, v: Value) -> Result<Value, String> {
 /// `xs.length` in a loop does not clone the list to count it.
 fn resolve_member_access_ref(target: &Value, field: &str) -> Result<Value, String> {
     match target {
-        Value::Dict(map) => {
+        Value::DictShared(map) => {
             if let Some(v) = map.get(field) {
                 Ok(v.clone())
             } else if field == "length" || field == "len" || field == "size" {
@@ -8303,7 +8359,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
                 Value::ListShared(v) => Value::Int(v.len() as i64),
                 Value::Set(v) => Value::Int(v.len() as i64),
-                Value::Dict(v) => Value::Int(v.len() as i64),
+                Value::DictShared(v) => Value::Int(v.len() as i64),
                 _ => return Some(Err(format!("len expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
             };
             Some(Ok(out))
@@ -8697,7 +8753,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("keys expects exactly 1 argument (dictionary)".to_string()));
             }
             let map = match &positional[0] {
-                Value::Dict(v) => v,
+                Value::DictShared(v) => v,
                 _ => return Some(Err(format!("keys expects a dictionary, got {}", positional[0].type_name()))),
             };
             let mut keys = map.keys().cloned().collect::<Vec<_>>();
@@ -8711,7 +8767,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("values expects exactly 1 argument (dictionary)".to_string()));
             }
             let map = match &positional[0] {
-                Value::Dict(v) => v,
+                Value::DictShared(v) => v,
                 _ => return Some(Err(format!("values expects a dictionary, got {}", positional[0].type_name()))),
             };
             let mut keys = map.keys().cloned().collect::<Vec<_>>();
@@ -8727,7 +8783,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("has_key expects exactly 2 arguments: has_key(dict, key)".to_string()));
             }
             let map = match &positional[0] {
-                Value::Dict(v) => v,
+                Value::DictShared(v) => v,
                 _ => return Some(Err(format!("has_key expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = positional[1].to_string();
@@ -9014,7 +9070,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                         Some(Ok(Value::Int(text.matches(needle).count() as i64)))
                     }
                 }
-                Value::Dict(map) => {
+                Value::DictShared(map) => {
                     let key = match &positional[1] {
                         Value::Str(s) => s,
                         _ => {
@@ -9228,7 +9284,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("items expects exactly 1 argument (dictionary)".to_string()));
             }
             let map = match &positional[0] {
-                Value::Dict(v) => v,
+                Value::DictShared(v) => v,
                 _ => return Some(Err(format!("items expects a dictionary, got {}", positional[0].type_name()))),
             };
 
@@ -9250,7 +9306,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 ));
             }
             let map = match &positional[0] {
-                Value::Dict(v) => v,
+                Value::DictShared(v) => v,
                 _ => return Some(Err(format!("dict_get expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = match &positional[1] {
@@ -9274,7 +9330,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 ));
             }
             let mut map = match &positional[0] {
-                Value::Dict(v) => v.clone(),
+                Value::DictShared(v) => v.clone(),
                 _ => return Some(Err(format!("dict_set expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = match &positional[1] {
@@ -9283,7 +9339,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             };
 
             map.insert(key, positional[2].clone());
-            Some(Ok(Value::Dict(map)))
+            Some(Ok(Value::DictShared(map)))
         }
         "dict_update" => {
             if positional.len() != 2 {
@@ -9294,7 +9350,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
 
             let mut map = match &positional[0] {
-                Value::Dict(v) => v.clone(),
+                Value::DictShared(v) => v.clone(),
                 _ => {
                     return Some(Err(format!(
                         "dict_update expects a dictionary, got {}", positional[0].type_name()
@@ -9302,7 +9358,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 }
             };
             let updates = match &positional[1] {
-                Value::Dict(v) => v,
+                Value::DictShared(v) => v,
                 _ => {
                     return Some(Err(
                         "dict_update expects second argument to be dictionary".to_string(),
@@ -9314,7 +9370,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 map.insert(key.clone(), value.clone());
             }
 
-            Some(Ok(Value::Dict(map)))
+            Some(Ok(Value::DictShared(map)))
         }
         "dict_remove" => {
             if positional.len() != 2 {
@@ -9323,7 +9379,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 ));
             }
             let mut map = match &positional[0] {
-                Value::Dict(v) => v.clone(),
+                Value::DictShared(v) => v.clone(),
                 _ => return Some(Err(format!("dict_remove expects a dictionary, got {}", positional[0].type_name()))),
             };
             let key = match &positional[1] {
@@ -9332,7 +9388,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             };
 
             map.remove(key);
-            Some(Ok(Value::Dict(map)))
+            Some(Ok(Value::DictShared(map)))
         }
         "starts_with" => {
             if positional.len() != 2 {
@@ -9380,7 +9436,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             match &positional[0] {
                 Value::ListShared(_) => Some(Ok(Value::List(vec![]))),
                 Value::Set(_) => Some(Ok(Value::Set(vec![]))),
-                Value::Dict(_) => Some(Ok(Value::Dict(HashMap::new().into()))),
+                Value::DictShared(_) => Some(Ok(Value::Dict(HashMap::new().into()))),
                 Value::Str(_) => Some(Ok(Value::Str(String::new()))),
                 _ => Some(Err(format!("clear expects a string, list, set, or dictionary, got {}", positional[0].type_name()))),
             }
@@ -9689,7 +9745,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("is_ok expects exactly 1 argument".to_string()));
             }
             match &positional[0] {
-                Value::Dict(m) => Some(Ok(Value::Bool(m.get("ok").map(|v| v.to_bool()).unwrap_or(false)))),
+                Value::DictShared(m) => Some(Ok(Value::Bool(m.get("ok").map(|v| v.to_bool()).unwrap_or(false)))),
                 _ => Some(Ok(Value::Bool(false))),
             }
         }
@@ -9698,7 +9754,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("is_err expects exactly 1 argument".to_string()));
             }
             match &positional[0] {
-                Value::Dict(m) => Some(Ok(Value::Bool(!m.get("ok").map(|v| v.to_bool()).unwrap_or(true)))),
+                Value::DictShared(m) => Some(Ok(Value::Bool(!m.get("ok").map(|v| v.to_bool()).unwrap_or(true)))),
                 _ => Some(Ok(Value::Bool(true))),
             }
         }
@@ -9707,7 +9763,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 return Some(Err("unwrap expects 1 or 2 arguments: unwrap(result, [fallback])".to_string()));
             }
             match &positional[0] {
-                Value::Dict(m) => {
+                Value::DictShared(m) => {
                     if m.get("ok").map(|v| v.to_bool()).unwrap_or(false) {
                         Some(Ok(m.get("value").cloned().unwrap_or(Value::Empty)))
                     } else {
@@ -10037,7 +10093,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
                 Value::Str(_) => "string",
                 Value::ListShared(_) => "list",
                 Value::Set(_) => "group",
-                Value::Dict(_) => "dict",
+                Value::DictShared(_) => "dict",
                 Value::Func(_) => "function",
                 Value::Object { .. } => "object",
                 Value::Module(_) => "module",
@@ -10052,13 +10108,13 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let matches = match callee {
                 "is_list" => matches!(positional[0], Value::ListShared(_)),
-                "is_dict" => matches!(positional[0], Value::Dict(_)),
+                "is_dict" => matches!(positional[0], Value::DictShared(_)),
                 "is_string" => matches!(positional[0], Value::Str(_)),
                 "is_int" => matches!(positional[0], Value::Int(_)),
                 "is_float" => matches!(positional[0], Value::Float(_)),
                 "is_bool" => matches!(positional[0], Value::Bool(_)),
                 "is_group" => matches!(positional[0], Value::Set(_)),
-                "is_generator" => matches!(&positional[0], Value::Dict(m) if m.get("__generator__").map_or(false, |v| v.to_bool())),
+                "is_generator" => matches!(&positional[0], Value::DictShared(m) if m.get("__generator__").map_or(false, |v| v.to_bool())),
                 "is_number" => matches!(positional[0], Value::Int(_) | Value::Float(_)),
                 _ => false,
             };
@@ -11085,7 +11141,7 @@ fn invoke_builtin(callee: &str, positional: &[Value]) -> Option<Result<Value, St
             }
             let mut template = positional[0].to_string();
             if positional.len() > 1 {
-                if let Value::Dict(ref map) = positional[1] {
+                if let Value::DictShared(ref map) = positional[1] {
                     for (k, v) in map {
                         template = template.replace(&format!("%{}%", k), &v.to_string());
                         template = template.replace(&format!("${{{}}}", k), &v.to_string());
@@ -12829,7 +12885,7 @@ fn value_to_toml(v: &Value) -> Option<toml::Value> {
         Value::Set(items) => Some(toml::Value::Array(
             items.iter().filter_map(value_to_toml).collect(),
         )),
-        Value::Dict(d) => {
+        Value::DictShared(d) => {
             let mut t = toml::map::Map::new();
             for (k, v) in d {
                 if let Some(tv) = value_to_toml(v) {
@@ -13799,7 +13855,7 @@ fn parse_socket_id(value: &Value) -> Result<i64, String> {
         // directly: `ws_send_text (ws_connect url) "hi"` is the form the guide
         // documents, and requiring every caller to pull out ["socket_id"] first is
         // the sort of thing nobody discovers from the source.
-        Value::Dict(map) => match map.get("socket_id") {
+        Value::DictShared(map) => match map.get("socket_id") {
             Some(Value::Int(v)) => Ok(*v),
             Some(Value::Str(s)) => s
                 .trim()
@@ -14038,7 +14094,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::Str(v) => JsonValue::from(v.clone()),
         Value::ListShared(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
         Value::Set(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
-        Value::Dict(items) => {
+        Value::DictShared(items) => {
             let mut out = JsonMap::new();
             for (k, v) in items {
                 out.insert(k.clone(), value_to_json(v));
@@ -14236,7 +14292,7 @@ fn http_request_builtin(
         req = req.header(reqwest::header::AUTHORIZATION, authorization.trim());
     }
 
-    if let Value::Dict(map) = extra_headers {
+    if let Value::DictShared(map) = extra_headers {
         for (k, v) in map {
             req = req.header(k.as_str(), v.to_string());
         }
@@ -14407,7 +14463,7 @@ fn write_http_response(stream: &mut TcpStream, resp: &Value) -> Result<(), Strin
     let mut extra: Vec<(String, String)> = Vec::new();
     match resp {
         Value::Str(s) => body = s.clone(),
-        Value::Dict(m) => {
+        Value::DictShared(m) => {
             if let Some(Value::Int(s)) = m.get("status") {
                 status = *s;
             }
@@ -14417,7 +14473,7 @@ fn write_http_response(stream: &mut TcpStream, resp: &Value) -> Result<(), Strin
             if let Some(Value::Str(ct)) = m.get("content_type") {
                 content_type = ct.clone();
             }
-            if let Some(Value::Dict(h)) = m.get("headers") {
+            if let Some(Value::DictShared(h)) = m.get("headers") {
                 for (k, v) in h {
                     extra.push((k.clone(), v.to_string()));
                 }
@@ -14716,7 +14772,7 @@ fn coerce_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value,
             _ => Err(format!("Line {line}: variable '{name}' expects list")),
         },
         "dictionary" | "dict" => match value {
-            Value::Dict(_) => Ok(value),
+            Value::DictShared(_) => Ok(value),
             _ => Err(format!("Line {line}: variable '{name}' expects dictionary")),
         },
         "module" => match value {
@@ -14802,7 +14858,7 @@ fn convert_type(line: usize, name: &str, ty: &str, value: Value) -> Result<Value
             _ => Err(format!("Line {line}: variable '{name}' cannot be converted to group")),
         },
         "dictionary" | "dict" => match value {
-            Value::Dict(_) => Ok(value),
+            Value::DictShared(_) => Ok(value),
             _ => Err(format!(
                 "Line {line}: variable '{name}' cannot be converted to dictionary"
             )),
@@ -15051,7 +15107,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                     && borrowable_var(&parts[0])
                     && matches!(
                         ctx.get_var_ref(&parts[0]),
-                        Some(Value::ListShared(_) | Value::Str(_) | Value::Dict(_))
+                        Some(Value::ListShared(_) | Value::Str(_) | Value::DictShared(_))
                     );
                 if borrowable {
                     let index_val = eval_ast(index, ctx)?;
@@ -15145,7 +15201,7 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                                 }
                                 Value::ListShared(v) => return Ok(Value::Int(v.len() as i64)),
                                 Value::Set(v) => return Ok(Value::Int(v.len() as i64)),
-                                Value::Dict(v) => return Ok(Value::Int(v.len() as i64)),
+                                Value::DictShared(v) => return Ok(Value::Int(v.len() as i64)),
                                 _ => {} // other types: normal path reports the error
                             }
                         }
@@ -15162,10 +15218,10 @@ fn eval_ast(expr: &Expr, ctx: &mut ExecContext<'_>) -> Result<Value, String> {
                 {
                     if let Expr::Var(parts) = &args[0] {
                         if parts.len() == 1
-                            && matches!(ctx.get_var_ref(&parts[0]), Some(Value::Dict(_)))
+                            && matches!(ctx.get_var_ref(&parts[0]), Some(Value::DictShared(_)))
                         {
                             let key_val = eval_ast(&args[1], ctx)?;
-                            if let Some(Value::Dict(map)) = ctx.get_var_ref(&parts[0]) {
+                            if let Some(Value::DictShared(map)) = ctx.get_var_ref(&parts[0]) {
                                 return Ok(Value::Bool(map.contains_key(&key_val.to_string())));
                             }
                         }
@@ -15331,7 +15387,7 @@ fn resolve_var_chain(parts: &[String], ctx: &mut ExecContext<'_>) -> Result<Valu
                     return Err(format!("Module '{}' has no attribute '{}'", module_name, p));
                 }
             }
-            Value::Dict(ref map) => {
+            Value::DictShared(ref map) => {
                 if let Some(v) = map.get(p) {
                     cur = v.clone();
                 } else {
@@ -15380,9 +15436,9 @@ fn assign_var_chain(name: &str, value: Value, ctx: &mut ExecContext<'_>) -> Resu
     let root_name = parts[0];
     let field = parts[1];
     match ctx.get_var(root_name) {
-        Some(Value::Dict(mut map)) => {
+        Some(Value::DictShared(mut map)) => {
             map.insert(field.to_string(), value);
-            ctx.set_var(root_name, Value::Dict(map));
+            ctx.set_var(root_name, Value::DictShared(map));
             Ok(())
         }
         // An instance. The field has to be one the class declared, which is the
@@ -15564,7 +15620,7 @@ fn resolve_index(target: Value, index: Value) -> Result<Value, String> {
                 .ok_or_else(|| format!("String index out of range: {idx}"))?;
             Ok(Value::Str(ch.to_string()))
         }
-        Value::Dict(map) => {
+        Value::DictShared(map) => {
             let key = match index {
                 Value::Str(s) => s,
                 _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
@@ -15608,7 +15664,7 @@ fn resolve_index_ref(target: &Value, index: Value) -> Result<Value, String> {
                 .ok_or_else(|| format!("String index out of range: {idx}"))?;
             Ok(Value::Str(ch.to_string()))
         }
-        Value::Dict(map) => {
+        Value::DictShared(map) => {
             let key = match index {
                 Value::Str(s) => s,
                 _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
@@ -15641,13 +15697,13 @@ fn assign_index_value(target: Value, index: Value, replacement: Value) -> Result
             items[idx] = replacement;
             Ok(Value::ListShared(items))
         }
-        Value::Dict(mut map) => {
+        Value::DictShared(mut map) => {
             let key = match index {
                 Value::Str(s) => s,
                 _ => return Err(format!("Dictionary key must be a string, got {}: {}", index.type_name(), index)),
             };
             map.insert(key, replacement);
-            Ok(Value::Dict(map))
+            Ok(Value::DictShared(map))
         }
         _ => Err("Indexed assignment is only supported for list and dictionary values".to_string()),
     }
@@ -15845,9 +15901,9 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
                 }
                 Ok(Value::Set(x))
             }
-            (Value::Dict(mut x), Value::Dict(y)) => {
-                x.extend(y);
-                Ok(Value::Dict(x))
+            (Value::DictShared(mut x), Value::DictShared(y)) => {
+                x.extend(y.into_inner());
+                Ok(Value::DictShared(x))
             }
             _ => Err(format!("Cannot add {} and {} with '+'", a_type, b_type)),
             }
@@ -15942,7 +15998,7 @@ fn contains_value(container: &Value, item: &Value) -> Result<bool, String> {
     match container {
         Value::ListShared(items) => Ok(items.iter().any(|v| eq_values(v, item))),
         Value::Set(items) => Ok(items.iter().any(|v| eq_values(v, item))),
-        Value::Dict(map) => {
+        Value::DictShared(map) => {
             let key = match item {
                 Value::Str(s) => s,
                 _ => return Err(format!("'in' with dict expects a string key, got {}: {}", item.type_name(), item)),
@@ -16046,7 +16102,7 @@ fn eq_values(a: &Value, b: &Value) -> bool {
                     y.iter().any(|other| format!("{}", other) == key && eq_values(item, other))
                 })
         }
-        (Value::Dict(x), Value::Dict(y)) => {
+        (Value::DictShared(x), Value::DictShared(y)) => {
             x.len() == y.len()
                 && x
                     .iter()
@@ -16073,7 +16129,7 @@ fn is_identity_equal(a: &Value, b: &Value) -> bool {
             // Object identity: same class AND same field values
             c1.name == c2.name && eq_values(a, b)
         }
-        (Value::ListShared(_), Value::ListShared(_)) | (Value::Dict(_), Value::Dict(_)) => {
+        (Value::ListShared(_), Value::ListShared(_)) | (Value::DictShared(_), Value::DictShared(_)) => {
             // Collections: identity means same reference (pointer equality), but since
             // we don't track references, fall back to structural equality
             eq_values(a, b)
