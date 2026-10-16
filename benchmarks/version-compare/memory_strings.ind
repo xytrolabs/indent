@@ -1,0 +1,14 @@
+#! Peak RSS: hold 200 references to one 200 KB string plus a copy of each.
+var unit string = "0123456789abcdef"
+var big string = ""
+var i int = 0
+while i < 12500
+    big is big + unit
+    i is i + 1
+var held dynamic = []
+var j int = 0
+while j < 200
+    var copy dynamic = big
+    held is append held copy
+    j is j + 1
+say "checks " + string(len(held)) + " " + string(len(held[0]))

@@ -1,0 +1,10 @@
+#! Startup with module loading, which is where most of a short script's time goes.
+#! The idiom is `get <Name> from <module>`; there is no `std` namespace, and
+#! `import std json` is not valid on any of these releases.
+get Loads from json
+get Dumps from json
+get Pretty from json
+get ReadOr from fs
+get Lines from strings
+get Upper from strings
+say "checks imported"

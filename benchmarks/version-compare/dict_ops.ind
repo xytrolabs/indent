@@ -1,0 +1,12 @@
+#! Filling and reading a dictionary: hashing, key storage, and the small-dict path.
+var d dynamic = {}
+var i int = 0
+while i < 20000
+    d["k" + string(i)] is i
+    i is i + 1
+var total int = 0
+var j int = 0
+while j < 20000
+    total is total + (d["k" + string(j)])
+    j is j + 1
+say "checks " + string(len(d)) + " " + string(total)

@@ -1,0 +1,10 @@
+#! One-argument function calls: the dispatch path the object model changed.
+fun add1 x
+    give x + 1
+
+var acc int = 0
+var i int = 0
+while i < 100000
+    acc is add1(acc)
+    i is i + 1
+say "checks " + string(acc)

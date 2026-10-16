@@ -1,0 +1,13 @@
+#! The write side of sharing: alias a large list, then append through the alias.
+#! This is the path that must copy once and then stay in place.
+var xs dynamic = []
+var i int = 0
+while i < 10000
+    xs is append xs i
+    i is i + 1
+var alias dynamic = xs
+var j int = 0
+while j < 20000
+    alias is append alias j
+    j is j + 1
+say "checks " + string(len(xs)) + " " + string(len(alias))

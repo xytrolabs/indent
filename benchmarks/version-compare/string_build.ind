@@ -1,0 +1,8 @@
+#! Growing one string in place: the path that has to write through the shared buffer.
+var unit string = "abcdefghij"
+var big string = ""
+var i int = 0
+while i < 50000
+    big is big + unit
+    i is i + 1
+say "checks " + string(len(big))

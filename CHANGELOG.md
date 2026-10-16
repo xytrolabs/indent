@@ -59,6 +59,15 @@ and `len("héllo 🚀")` counts codepoints, not bytes.
 - `bench_concurrency` — 100 spawned tasks gathered, the same work through
   `parallel`, and the sequential spawn-and-wait path.
 
+### Packaging note
+
+An `exp` tag cannot be an `.rpm` or `.deb` version: in both formats a hyphen
+separates version from release, so `rpmbuild` and `dpkg-deb` produce nothing for
+`2.4.1-exp1`. The packaging and package-install smoke jobs are now skipped for a
+prerelease, and experimental builds ship the archives only — which is all
+`--switch-to-exp` needs. (The first attempt at this tag failed exactly here, looking
+for an `.rpm` that could not exist, and skipped publishing as a result.)
+
 ### Still open, and next
 
 Phase 4 (symbol interning and `Rc`, a one-way door on the AST and the cache
@@ -144,6 +153,48 @@ say len(a)          # 2 — a is untouched
 
 The only difference is *when* the copy happens: on the first write after a value
 becomes shared, rather than on every read.
+
+### 🌐 Networking, WebSocket, AI and parser fixes
+
+A second round of these landed after 2.3.0 was tagged, so they are 2.4.0's:
+
+- **`discord.Command` only accepted one argument shape, and which `discord` module
+  the loader found decided whether a bot started at all.** The core definition took
+  `(bot, name, desc, handlerName)` while the compatibility shim — and every legacy
+  call site — pass the 6.0 shape with a `prefix` first (`Command bot prefix name desc
+  handler`) or with trailing options, so a 5-argument call blew up with *"Too many
+  positional arguments: expected at most 4"*. Because both the full library and a shim
+  can be named `discord`, the failure came and went with module search order, which
+  made it look like a heisenbug. `Command` now takes `...args` and dispatches on the
+  count, supporting all three shapes (the prefix stays ignored, as the shim
+  documented), so it behaves identically no matter which module resolves.
+- **The "too many positional arguments" error now names the parameters it expected**
+  (`… expected at most 4, got 5 (parameters: bot, name, desc, handlerName)`). Without
+  that, this bug was unidentifiable from the message alone; with it, the culprit was
+  obvious in one run.
+- **gzip/deflate response bodies were not decoded.** `reqwest` was built without
+  its compression features, so any API or CDN that serves compressed JSON handed
+  back raw gzip bytes that failed to parse — 404-ing `json_parse`, silently, at the
+  protocol level. Also `charset`, so a Latin-1 body came back as mojibake. The
+  client now advertises and decodes exactly what Python's `requests` does out of the
+  box (`gzip`, `deflate`, `charset`), reusing the `flate2` already in the tree.
+- **`ws_connect` returned a handle its own siblings rejected.** Every other `ws_*`
+  builtin demanded a bare int, so the documented `ws_send_text(sock, "hi")` failed
+  with "socket_id must be an int"; only code that happened to know to index
+  `["socket_id"]` worked. Both forms are now accepted, and the result-dict contract
+  (`{ok, text}` / `{ok:false, timeout:true}` / `{ok:false, closed:true}`) is
+  documented in `docs/builtins-reference.md` instead of the wrong `int`/`string`
+  return types that were there.
+- **The AI package kept reporting a stale error after a successful retry.**
+  `_ApiRequest` reset its error state on entry but not between attempts or on
+  success, so `WasError()` stayed true for a call that had actually recovered —
+  the opposite of the documented "`{}` = success" and of openai-python, where a
+  success simply has no error. Now cleared per attempt and on success.
+
+Found by a new offline parity suite (`tests/run_net_tests.sh` against
+`tools/mock_fixture_server.py`, which serves HTTP, WebSocket and an
+OpenAI-compatible mock): **103 assertions** across `net_http_parity`,
+`net_ws_parity` and `ai_mock_parity`.
 
 ### Breaking changes
 
@@ -332,47 +383,13 @@ with its own verification rather than a rushed change.
 **Verification:** 52/52 language tests, 28/28 Rust tests.
 
 
-## Unreleased — language & package parity
+## 2.3.0 (also) — language & package parity
+
+> The second half of the 2.3.0 release. It is listed separately because it was
+> developed alongside the performance pass and covers the **packages** (`ai`,
+> `discord`, `web`) as much as the interpreter.
 
 ### 🌐 Networking, WebSocket, AI and parser fixes
-- **`discord.Command` only accepted one argument shape, and which `discord` module
-  the loader found decided whether a bot started at all.** The core definition took
-  `(bot, name, desc, handlerName)` while the compatibility shim — and every legacy
-  call site — pass the 6.0 shape with a `prefix` first (`Command bot prefix name desc
-  handler`) or with trailing options, so a 5-argument call blew up with *"Too many
-  positional arguments: expected at most 4"*. Because both the full library and a shim
-  can be named `discord`, the failure came and went with module search order, which
-  made it look like a heisenbug. `Command` now takes `...args` and dispatches on the
-  count, supporting all three shapes (the prefix stays ignored, as the shim
-  documented), so it behaves identically no matter which module resolves.
-- **The "too many positional arguments" error now names the parameters it expected**
-  (`… expected at most 4, got 5 (parameters: bot, name, desc, handlerName)`). Without
-  that, this bug was unidentifiable from the message alone; with it, the culprit was
-  obvious in one run.
-
-Found by a new offline parity suite (`tests/run_net_tests.sh` against
-`tools/mock_fixture_server.py`, which serves HTTP, WebSocket and an
-OpenAI-compatible mock): **103 assertions** across `net_http_parity`,
-`net_ws_parity` and `ai_mock_parity`.
-
-- **gzip/deflate response bodies were not decoded.** `reqwest` was built without
-  its compression features, so any API or CDN that serves compressed JSON handed
-  back raw gzip bytes that failed to parse — 404-ing `json_parse`, silently, at the
-  protocol level. Also `charset`, so a Latin-1 body came back as mojibake. The
-  client now advertises and decodes exactly what Python's `requests` does out of the
-  box (`gzip`, `deflate`, `charset`), reusing the `flate2` already in the tree.
-- **`ws_connect` returned a handle its own siblings rejected.** Every other `ws_*`
-  builtin demanded a bare int, so the documented `ws_send_text(sock, "hi")` failed
-  with "socket_id must be an int"; only code that happened to know to index
-  `["socket_id"]` worked. Both forms are now accepted, and the result-dict contract
-  (`{ok, text}` / `{ok:false, timeout:true}` / `{ok:false, closed:true}`) is
-  documented in `docs/builtins-reference.md` instead of the wrong `int`/`string`
-  return types that were there.
-- **The AI package kept reporting a stale error after a successful retry.**
-  `_ApiRequest` reset its error state on entry but not between attempts or on
-  success, so `WasError()` stayed true for a call that had actually recovered —
-  the opposite of the documented "`{}` = success" and of openai-python, where a
-  success simply has no error. Now cleared per attempt and on success.
 - **One-line `fun` defaults were parsed as a single whitespace token**, so
   `fun NotFound msg = "Not Found"` declared a parameter literally named `Found"`
   and threw *"Missing argument for parameter 'Found\"'"* at every call. That broke

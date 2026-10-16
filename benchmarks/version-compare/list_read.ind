@@ -1,0 +1,13 @@
+#! Aliasing a large list and reading it: copies per read before 2.4, shares after.
+var xs dynamic = []
+var i int = 0
+while i < 10000
+    xs is append xs i
+    i is i + 1
+var total int = 0
+var j int = 0
+while j < 5000
+    var alias dynamic = xs
+    total is total + len(alias)
+    j is j + 1
+say "checks " + string(total)

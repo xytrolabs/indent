@@ -1,0 +1,14 @@
+#! Peak RSS: many instances of a class with fields, the per-instance cost the
+#! object model changed.
+class Point
+    var x int
+    var y int
+    var name string
+
+var held dynamic = []
+var i int = 0
+while i < 20000
+    var p dynamic = Point(i, i * 2, "point-" + string(i))
+    held is append held p
+    i is i + 1
+say "checks " + string(len(held)) + " " + string(held[19999].x)

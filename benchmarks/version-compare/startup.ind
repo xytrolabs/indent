@@ -1,0 +1,2 @@
+#! Minimal startup: the cost of loading the binary and running one statement.
+say "start"

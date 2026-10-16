@@ -1,0 +1,17 @@
+#! Reading one large string many times, including through a call. On 2.2.2/2.3 every
+#! read copied the buffer; from 2.4 it is a refcount bump.
+fun measure s
+    give len(s)
+
+var unit string = "0123456789abcdef"
+var big string = ""
+var i int = 0
+while i < 12500
+    big is big + unit
+    i is i + 1
+var total int = 0
+var j int = 0
+while j < 20000
+    total is total + measure(big)
+    j is j + 1
+say "checks " + string(len(big)) + " " + string(total)

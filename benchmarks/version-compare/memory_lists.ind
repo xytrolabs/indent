@@ -1,0 +1,12 @@
+#! Peak RSS: one 10 000-element list with 200 aliases of it.
+var xs dynamic = []
+var i int = 0
+while i < 10000
+    xs is append xs i
+    i is i + 1
+var held dynamic = []
+var j int = 0
+while j < 200
+    held is append held xs
+    j is j + 1
+say "checks " + string(len(held)) + " " + string(len(held[0]))

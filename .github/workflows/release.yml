@@ -103,7 +103,13 @@ jobs:
           cp LICENSE "$STAGE_DIR/LICENSE" 2>/dev/null || true
 
       - name: Package Linux system packages (.deb/.rpm)
-        if: matrix.os == 'ubuntu-latest'
+        # Prerelease tags such as `v2.4.1-exp1` cannot be represented as an .rpm or
+        # .deb version: in both formats a hyphen separates version from release, so
+        # `rpmbuild`/`dpkg-deb` produce nothing and the smoke tests then fail looking
+        # for artifacts that were never built (this is what broke the first exp tag).
+        # Experimental builds ship the tarballs, which is all `--switch-to-exp`
+        # needs; distro packages stay a stable-channel thing.
+        if: matrix.os == 'ubuntu-latest' && !contains(github.ref_name, '-')
         shell: bash
         run: |
           set -euo pipefail
@@ -213,6 +219,12 @@ jobs:
           echo "Archive OK: runtime + air + ${STD_COUNT} stdlib files"
 
           VERSION_CLEAN="${VERSION#v}"
+          # A prerelease ships no system packages (see the packaging step), so there
+          # is nothing to look for — the archive checks above are the whole check.
+          if [[ "${VERSION_CLEAN}" == *-* ]]; then
+            echo "Prerelease ${VERSION_CLEAN}: no .deb/.rpm expected"
+            exit 0
+          fi
           DEB_ARCH="amd64"
           RPM_ARCH="x86_64"
           DEB_ASSET="$(find release-artifacts -type f -name "indent_${VERSION_CLEAN}_${DEB_ARCH}.deb" -print -quit)"
@@ -277,6 +289,9 @@ jobs:
     name: Smoke Test Linux Packages
     runs-on: ubuntu-latest
     needs: build
+    # Nothing to install for a prerelease: it ships no .deb/.rpm. Gating here keeps
+    # the job from failing (advisory, but noisy) on a tagged exp build.
+    if: ${{ !contains(github.ref_name, '-') }}
     # Advisory only. This job exercises the .deb/.rpm *install* paths, which need
     # apt/dnf/docker on the runner. The archives themselves are already verified
     # by smoke-artifacts, so a failure here must never block publishing a

@@ -1,0 +1,7 @@
+#! Building a list by appending, which is the in-place fast path.
+var xs dynamic = []
+var i int = 0
+while i < 50000
+    xs is append xs i
+    i is i + 1
+say "checks " + string(len(xs))

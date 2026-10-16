@@ -1,0 +1,9 @@
+#! Straight-line integer arithmetic in a loop: no allocation, no calls. Integer
+#! arithmetic only — `i / 2` would make the expression float, and assigning that to
+#! an `int` accumulator is a type error on every release.
+var acc int = 0
+var i int = 0
+while i < 500000
+    acc is acc + (i * 3) - i
+    i is i + 1
+say "checks " + string(acc)
