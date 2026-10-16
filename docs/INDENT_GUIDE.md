@@ -89,7 +89,7 @@ cargo build --release
 ### Verifying the install
 
 ```bash
-indent --version     # e.g. "Indent 2.2.0"
+indent --version     # e.g. "indent 2.4.0 (stable)"
 indent repl          # opens an interactive prompt; type quit to leave
 ```
 
@@ -1414,7 +1414,40 @@ indent check file.ind        # parse/syntax check
 indent lint file.ind         # lint for issues
 indent test tests/           # run tests in a folder (expects a directory)
 indent --debug file.ind      # debug with breakpoints
+indent --update              # update to the latest release on your channel
+indent --version             # the version *and* the channel
 ```
+
+### Release channels — `stable` and `exp`
+
+Indent ships two channels from the same pipeline and the same gates:
+
+- **stable** (the default) — released versions; this is what
+  `releases/latest` resolves to.
+- **exp** — tagged prereleases such as `v2.4.1-exp.1`, published as GitHub
+  *prereleases* so an existing stable install is never moved onto an
+  experimental build by accident.
+
+```bash
+indent --channel             # which channel am I on?
+indent --switch-to-exp       # follow experimental prereleases
+indent --switch-to-stable    # back to stable
+```
+
+Choose a channel when installing:
+
+```bash
+curl -fsSL https://indent.xytro.site/install.sh | bash -s -- --channel exp
+```
+
+The choice is recorded beside the binary (`$INDENT_HOME/channel`), so
+`indent --update` keeps following it, and the installer verifies the release's
+`SHA256SUMS.txt` before installing anything. An install made before 2.4 has no
+channel file and reads as **stable**. Inside an active nest, the channel is the
+nest's own, not the global install's.
+
+> ⚠️ `indent --version` includes the channel — `indent 2.4.0 (stable)`. If a
+> script parses the version out of that line, take the **first** word.
 
 ### Hot reload — `indent --watch`
 

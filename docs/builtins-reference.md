@@ -1,7 +1,11 @@
-# Indent Built-in Functions — API Reference (v2.2)
+# Indent Built-in Functions — API Reference (v2.4)
 
-> Complete reference for every built-in function available in Indent 2.2.
+> Complete reference for every built-in function available in Indent 2.4.
 > **Types**: `string`, `int`, `float`, `boolean`, `dynamic`, `empty`/`null`, `list`, `dict`, `group`
+> **🆕 v2.4**: no new builtins — values are now **copy-on-write** (collections
+> share their buffers, so reads no longer copy; pass-by-value is unchanged), and
+> two release channels were added (`--channel`, `--switch-to-exp`). See
+> [Quick Reference](quick-reference.md) for the CLI.
 > **🆕 v2.2**: `--safe` default-deny sandbox (see [Safe mode](#safe-mode--v22)); nests & `--watch` are CLI, see the [Commands](../README.md#commands) table.
 > **🆕 v2.0**: full color subsystem — `fg`/`bg`, `style`, `gradient`, `multicolor`, `rainbow`, `paint` (see [Colors](#colors-indent-20))
 > **🆕 v1.6.2**: `builtins()` returns an organized dict (category → names); type-check helpers `is_list`/`is_dict`/`is_string`/`is_number`/`is_int`/`is_float`/`is_bool`/`is_group`

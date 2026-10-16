@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.3.0
+# Indent Language (.ind) v2.4.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -7,6 +7,45 @@ var name = ask "What is your name? "
 say "Hello " + name + "!"
 ```
 
+> ## 🧠 Indent 2.4.0 — lighter on memory
+>
+> Building on 2.3's speed work, 2.4 shrinks how much memory Indent uses. Every
+> collection — strings, lists, dictionaries and groups — is now **copy-on-write**:
+> reading a variable is a refcount bump instead of a deep copy, and the copy only
+> happens on the *first write* after a value becomes shared. Pass-by-value
+> semantics are unchanged (`var b = a` still never lets `b` affect `a`).
+>
+> | Workload | before | **2.4.0** |
+> |---|---|---|
+> | Peak RSS holding 200 copies of one 200 KB string | 84.7 MB | **12.6 MB** |
+> | Passing a 201 KB string to a function | 130 µs | **7.7 µs** |
+> | `len()` of a 20 000-item list | 0.0767 s | **0.0000424 s** |
+> | `has_key()` on a 5 000-key dict | 0.0711 s | **0.0000659 s** |
+> | Startup importing five `std` modules | 3.51 ms | **2.49 ms** |
+> | Peak RSS, 20 000 statements of three call arguments each | 30.1 MB | **19.8 MB** |
+>
+> `Value` is 32 bytes (was 56) and every statement 112 (was 152) — guardrail
+> tests fail the build if either grows back.
+>
+> ### 🧪 Release channels: `stable` and `exp`
+> Two channels now come out of the same pipeline and the same gates:
+> - **stable** is the default, and what `releases/latest` resolves to.
+> - **exp** follows tagged prereleases such as `v2.4.1-exp.1`, published as
+>   GitHub *prereleases*, so a stable install is never moved onto an
+>   experimental build by accident.
+>
+> Install a channel with `--channel`, or switch an existing install in place:
+> `indent --switch-to-exp`, `indent --switch-to-stable`, `indent --channel`.
+> The choice is recorded beside the binary, so `indent --update` keeps following
+> it, and the installer verifies the release's `SHA256SUMS.txt` first.
+>
+> ⚠️ **Breaking:** `indent --version` now prints the channel — `indent 2.4.0 (stable)`.
+> Any tooling parsing the version from that line should take the **first** word.
+>
+> Upgrading is automatic: the on-disk program cache changed format, so the first
+> run after upgrading re-parses each cached file once. See
+> [`CHANGELOG.md`](CHANGELOG.md) for the full notes.
+>
 > ## 🚀 Indent 2.3.0 — the performance release
 >
 > Major optimizations and general improvements coming to Indent in 2.3! All of it
@@ -122,13 +161,16 @@ say "Hello " + name + "!"
 
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.sh | bash
+curl -fsSL https://indent.xytro.site/install.sh | bash
 
 # macOS (Homebrew)
 brew install xytrolabs/indent/indent
 
-# Windows (PowerShell)
-powershell -c "irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex"
+# Windows (PowerShell 5.1+)
+irm https://indent.xytro.site/install.ps1 | iex
+
+# Experimental channel instead of stable
+curl -fsSL https://indent.xytro.site/install.sh | bash -s -- --channel exp
 ```
 
 ---
@@ -278,7 +320,10 @@ indent lint file.ind       # Lint
 indent repl                # Interactive shell
 indent test tests/         # Run tests
 indent --debug file.ind    # Debug with breakpoints
-indent --update            # Update to latest
+indent --update            # Update to latest (keeps your channel)
+indent --channel           # Show the release channel (stable | exp)
+indent --switch-to-exp     # Follow experimental prereleases
+indent --switch-to-stable  # Go back to stable
 ```
 
 ### Standard Library (std/)

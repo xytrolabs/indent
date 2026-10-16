@@ -1,4 +1,11 @@
-# Indent Quick Reference (v2.2)
+# Indent Quick Reference (v2.4)
+
+> **New in 2.4**: 🧠 copy-on-write values — strings, lists, dictionaries and
+> groups share their buffers, so *reading* a variable is a refcount bump instead
+> of a copy. Pass-by-value behaviour is unchanged. 🧪 Release channels:
+> `--channel stable|exp`, `indent --switch-to-exp` / `--switch-to-stable` /
+> `indent --channel`. `indent --version` now prints the channel, e.g.
+> `indent 2.4.0 (stable)`.
 
 > **New in 2.2**: 🔒 `indent --safe` (default-deny sandbox for untrusted
 > scripts), 🪺 nests (`indent nest init/list/path`), 🔁 `indent --watch` (hot
