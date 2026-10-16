@@ -4043,6 +4043,20 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
     let compiled = vm_compile_stmts(body, &mut prog, rt);
     prog.reps_stack.pop();
     if !compiled {
+        // `INDENT_VM_TRACE=1` reports which statement refused. A refusal is silent
+        // by design — the body goes back to the tree-walker — so this is the only
+        // way to see how much of a program the compiler is actually accepting.
+        if std::env::var("INDENT_VM_TRACE").is_ok() {
+            for stmt in body {
+                let mut probe = VmProgram::new();
+                if !vm_compile_stmts(std::slice::from_ref(stmt), &mut probe, rt) {
+                    eprintln!("[vm] refused statement: {stmt:?}");
+                }
+            }
+        }
+        return None;
+    }
+    if !vm_verify_stack(&prog) {
         return None;
     }
     Some(prog)
@@ -4125,6 +4139,9 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
     } else {
         VmInstr::JumpIfFalse(end)
     };
+    if !vm_verify_stack(&prog) {
+        return None;
+    }
     Some(prog)
 }
 
@@ -4175,6 +4192,9 @@ fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProg
     let end = prog.instrs.len();
     if let VmInstr::IterNext { end: target, .. } = &mut prog.instrs[start] {
         *target = end;
+    }
+    if !vm_verify_stack(&prog) {
+        return None;
     }
     Some(prog)
 }
@@ -4356,7 +4376,7 @@ fn vm_compile_sub(body: &[Stmt], allow_return: bool, rt: &Runtime) -> Option<VmP
         let flag = vm_scratch(&mut prog.slots);
         prog.return_slot = Some((value, flag));
     }
-    if !vm_compile_stmts(body, &mut prog, rt) {
+    if !vm_compile_stmts(body, &mut prog, rt) || !vm_verify_stack(&prog) {
         return None;
     }
     Some(prog)
@@ -4384,6 +4404,9 @@ fn vm_compile_function(body: &[Stmt], declared_return: bool, rt: &Runtime) -> Op
     prog.instrs.push(VmInstr::EndBody {
         declared: declared_return,
     });
+    if !vm_verify_stack(&prog) {
+        return None;
+    }
     Some(prog)
 }
 
@@ -4410,13 +4433,13 @@ fn vm_mentions_reps(text: &str) -> bool {
 
 /// Compile one expression from its text: the same parse cache `eval_expr` uses,
 /// so preprocessing and parsing cannot diverge between the two engines.
+///
+/// The operand-stack bound is checked on the emitted program instead of here —
+/// see `vm_verify_stack` for why that has to be the source of truth.
 fn vm_compile_text(text: &str, prog: &mut VmProgram, rt: &Runtime) -> bool {
     let Ok(ast) = rt.cached_expr(text) else {
         return false;
     };
-    if vm_stack_depth(&ast).is_none_or(|d| d > VM_STACK) {
-        return false;
-    }
     vm_compile_expr(&ast, prog)
 }
 
@@ -5018,11 +5041,14 @@ fn vm_run(
                         // first — that is what lets a method assign its own field
                         // — and the value path only when the name is not a class
                         // method (a function-valued field, or a builtin method).
-                        // The receiver for the value path is read *before* the
-                        // hand-over, because the flush empties the slot.
+                        // The check reads the *slot*: between boundaries a frame's
+                        // binding for a mirrored variable is `Empty` (the
+                        // hand-over moves the value out and leaves the slot as the
+                        // authority), so asking the frame here would answer "not a
+                        // class method" and quietly drop the field write.
                         let is_class_method = matches!(
-                            ctx.get_var_ref(&name),
-                            Some(Value::Object { class, .. })
+                            &values[*slot as usize],
+                            Value::Object { class, .. }
                                 if class.methods.keys().any(|m| m.eq_ignore_ascii_case(method))
                         );
                         let by_value = if is_class_method {
@@ -5286,9 +5312,8 @@ fn vm_run(
 }
 
 fn vm_overflow() -> String {
-    // Both are unreachable for a body that compiled: `vm_compile_expr` emits a
-    // balanced postfix sequence and `vm_stack_depth` rejects bodies needing more
-    // than VM_STACK.
+    // Unreachable for a body that compiled: `vm_verify_stack` checks the emitted
+    // program's operand stack before it runs.
     "internal error: VM operand stack overflow".to_string()
 }
 
@@ -5296,35 +5321,102 @@ fn vm_underflow() -> String {
     "internal error: VM operand stack underflow".to_string()
 }
 
-/// Depth `vm_compile_expr` will need at its deepest point, or `None` for an
-/// unsupported expression. Requiring a binary node's operands to have equal depth
-/// keeps the emitted postfix well formed.
-fn vm_stack_depth(e: &Expr) -> Option<usize> {
-    match e {
-        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Empty => Some(1),
-        Expr::Str(v) if !v.contains('%') => Some(1),
-        Expr::Var(names) if names.len() == 1 => Some(1),
-        Expr::Binary { lhs, rhs, .. } => {
-            let l = vm_stack_depth(lhs)?;
-            let r = vm_stack_depth(rhs)?;
-            if l == r {
-                Some(l + 1)
-            } else {
-                None
-            }
-        }
-        // Argument `i` is evaluated with `i` values already on the stack, and the
-        // call itself briefly holds all `argc` of them. Unlike a binary node the
-        // arguments are independent, so their depths need not match.
-        Expr::Call { callee, args } if vm_call_compilable(callee) => {
-            let mut peak = args.len().max(1);
-            for (i, arg) in args.iter().enumerate() {
-                peak = peak.max(i + vm_stack_depth(arg)?);
-            }
-            Some(peak)
-        }
-        _ => None,
+/// The operand-stack effect of one instruction: (consumed, produced).
+///
+/// Every variant is listed, including the ones with no effect, so that adding an
+/// instruction is a compile error until its effect is written down here.
+fn vm_instr_stack_effect(instr: &VmInstr) -> (usize, usize) {
+    match instr {
+        VmInstr::Const(_)
+        | VmInstr::LoadSlot(_)
+        | VmInstr::Interpolate(_)
+        | VmInstr::MemberSlot { .. } => (0, 1),
+        VmInstr::StoreSlot(_)
+        | VmInstr::Pop
+        | VmInstr::Bin(_)
+        | VmInstr::JumpIfFalse(_)
+        | VmInstr::JumpIfTrue(_)
+        | VmInstr::AppendSlot { .. }
+        | VmInstr::ConcatSlot(_)
+        | VmInstr::CheckCount { .. }
+        | VmInstr::IterPrepare { .. }
+        | VmInstr::Return { .. } => (1, 0),
+        VmInstr::Unary(_) | VmInstr::ToBool | VmInstr::MemberGet(_) | VmInstr::IndexSlot(_) => (1, 1),
+        VmInstr::Jump(_) | VmInstr::JumpIfFalseKeep(_) | VmInstr::JumpIfTrueKeep(_) => (0, 0),
+        VmInstr::MakeList(n) => (*n as usize, 1),
+        VmInstr::MakeDict(n) => (*n as usize * 2, 1),
+        VmInstr::Index => (2, 1),
+        VmInstr::Slice => (4, 1),
+        VmInstr::SliceSlot(_) => (3, 1),
+        VmInstr::MethodCall { argc, .. } => (*argc as usize + 1, 1),
+        VmInstr::PlaceMethodCall { argc, .. } => (*argc as usize, 1),
+        VmInstr::Call { argc, .. } => (*argc as usize, 1),
+        VmInstr::CheckLimit { .. }
+        | VmInstr::BumpSlot(_)
+        | VmInstr::PushFrame
+        | VmInstr::PopFrame
+        | VmInstr::SetLocal { .. }
+        | VmInstr::IterNext { .. }
+        | VmInstr::EndBody { .. }
+        | VmInstr::TryBlock { .. } => (0, 0),
     }
+}
+
+/// Check that a compiled program's operand stack stays inside `VM_STACK` on every
+/// path, and is empty when it ends.
+///
+/// This walks the **emitted instructions**, not the expression AST. A bound kept
+/// as a walk over the AST has to be updated by hand for every new node *and* for
+/// every path that emits instructions without going through the expression
+/// compiler — and the paths that were missed (statement calls, the append and
+/// concat argument lists) let a body through the gate that then overflowed at run
+/// time. Worse, the same shape of gate refused the index, slice, member and
+/// method forms outright when it was not extended with them, so a whole stage of
+/// expression support compiled and silently never ran. The instruction stream
+/// cannot be bypassed: whatever emits it, this checks it.
+///
+/// A refusal sends the body to the tree-walker, which is always correct.
+fn vm_verify_stack(prog: &VmProgram) -> bool {
+    // The depth each instruction is entered with, once some path has reached it.
+    let mut entry: Vec<Option<usize>> = vec![None; prog.instrs.len()];
+    let mut work: Vec<(usize, usize)> = vec![(0, 0)];
+
+    while let Some((mut ip, mut depth)) = work.pop() {
+        while ip < prog.instrs.len() {
+            match entry[ip] {
+                // Seen before by another path: the two must agree, or this
+                // instruction would read an operand one path never pushed.
+                Some(seen) if seen != depth => return false,
+                Some(_) => break,
+                None => entry[ip] = Some(depth),
+            }
+
+            let (consumed, produced) = vm_instr_stack_effect(&prog.instrs[ip]);
+            if depth < consumed {
+                return false;
+            }
+            depth = depth - consumed + produced;
+            if depth > VM_STACK {
+                return false;
+            }
+
+            match &prog.instrs[ip] {
+                // A conditional's target continues from the same depth.
+                VmInstr::Jump(target)
+                | VmInstr::JumpIfFalse(target)
+                | VmInstr::JumpIfTrue(target)
+                | VmInstr::JumpIfFalseKeep(target)
+                | VmInstr::JumpIfTrueKeep(target) => work.push((*target, depth)),
+                VmInstr::IterNext { end, .. } => work.push((*end, depth)),
+                // A `give` leaves the stream outright, so what follows in the same
+                // block is unreachable rather than a merge point.
+                VmInstr::Return { .. } => break,
+                _ => {}
+            }
+            ip += 1;
+        }
+    }
+    true
 }
 
 fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, String> {
