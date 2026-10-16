@@ -27,6 +27,10 @@ Thumbs.db
 # Build artifacts
 indent-native/indent
 
+# VS Code extension packages — the extension sources live in their own repo,
+# so a `.vsix` in here is always something downloaded, never something built
+*.vsix
+
 # Stale source backups
 * copy.rs
 *.bak
