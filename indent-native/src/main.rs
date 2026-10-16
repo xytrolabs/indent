@@ -4116,6 +4116,46 @@ fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
     true
 }
 
+/// `INDENT_VM_TRACE=1`: report which statement refused, one at a time.
+///
+/// A refusal is silent by design — the body goes back to the tree-walker, which is
+/// always correct — so this is the only way to see how much of a program the
+/// compiler is actually taking. Without it, a body that quietly stopped compiling
+/// (a new statement form, an expression it cannot lower) looks exactly like one
+/// that never did, and the first symptom is a measurement that no longer improves.
+///
+/// Each statement is retried on its own against a fresh program, which is what
+/// makes the report name a statement rather than the whole body. The probe is given
+/// a loop it is `inside`, so a `stop`, `next` or `reset` is judged the way the body
+/// judged it instead of being reported for having no loop to name.
+fn vm_trace_refusal(body: &[Stmt], rt: &Runtime) {
+    if std::env::var("INDENT_VM_TRACE").is_err() {
+        return;
+    }
+    for stmt in body {
+        let mut probe = VmProgram::new();
+        // Judged the way a function body judges it: `give` is legal in one, and a
+        // `stop`, `next` or `reset` is legal inside a loop, so the probe is given
+        // both. Otherwise the report would name statements the body accepted, and
+        // the refusals that actually cost compilation would be lost among them.
+        probe.allow_return = true;
+        let value = vm_scratch(&mut probe.slots);
+        let flag = vm_scratch(&mut probe.slots);
+        probe.return_slot = Some((value, flag));
+        probe.loops.push(VmLoop {
+            start: 0,
+            reps: 0,
+            stop_flag: 0,
+            counter_owned: false,
+            stop_jumps: Vec::new(),
+            next_jumps: Vec::new(),
+        });
+        if !vm_compile_stmts(std::slice::from_ref(stmt), &mut probe, rt) {
+            eprintln!("[vm] refused statement: {stmt:?}");
+        }
+    }
+}
+
 /// Compile a loop body's statements. Only straight-line statements are accepted:
 /// a plain-name assignment, or a bare expression. Anything that can produce
 /// control flow (`stop`, `next`, `give`, nested loops, `if`) is refused, so a
@@ -4148,18 +4188,11 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
     prog.reps_stack.pop();
     let exit = prog.instrs.len();
     vm_close_loop(&mut prog, exit, exit);
+    // `INDENT_VM_TRACE=1` reports which statement refused. A refusal is silent
+    // by design — the body goes back to the tree-walker — so this is the only
+    // way to see how much of a program the compiler is actually accepting.
     if !compiled {
-        // `INDENT_VM_TRACE=1` reports which statement refused. A refusal is silent
-        // by design — the body goes back to the tree-walker — so this is the only
-        // way to see how much of a program the compiler is actually accepting.
-        if std::env::var("INDENT_VM_TRACE").is_ok() {
-            for stmt in body {
-                let mut probe = VmProgram::new();
-                if !vm_compile_stmts(std::slice::from_ref(stmt), &mut probe, rt) {
-                    eprintln!("[vm] refused statement: {stmt:?}");
-                }
-            }
-        }
+        vm_trace_refusal(body, rt);
         return None;
     }
     if !vm_verify_stack(&prog) {
@@ -4589,6 +4622,7 @@ fn vm_compile_function(body: &[Stmt], declared_return: bool, rt: &Runtime) -> Op
     let flag = vm_scratch(&mut prog.slots);
     prog.return_slot = Some((value, flag));
     if !vm_compile_stmts(body, &mut prog, rt) {
+        vm_trace_refusal(body, rt);
         return None;
     }
     prog.instrs.push(VmInstr::EndBody {
@@ -4734,11 +4768,19 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 prog.instrs.push(VmInstr::IndexStoreSlot { slot });
             }
             Stmt::AssignIndex { .. } => return false,
-            // `var x ty = value` inside a body. The binding belongs to the body, so
-            // the slot is owned and shadows any outer one: it need not exist
-            // beforehand, a callee can still name it because the hand-over flushes
-            // it, and it is not written back — the tree-walker's loop frame is
-            // popped too.
+            // `var x ty = value`. At the top of a body there is no frame to pop and
+            // nothing to shadow, so this is an ordinary rebinding of the slot the
+            // name already has — exactly what `define_local` on the function frame
+            // does, which is why a declaration may take over a parameter's name.
+            //
+            // Inside a loop the binding is local to the loop, so it gets a slot of
+            // its own instead, which must not be read back and does not have to
+            // exist beforehand. That is only sound while the name is not already a
+            // slot here: a read resolves to the *first* slot carrying a name, so a
+            // declaration that shadowed one would be invisible to its own body —
+            // `var t` in a second loop of the same body would keep reading the first
+            // loop's `t`. Such a body goes back to the tree-walker, which is always
+            // right, rather than compiling into something that reads the wrong slot.
             Stmt::DefVar {
                 line,
                 name,
@@ -4752,7 +4794,14 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 if !vm_compile_text(text, prog, rt) {
                     return false;
                 }
-                let slot = vm_slot_shadow(&mut prog.slots, name);
+                let slot = if prog.loops.is_empty() {
+                    vm_slot(&mut prog.slots, name)
+                } else {
+                    if prog.slots.iter().any(|s| s == name) {
+                        return false;
+                    }
+                    vm_slot_shadow(&mut prog.slots, name)
+                };
                 prog.owned.push(slot);
                 prog.instrs.push(VmInstr::DefVarSlot {
                     slot,

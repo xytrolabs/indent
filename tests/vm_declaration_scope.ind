@@ -1,0 +1,82 @@
+#! Declarations, shadowing and scopes inside a compiled body.
+#!
+#! A name resolves to the slot that carries it, so where a declaration may take a
+#! name over matters as much as where it may not. At the top of a body it may — a
+#! `var` there rebinds the slot the name already has, the way `define_local` on the
+#! function frame does. Inside a loop it may not, because that slot would then be
+#! invisible to the loop's own body. The VM refuses that body rather than compiling
+#! something that reads the wrong slot, so these assertions are about *behaviour*:
+#! every one of them must hold with the VM on and off.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+fun ident n
+    give n
+
+#! ---- 1. two loops in one body that declare the same name ----
+fun two_locals
+    var total int = 0
+    repeat x in [1, 2]
+        var t int = x * 10
+        total is total + t
+    repeat y in [1, 2]
+        var t int = y
+        total is total + t
+    give total
+
+var ok1 boolean = two_locals() == 33
+assert ok1 "the second loop reads its own declaration, not the first loop's"
+
+#! ---- 2. a declaration takes over a name the body already had ----
+#! Both bodies carry a loop on purpose: without one the VM does not take the body
+#! at all, and these are meant to exercise the compiled path.
+fun takes_param_late p
+    var total int = 0
+    repeat x in [1, 2]
+        total is total + x
+    var p int = 99
+    give total + p
+
+var ok2 boolean = takes_param_late(7) == 102
+assert ok2 "a body-level declaration rebinds the name it takes over"
+
+fun takes_read_name p
+    var total int = 0
+    repeat x in [1, 2]
+        total is total + x
+    total is total + p
+    var p int = 100
+    give total + p
+
+var ok3 boolean = takes_read_name(7) == 110
+assert ok3 "a body-level declaration may take over a name already read"
+
+#! ---- 4. a loop body declaring a name the body declared too ----
+#! The loop's declaration is local to the loop; the body's keeps its value.
+fun declared_twice
+    var t int = 1
+    var total int = 0
+    repeat x in [1, 2]
+        var t int = 100
+        total is total + t
+    total is total + t
+    give total
+
+var ok4 boolean = declared_twice() == 201
+assert ok4 "a loop's declaration does not disturb the body's of the same name"
+
+#! ---- 5. the loop's declaration is read back after a call, as always ----
+fun declared_and_called
+    var total int = 0
+    repeat x in [1, 2, 3]
+        var t int = x
+        var u int = ident(t)
+        total is total + t
+    give total
+
+var ok5 boolean = declared_and_called() == 6
+assert ok5 "a loop's declaration still survives a call in its own pass"
