@@ -1,0 +1,75 @@
+#! A variable a body declares with `var` has to survive a call in the same pass.
+#!
+#! The compiled body keeps its variables in slots and only mirrors them into the
+#! frames at a call, so that a callee can read them. Mirroring a slot *moves* its
+#! value out and leaves `Empty` behind, so it must be read back afterwards — for
+#! every slot, not only the ones the body already had when the loop started.
+#!
+#! A `var` inside a loop is the case that used to be missed, and it is not exotic:
+#! `std/ingame` builds a tilemap by declaring `var c = 0` inside a loop and then
+#! calling `SetTile`, and `c is c + 1` after that call read `Empty`.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+fun ident n
+    give n
+
+fun plus1 n
+    give n + 1
+
+#! ---- 1. a variable declared inside the loop, read after a call ----
+var total int = 0
+repeat 3
+    var t int = 5
+    var u int = ident(t)
+    total is total + t
+var ok1 boolean = total == 15
+assert ok1 "a variable a loop declared is still itself after a call"
+
+#! ---- 2. the declaration runs again on every pass ----
+var firsts int = 0
+var snaps int = 0
+repeat 3
+    var fresh int = 0
+    fresh is fresh + 1
+    var snap int = ident(fresh)
+    firsts is firsts + fresh
+    snaps is snaps + snap
+var ok2a boolean = firsts == 3
+assert ok2a "the declaration gives a fresh value on every pass"
+var ok2b boolean = snaps == 3
+assert ok2b "and the value read back after the call is that pass's own"
+
+#! ---- 3. the `for` item after a call ----
+var itemTotal int = 0
+repeat v in [1, 2, 3]
+    var w int = ident(v)
+    itemTotal is itemTotal + v
+var ok3 boolean = itemTotal == 6
+assert ok3 "a for item is still itself after a call"
+
+#! ---- 4. a variable declared in an outer loop, added to inside an inner one ----
+var nestedTotal int = 0
+repeat i in [1, 2]
+    var acc int = 0
+    repeat j in [10, 20]
+        var step int = plus1(j)
+        acc is acc + step
+    nestedTotal is nestedTotal + acc
+var ok4 boolean = nestedTotal == 64
+assert ok4 "an outer loop's declared variable survives calls in an inner loop"
+
+#! ---- 5. a value declared inside the loop and grown in place ----
+var grown int = 0
+repeat 3
+    var text dynamic = ""
+    var seed int = ident(1)
+    text is text + "ab"
+    text is text + "c"
+    grown is grown + len(text)
+var ok5 boolean = grown == 9
+assert ok5 "a declared value can still be grown in place after a call"

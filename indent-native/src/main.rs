@@ -3630,6 +3630,47 @@ enum VmInstr {
         name: String,
         ty: String,
     },
+    /// `stop`: leave the innermost compiled loop.
+    ///
+    /// A loop whose stream carries its own jumps is left by jumping to `target`.
+    /// A `repeat N` body is not: the runner runs the stream once per pass, so a
+    /// jump out of it would only end *that* pass and the next one would start
+    /// anyway. The flag is raised for the runner to read instead, and the jump
+    /// still happens so the rest of this pass is skipped.
+    StopLoop { flag: u16, target: usize },
+    /// `next`: jump to `target`, the innermost loop's continue point — the counter
+    /// bump for `repeat N` and `while`/`until`, the `IterNext` for a `for`.
+    NextLoop { target: usize },
+    /// `reset`: put the innermost loop's counter back to zero and jump to
+    /// `target`, its start, so the loop begins again without a bump.
+    ResetLoop { slot: u16, target: usize },
+}
+
+/// A compiled loop, as `vm_compile_stmts` sees it while it builds the body.
+///
+/// `stop`, `next` and `reset` name the **innermost** loop, so one of these has to
+/// be pushed before a body is compiled and popped after it. Two things are not
+/// known until the body is built — where the loop is left, and where it continues
+/// — so the emitted instructions carry placeholders that `vm_close_loop` fills in,
+/// exactly as the loop's own jumps do.
+#[derive(Debug)]
+struct VmLoop {
+    /// Where the loop re-enters: the counter bump for `repeat N` and
+    /// `while`/`until`, the `IterNext` for a `for`. `reset` jumps here.
+    start: usize,
+    /// The counter slot, which `reset` writes back to zero.
+    reps: u16,
+    /// The flag `stop` raises. Only a runner-driven loop reads it; a stream's
+    /// `stop` leaves through its exit jump and the flag is simply never consulted.
+    stop_flag: u16,
+    /// Set when something outside the body owns the counter — the runner of a
+    /// `repeat N`, or `IterNext`. Such a loop cannot honour `reset`, because the
+    /// counter is written again before the body sees it.
+    counter_owned: bool,
+    /// `stop` sites still waiting for the loop's exit.
+    stop_jumps: Vec<usize>,
+    /// `next` sites still waiting for the loop's continue point.
+    next_jumps: Vec<usize>,
 }
 
 /// A compiled loop body: instructions plus the names of the frame slots they
@@ -3652,9 +3693,10 @@ struct VmProgram {
     /// Slot the iterable is materialised into, for the `for` forms.
     items_slot: Option<u16>,
     /// Slots the loop owns: every `Reps` and every `for` item binding, at every
-    /// nesting level. They are not required to exist beforehand and are never read
-    /// back from the frames — the tree-walker's loop frames are popped too. They
-    /// *are* flushed, so a callee can name them.
+    /// nesting level, plus every name a body declares with `var`. They are not
+    /// required to exist beforehand, which is what `vm_names_bound` needs to know;
+    /// they *are* flushed, so a callee can name them, and they are never read back
+    /// from the frames — the tree-walker's loop frames are popped too.
     owned: Vec<u16>,
     /// The `Reps` slot of each loop level currently being compiled, innermost last.
     /// An inner level shadows the outer one, which is what makes `Reps` inside a
@@ -3673,6 +3715,17 @@ struct VmProgram {
     /// know that handlers exist. It also means the block's bodies reach the loop's
     /// variables through the frames, exactly as a call does.
     subs: Vec<VmProgram>,
+    /// The loops being compiled, innermost last. Empty outside a body, which is
+    /// what makes a `stop` with no loop to stop in a refusal rather than a jump to
+    /// nowhere.
+    loops: Vec<VmLoop>,
+    /// Set only for a runner-driven loop: the flag its `stop` raises, which
+    /// `vm_run` reads after each pass.
+    stop_flag: Option<u16>,
+    /// Every `Reps` slot, at every nesting level: the values the instruction stream
+    /// rewrites on its own. The hand-over publishes them so a callee can read the
+    /// counter, but `vm_pull_slots` must not read them back — see there.
+    counters: Vec<u16>,
 }
 
 impl VmProgram {
@@ -3690,6 +3743,31 @@ impl VmProgram {
             allow_return: false,
             return_slot: None,
             subs: Vec::new(),
+            loops: Vec::new(),
+            stop_flag: None,
+            counters: Vec::new(),
+        }
+    }
+}
+
+/// Fill in the targets of a finished loop's `stop` and `next` sites.
+///
+/// `exit` is where the loop is left: the `PopFrame` of a stream that pushed one —
+/// so the frame goes even when a `stop` left the body early — or the end of the
+/// stream when the `exec_repeat` around the loop owns the frame. `cont` is where
+/// `next` resumes the loop.
+fn vm_close_loop(prog: &mut VmProgram, exit: usize, cont: usize) {
+    let Some(open) = prog.loops.pop() else {
+        return;
+    };
+    for i in open.stop_jumps {
+        if let VmInstr::StopLoop { target, .. } = &mut prog.instrs[i] {
+            *target = exit;
+        }
+    }
+    for i in open.next_jumps {
+        if let VmInstr::NextLoop { target } = &mut prog.instrs[i] {
+            *target = cont;
         }
     }
 }
@@ -4050,9 +4128,26 @@ fn vm_compile_body(body: &[Stmt], rt: &Runtime) -> Option<VmProgram> {
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
     prog.owned.push(reps);
+    prog.counters.push(reps);
     prog.reps_stack.push(reps);
+    // The runner owns the count and the stream is entered wherever the body
+    // starts, so the only label a `stop` needs is the end of the instructions and
+    // the flag is what actually stops the loop. `next` is the same place: the
+    // runner's own increment is the loop's continue point.
+    let stop_flag = vm_scratch(&mut prog.slots);
+    prog.stop_flag = Some(stop_flag);
+    prog.loops.push(VmLoop {
+        start: 0,
+        reps,
+        stop_flag,
+        counter_owned: true,
+        stop_jumps: Vec::new(),
+        next_jumps: Vec::new(),
+    });
     let compiled = vm_compile_stmts(body, &mut prog, rt);
     prog.reps_stack.pop();
+    let exit = prog.instrs.len();
+    vm_close_loop(&mut prog, exit, exit);
     if !compiled {
         // `INDENT_VM_TRACE=1` reports which statement refused. A refusal is silent
         // by design — the body goes back to the tree-walker — so this is the only
@@ -4118,6 +4213,7 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
     prog.owned.push(reps);
+    prog.counters.push(reps);
     prog.instrs.push(VmInstr::Const(Value::Int(0)));
     prog.instrs.push(VmInstr::StoreSlot(reps));
     let start = prog.instrs.len();
@@ -4136,15 +4232,28 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
     // first fails.
     let exit_jump = prog.instrs.len();
     prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
+    // A `stop` here has to leave the stream, which ends it; a `next` has to reach
+    // the `BumpSlot` below, so that the pass still counts.
+    let stop_flag = vm_scratch(&mut prog.slots);
+    prog.loops.push(VmLoop {
+        start,
+        reps,
+        stop_flag,
+        counter_owned: false,
+        stop_jumps: Vec::new(),
+        next_jumps: Vec::new(),
+    });
     prog.reps_stack.push(reps);
     let compiled = vm_compile_stmts(body, &mut prog, rt);
     prog.reps_stack.pop();
-    if !compiled {
-        return None;
-    }
+    let cont = prog.instrs.len();
     prog.instrs.push(VmInstr::BumpSlot(reps));
     prog.instrs.push(VmInstr::Jump(start));
     let end = prog.instrs.len();
+    vm_close_loop(&mut prog, end, cont);
+    if !compiled {
+        return None;
+    }
     prog.instrs[exit_jump] = if until {
         VmInstr::JumpIfTrue(end)
     } else {
@@ -4177,6 +4286,7 @@ fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProg
     let reps = vm_slot(&mut prog.slots, "Reps");
     prog.reps_slot = Some(reps);
     prog.owned.push(reps);
+    prog.counters.push(reps);
     let item = vm_slot(&mut prog.slots, item_name);
     prog.item_slot = Some(item);
     prog.owned.push(item);
@@ -4239,6 +4349,12 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
     // `Reps` so the frames — and a callee reading it — stay faithful.
     let reps = vm_slot_shadow(&mut prog.slots, "Reps");
     prog.owned.push(reps);
+    prog.counters.push(reps);
+    // The loop's own `stop` flag. A nested loop that is a stream leaves through
+    // the `PopFrame` at its exit, so the flag is never read — but `stop` still
+    // needs something to raise, and one scratch slot per loop level is cheaper
+    // than making the instruction shape conditional.
+    let stop_flag = vm_scratch(&mut prog.slots);
 
     let count = match mode {
         RepeatMode::Count(text) => {
@@ -4273,11 +4389,33 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
         _ => None,
     };
     let mut for_slots = None;
+    // Scratch slot holding what the item name meant before the loop bound it.
+    let mut item_saved = None;
     if let Some((text, name, msg)) = for_binding {
         let items = vm_scratch(&mut prog.slots);
         let index = vm_scratch(&mut prog.slots);
-        let item = vm_slot_shadow(&mut prog.slots, name);
-        prog.owned.push(item);
+        // One slot per name, not one per loop.
+        //
+        // `vm_slot_target` resolves a name to the *first* slot carrying it, so a
+        // second loop over the same item name — `repeat k in xs` twice in one body,
+        // which is how every dict- or list-copying helper in the standard library is
+        // written — has to share the first loop's slot. A slot of its own would be
+        // invisible to its own body, which would then read the first loop's
+        // leftovers: `Merge` in `std/json` returned a dict missing every key of its
+        // second argument that way.
+        //
+        // Sharing is only sound because the value is saved before the loop binds the
+        // item and put back when the loop ends. That is what makes the item shadow a
+        // name the body already had — a variable, or an enclosing loop's item — for
+        // exactly as long as the loop runs.
+        let existed = prog.slots.iter().any(|s| s == name);
+        let item = vm_slot(&mut prog.slots, name);
+        let saved = vm_scratch(&mut prog.slots);
+        // Only a name the body did not already have needs excusing from the "must
+        // exist beforehand" check.
+        if !existed {
+            prog.owned.push(item);
+        }
         // Evaluated once, before the frame is pushed, exactly where the
         // tree-walker evaluates it.
         if !vm_compile_text(text, prog, rt) {
@@ -4289,15 +4427,26 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
             msg: msg.to_string(),
         });
         for_slots = Some((items, index, item, name));
+        item_saved = Some(saved);
     }
 
     prog.instrs.push(VmInstr::PushFrame);
+    // The item name's old value, read before anything binds it.
+    if let Some(saved) = item_saved {
+        let item = for_slots.unwrap_or((reps, reps, reps, "Item")).2;
+        prog.instrs.push(VmInstr::LoadSlot(item));
+        prog.instrs.push(VmInstr::StoreSlot(saved));
+    }
     prog.instrs.push(VmInstr::Const(Value::Int(0)));
     prog.instrs.push(VmInstr::StoreSlot(reps));
     prog.instrs.push(VmInstr::SetLocal {
         slot: reps,
         name: "Reps".to_string(),
     });
+    // The `for` item is bound in the loop's own frame for the same reason as
+    // `Reps`: it must not outlive the loop, and a callee reached from the body has
+    // to find it. `IterNext` then keeps the slot — and the hand-over keeps the
+    // frame — up to date on every pass.
     if let Some((_, _, item, name)) = for_slots {
         prog.instrs.push(VmInstr::SetLocal {
             slot: item,
@@ -4353,17 +4502,47 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
     }
 
     prog.reps_stack.push(reps);
+    prog.loops.push(VmLoop {
+        start,
+        reps,
+        stop_flag,
+        // A `for` advances the position itself, and `IterNext` republishes `Reps`
+        // from it, so a `reset` could not survive to the next pass.
+        counter_owned: matches!(mode, RepeatMode::ForEach(_) | RepeatMode::ForIn { .. }),
+        stop_jumps: Vec::new(),
+        next_jumps: Vec::new(),
+    });
     let compiled = vm_compile_stmts(body, prog, rt);
     prog.reps_stack.pop();
     if !compiled {
+        prog.loops.pop();
         return false;
     }
+    let mut cont = start;
     if !matches!(mode, RepeatMode::ForEach(_) | RepeatMode::ForIn { .. }) {
+        cont = prog.instrs.len();
         prog.instrs.push(VmInstr::BumpSlot(reps));
     }
     prog.instrs.push(VmInstr::Jump(start));
     let end = prog.instrs.len();
     prog.instrs.push(VmInstr::PopFrame);
+    // Every exit — falling out of the `for`, the condition failing, or a `stop`
+    // jumping here — goes through the `PopFrame`, so putting the saved values back
+    // here covers them all.
+    if let Some(saved) = item_saved {
+        let item = for_slots.unwrap_or((reps, reps, reps, "Item")).2;
+        prog.instrs.push(VmInstr::LoadSlot(saved));
+        prog.instrs.push(VmInstr::StoreSlot(item));
+    }
+    // The inner level's `Reps` slot must stop winning too. `vm_slot_target` already
+    // resolves `Reps` to the innermost live level, so reads were right; it is the
+    // hand-over that publishes slots in order, which would otherwise keep handing a
+    // callee the *inner* counter after the inner loop is over.
+    if let Some(outer) = prog.reps_stack.last().copied() {
+        prog.instrs.push(VmInstr::LoadSlot(outer));
+        prog.instrs.push(VmInstr::StoreSlot(reps));
+    }
+    vm_close_loop(prog, end, cont);
     match &mut prog.instrs[exit] {
         VmInstr::JumpIfFalse(t) | VmInstr::JumpIfTrue(t) => *t = end,
         VmInstr::IterNext { end: t, .. } => *t = end,
@@ -4668,6 +4847,40 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 });
                 prog.instrs.push(VmInstr::Pop);
             }
+            // `stop`, `next` and `reset`, which name the innermost loop being
+            // compiled. With no loop open they belong to something outside this
+            // program — a function body's `stop`, or a loop the block is inside —
+            // and the whole body goes back to the tree-walker.
+            Stmt::Stop { .. } if !prog.loops.is_empty() => {
+                let flag = prog.loops.last().map(|l| l.stop_flag).unwrap_or(0);
+                prog.instrs.push(VmInstr::StopLoop {
+                    flag,
+                    target: usize::MAX,
+                });
+                let at = prog.instrs.len() - 1;
+                if let Some(open) = prog.loops.last_mut() {
+                    open.stop_jumps.push(at);
+                }
+            }
+            Stmt::Next { .. } if !prog.loops.is_empty() => {
+                prog.instrs.push(VmInstr::NextLoop { target: usize::MAX });
+                let at = prog.instrs.len() - 1;
+                if let Some(open) = prog.loops.last_mut() {
+                    open.next_jumps.push(at);
+                }
+            }
+            Stmt::Reset { .. }
+                if prog
+                    .loops
+                    .last()
+                    .is_some_and(|l| !l.counter_owned) =>
+            {
+                let (slot, target) = match prog.loops.last() {
+                    Some(open) => (open.reps, open.start),
+                    None => return false,
+                };
+                prog.instrs.push(VmInstr::ResetLoop { slot, target });
+            }
             Stmt::IfChain { branches, .. } => {
                 // Indices of `JumpIfFalse`s still waiting for their target: the
                 // next branch's first instruction.
@@ -4816,11 +5029,23 @@ fn vm_flush_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<
 /// through frames, and those writes have to come back into the loop's cache or
 /// the body would keep reading the values it had before the call. Paired with
 /// `vm_flush_slots`, this keeps the two engines' view identical across a call.
+///
+/// Every named slot comes back **except the loop counters**. A counter is the one
+/// value the compiled stream owns and rewrites itself, and the tree-walker keeps
+/// its own in a Rust local that it re-publishes every pass, so a callee's write to
+/// `Reps` means nothing there and must mean nothing here.
+///
+/// It used to skip every `owned` slot too, on the reasoning that the loop's
+/// bindings are not the callee's to replace. That was wrong for everything `owned`
+/// covers *besides* the counters: the flush moves a slot's value out and leaves
+/// `Empty` behind, so skipping the pull left a `var` declared inside a loop — or a
+/// `for` item, or the `catch` binding — `Empty` for the rest of the pass. A body
+/// that declared a variable and then touched it after a call read `Empty`:
+/// `c is c + 1` after `SetTile` in `std/ingame` raised "cannot add empty and int".
 fn vm_pull_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'_>) {
     for (i, name) in prog.slots.iter().enumerate() {
-        // The loop's own bindings are not the callee's to replace, and scratch
-        // slots name nothing.
-        if name.is_empty() || prog.owned.contains(&(i as u16)) {
+        // A scratch slot names nothing, and a counter is the stream's own.
+        if name.is_empty() || prog.counters.contains(&(i as u16)) {
             continue;
         }
         // `get_var` consults the positional aliases before the frame's variables,
@@ -4894,6 +5119,12 @@ fn vm_run(
     // A stream counts for itself, through `BumpSlot` and `CheckLimit`.
     let reps_slot = if iterations.is_some() {
         prog.reps_slot
+    } else {
+        None
+    };
+    // Only a runner-driven loop has a flag for `stop` to raise.
+    let stop_flag = if iterations.is_some() {
+        prog.stop_flag
     } else {
         None
     };
@@ -5394,6 +5625,19 @@ fn vm_run(
                     VmInstr::Jump(target) => {
                         ip = *target;
                     }
+                    VmInstr::StopLoop { flag, target } => {
+                        // The jump skips the rest of this pass; the flag tells the
+                        // runner there is nothing left to run passes for.
+                        values[*flag as usize] = Value::Bool(true);
+                        ip = *target;
+                    }
+                    VmInstr::NextLoop { target } => {
+                        ip = *target;
+                    }
+                    VmInstr::ResetLoop { slot, target } => {
+                        values[*slot as usize] = Value::Int(0);
+                        ip = *target;
+                    }
                     VmInstr::CheckLimit { slot, msg } => {
                         let count = match &values[*slot as usize] {
                             Value::Int(i) => *i,
@@ -5413,6 +5657,15 @@ fn vm_run(
                         values[idx] = Value::Int(next);
                         ip += 1;
                     }
+                }
+            }
+            // A `stop` in a body the runner drives cannot leave by a jump — the
+            // runner would simply start the next pass — so the flag it raised is
+            // read here. A stream's `stop` jumps to the loop's exit instead, and
+            // `stop_flag` is `None` for one.
+            if let Some(f) = stop_flag {
+                if values[f as usize].to_bool() {
+                    break;
                 }
             }
         }
@@ -5488,6 +5741,9 @@ fn vm_instr_stack_effect(instr: &VmInstr) -> (usize, usize) {
         | VmInstr::SetLocal { .. }
         | VmInstr::IterNext { .. }
         | VmInstr::EndBody { .. }
+        | VmInstr::StopLoop { .. }
+        | VmInstr::NextLoop { .. }
+        | VmInstr::ResetLoop { .. }
         | VmInstr::TryBlock { .. } => (0, 0),
     }
 }
@@ -5538,6 +5794,12 @@ fn vm_verify_stack(prog: &VmProgram) -> bool {
                 | VmInstr::JumpIfFalseKeep(target)
                 | VmInstr::JumpIfTrueKeep(target) => work.push((*target, depth)),
                 VmInstr::IterNext { end, .. } => work.push((*end, depth)),
+                // A `stop`, `next` or `reset` continues from the same depth too:
+                // all three are jumps that happen to name a loop rather than a
+                // condition.
+                VmInstr::StopLoop { target, .. }
+                | VmInstr::NextLoop { target }
+                | VmInstr::ResetLoop { target, .. } => work.push((*target, depth)),
                 // A `give` leaves the stream outright, so what follows in the same
                 // block is unreachable rather than a merge point.
                 VmInstr::Return { .. } => break,

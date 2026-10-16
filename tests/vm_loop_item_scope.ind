@@ -1,0 +1,97 @@
+#! What a `for`'s item name means before, during and after the loop.
+#!
+#! The item is a slot like any other, and a name resolves to the slot that carries
+#! it. So a loop that re-uses a name — a second `repeat k in ...` in the same body,
+#! which is how every dict-copying helper in the standard library is written — must
+#! not get a slot of its own, or its own body could not see it. It has to share the
+#! one the name already has, and give the name back when it is done. These
+#! assertions pin down both halves: the body reads its *own* item, and the name
+#! means what it meant before once the loop is over.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. two loops in one body that share an item name ----
+fun two_loops
+    var out dynamic = {}
+    repeat k in ["a", "b"]
+        out[k] is 1
+    repeat k in ["c", "d"]
+        out[k] is 2
+    give out
+
+var o dynamic = two_loops()
+var ok1a boolean = o["a"] == 1
+assert ok1a "the first loop writes its own first item"
+var ok1b boolean = o["b"] == 1
+assert ok1b "the second loop does not overwrite the first loop's last key"
+var ok1c boolean = o["c"] == 2
+assert ok1c "the second loop writes its own first item"
+var ok1d boolean = o["d"] == 2
+assert ok1d "the second loop reaches its own last item"
+
+#! ---- 2. the std-library shape: two key loops into one dict ----
+fun copy_keys src extra
+    var dst dynamic = {}
+    repeat k in keys src
+        dst[k] is src[k]
+    repeat k in keys extra
+        dst[k] is extra[k]
+    give dst
+
+var copied dynamic = copy_keys({"x": 1, "y": 2}, {"y": 20, "z": 3})
+var ok2a boolean = copied["x"] == 1
+assert ok2a "the first key loop's key survives"
+var ok2b boolean = copied["y"] == 20
+assert ok2b "the second key loop overwrites the key it shares"
+var ok2c boolean = copied["z"] == 3
+assert ok2c "the second key loop reaches a key the first never had"
+
+#! ---- 3. an item that shadows a variable gives it back ----
+var m int = 7
+var seen dynamic = []
+repeat m in [1, 2, 3]
+    seen is append seen m
+var ok3a boolean = m == 7
+assert ok3a "a variable the item shadowed comes back unchanged"
+var ok3b boolean = len(seen) == 3
+assert ok3b "the body still reads the item itself"
+
+#! ---- 4. an item that shadows a parameter gives it back ----
+fun sum_and_add items k
+    var total int = 0
+    repeat k in items
+        total is total + k
+    give total + k
+
+var ok4 boolean = sum_and_add([1, 2, 3], 100) == 106
+assert ok4 "a parameter named like the item comes back after the loop"
+
+#! ---- 5. a nested loop's item shadows the outer loop's, then gives it back ----
+var lastOuter dynamic = 0
+var innerSum int = 0
+repeat k in [10, 20]
+    repeat k in [1, 2]
+        innerSum is innerSum + k
+    lastOuter is k
+var ok5a boolean = innerSum == 6
+assert ok5a "the inner loop reads its own item"
+var ok5b boolean = lastOuter == 20
+assert ok5b "the outer loop's item is back after the inner loop ends"
+
+#! ---- 6. three loops, so the shared slot is re-entered more than once ----
+fun three_loops
+    var total int = 0
+    repeat k in [1, 2]
+        total is total + k
+    repeat k in [10, 20]
+        total is total + k
+    repeat k in [100]
+        total is total + k
+    give total
+
+var ok6 boolean = three_loops() == 133
+assert ok6 "three loops over one item name each read their own items"

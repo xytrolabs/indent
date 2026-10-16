@@ -1,0 +1,136 @@
+#! Semantics guard for `stop`, `next` and `reset` inside a compiled body.
+#!
+#! These three name the *innermost* loop, so compiling them means the instruction
+#! stream has to know where each loop starts, where it continues and where it is
+#! left — and a `repeat N` body is run per pass by the runner rather than by its own
+#! jump, so a `stop` there cannot simply jump out of the stream. The two engines
+#! have to agree pass for pass, which is what these assertions pin down.
+#!
+#! `reset` is the odd one: it puts the counter back to zero *without* the pass
+#! counting, so the next pass publishes the same `Reps` again. That is what makes
+#! it worth asserting rather than assuming.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- 1. stop leaves a repeat N ----
+var a int = 0
+repeat 10
+    if Reps == 3
+        stop
+    a is a + 1
+var ok1 boolean = a == 3
+assert ok1 "stop leaves a repeat N"
+
+#! ---- 2. stop leaves a while ----
+var b int = 0
+var c int = 0
+repeat while c < 10
+    c is c + 1
+    if c == 4
+        stop
+    b is b + 1
+var ok2a boolean = b == 3
+assert ok2a "stop leaves a while"
+var ok2b boolean = c == 4
+assert ok2b "the pass that stopped ran up to the stop"
+
+#! ---- 3. stop leaves a for ----
+var d int = 0
+repeat v in [1, 2, 3, 4, 5]
+    if v == 3
+        stop
+    d is d + v
+var ok3 boolean = d == 3
+assert ok3 "stop leaves a for"
+
+#! ---- 4. stop leaves only the innermost loop ----
+var outer int = 0
+var inner int = 0
+repeat 3
+    repeat 5
+        if Reps == 2
+            stop
+        inner is inner + 1
+    outer is outer + 1
+var ok4a boolean = inner == 6
+assert ok4a "stop leaves only the innermost loop"
+var ok4b boolean = outer == 3
+assert ok4b "the outer loop still runs every pass"
+
+#! ---- 5. next skips the rest of a pass, and the counter still advances ----
+var total int = 0
+repeat 4
+    if Reps == 1
+        next
+    total is total + Reps
+var ok5 boolean = total == 5
+assert ok5 "next skips a pass and the counter still advances"
+
+#! ---- 6. next in a while ----
+var f int = 0
+var g int = 0
+repeat while g < 6
+    g is g + 1
+    if g == 2
+        next
+    f is f + 1
+var ok6a boolean = f == 5
+assert ok6a "next skips the rest of a while pass"
+var ok6b boolean = g == 6
+assert ok6b "the while still ends when its condition fails"
+
+#! ---- 7. next in a for still advances to the next item ----
+var e int = 0
+repeat v in [1, 2, 3, 4]
+    if v == 2
+        next
+    e is e + v
+var ok7 boolean = e == 8
+assert ok7 "next in a for advances to the next item"
+
+#! ---- 8. reset puts the count back without a bump ----
+#! The pass that resets contributes `Reps` 0, the reset pass contributes 0 again,
+#! and only then does the count start moving.
+var h int = 0
+var passes int = 0
+repeat while h < 3
+    passes is passes + Reps
+    h is h + 1
+    if h == 1
+        reset
+var ok8a boolean = passes == 1
+assert ok8a "reset restarts the count without a bump"
+var ok8b boolean = h == 3
+assert ok8b "the loop still ends when its condition fails"
+
+#! ---- 9. stop and give share a body ----
+fun find_first items target
+    repeat v in items
+        if v == target
+            give Reps
+        if v > target
+            stop
+    give -1
+
+var ok9a boolean = find_first([5, 9, 20, 30], 20) == 2
+assert ok9a "a give out of the loop beats a stop that would follow it"
+var ok9b boolean = find_first([5, 9, 20, 30], 15) == -1
+assert ok9b "a stop then the end of the body gives what the body says"
+
+#! ---- 10. stop inside a do: block in a loop still leaves the loop ----
+#! The block's body is a program of its own, so it cannot name the loop's exit;
+#! this pair only has to agree with the tree-walker, whichever engine runs it.
+var k int = 0
+repeat 6
+    do:
+        if Reps == 2
+            stop
+        k is k + 1
+    catch as err:
+        k is -1
+var ok10 boolean = k == 2
+assert ok10 "stop out of a do: block in a loop still leaves the loop"
