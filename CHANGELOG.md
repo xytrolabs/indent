@@ -1,5 +1,42 @@
 # Indent Changelog
 
+## 2.4.1-exp6 — 2026-10-17 (experimental — colour parsing and gradient rendering)
+
+Sixth experimental build of 2.4.1.
+
+### Colour names no longer allocate to be matched
+
+`color_to_rgb` is called by every `fg`/`bg`/`gradient`/`paint`/`style` argument, and
+it used `to_ascii_lowercase()` to compare against the name table — a fresh `String`
+per colour, per call — then copied the chosen hex literal into another `String`, and
+for a three-digit hex `h[0..1].repeat(2)` allocated once per channel. The name table
+is now a `const` of `(name, hex)` pairs searched with `eq_ignore_ascii_case`, the hex
+digits are borrowed straight out of the caller's text, and the short forms double a
+nibble instead of building a string to parse.
+
+### Gradients render into one buffer
+
+`gradient_text` and `multicolor_text` collected the whole string into a `Vec<char>`
+and then built one `String` per character with `format!` before pushing it — so a
+100-character gradient allocated 100 strings and a vector, for an answer whose final
+size is known up front. They now count characters once, reserve the output buffer,
+and write each escape straight into it. `format!`'s output is byte-for-byte
+unchanged, including the single-character and empty cases.
+
+No performance number is claimed. There is no benchmark for the colour surface, the
+old path was not hot enough to be worth one, and inventing a figure for an allocation
+count is how a changelog starts lying.
+
+What is verified is that nothing observable moved: `color_to_rgb` gained three unit
+tests covering every accepted form (`#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, mixed
+case, surrounding whitespace, the full name table) and every rejected one (odd
+lengths, non-hex digits, empty), and the renderers gained a test asserting the exact
+escape bytes, the palette cycle, the empty and single-character cases, and that a
+non-ASCII character is one escape rather than one per byte. The suite passes in both
+engines (73/73), golden outputs are byte-identical (8/8), and all 37 unit tests pass.
+
+---
+
 ## 2.4.1-exp5 — 2026-10-17 (experimental — VM slot roles)
 
 Fifth experimental build of 2.4.1.

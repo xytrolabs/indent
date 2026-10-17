@@ -1170,78 +1170,86 @@ fn is_valid_color_literal(value: &str) -> bool {
 
 /// Resolve a color (hex `#RGB`/`#RRGGBB`/`#RRGGBBAA`, with or without `#`, or a
 /// named color like `RED`) into `(r, g, b)` for ANSI truecolor output.
+/// The named-colour table, `(name, hex)`. Looked up case-insensitively so that
+/// parsing a name never has to lowercase the input first.
+const NAMED_COLORS: [(&str, &str); 31] = [
+    // base
+    ("red", "ff4d4d"),
+    ("green", "32c671"),
+    ("blue", "3b82f6"),
+    ("cyan", "06b6d4"),
+    ("magenta", "d946ef"),
+    ("yellow", "facc15"),
+    ("orange", "fb923c"),
+    ("purple", "8b5cf6"),
+    ("pink", "ec4899"),
+    ("black", "0f172a"),
+    ("white", "f8fafc"),
+    // extended palette
+    ("gray", "9ca3af"),
+    ("grey", "9ca3af"),
+    ("silver", "c0c0c0"),
+    ("maroon", "800000"),
+    ("olive", "808000"),
+    ("lime", "a3e635"),
+    ("teal", "14b8a6"),
+    ("navy", "1e3a8a"),
+    ("fuchsia", "c026d3"),
+    ("brown", "92400e"),
+    ("gold", "fbbf24"),
+    ("coral", "ff7f50"),
+    ("salmon", "fa8072"),
+    ("sky", "38bdf8"),
+    ("indigo", "6366f1"),
+    ("violet", "a78bfa"),
+    ("amber", "f59e0b"),
+    ("emerald", "10b981"),
+    ("slate", "64748b"),
+    ("zinc", "71717a"),
+];
+
+/// Look a colour name up without allocating. Returns the hex digits only.
+fn named_color_hex(name: &str) -> Option<&'static str> {
+    NAMED_COLORS
+        .iter()
+        .find(|(n, _)| name.eq_ignore_ascii_case(n))
+        .map(|(_, hex)| *hex)
+}
+
+/// Hex digit to its value, accepting either case.
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Two hex digits at `i` as one byte, without slicing or allocating.
+#[inline]
+fn hex_pair(h: &[u8], i: usize) -> Option<u8> {
+    Some(hex_nibble(*h.get(i)?)? * 16 + hex_nibble(*h.get(i + 1)?)?)
+}
+
 fn color_to_rgb(s: &str) -> Option<(u8, u8, u8)> {
     let s = s.trim();
-    let hex = if let Some(h) = s.strip_prefix('#') {
-        h.to_string()
-    } else {
-        let named = match s.to_ascii_lowercase().as_str() {
-            // base
-            "red" => "#ff4d4d",
-            "green" => "#32c671",
-            "blue" => "#3b82f6",
-            "cyan" => "#06b6d4",
-            "magenta" => "#d946ef",
-            "yellow" => "#facc15",
-            "orange" => "#fb923c",
-            "purple" => "#8b5cf6",
-            "pink" => "#ec4899",
-            "black" => "#0f172a",
-            "white" => "#f8fafc",
-            // extended palette
-            "gray" | "grey" => "#9ca3af",
-            "silver" => "#c0c0c0",
-            "maroon" => "#800000",
-            "olive" => "#808000",
-            "lime" => "#a3e635",
-            "teal" => "#14b8a6",
-            "navy" => "#1e3a8a",
-            "fuchsia" => "#c026d3",
-            "brown" => "#92400e",
-            "gold" => "#fbbf24",
-            "coral" => "#ff7f50",
-            "salmon" => "#fa8072",
-            "sky" => "#38bdf8",
-            "indigo" => "#6366f1",
-            "violet" => "#a78bfa",
-            "amber" => "#f59e0b",
-            "emerald" => "#10b981",
-            "slate" => "#64748b",
-            "zinc" => "#71717a",
-            _ => return None,
-        };
-        named.trim_start_matches('#').to_string()
+    // Borrow the hex digits straight out of the input; a name yields a 'static
+    // table entry. Either way nothing is copied or lowercased.
+    let hex = match s.strip_prefix('#') {
+        Some(h) => h,
+        None => named_color_hex(s)?,
     };
-    let h = hex.trim_start_matches('#');
+    let h = hex.as_bytes();
     match h.len() {
-        // #RGB
-        3 => {
-            let r = u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?;
-            let g = u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?;
-            let b = u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?;
-            Some((r, g, b))
+        // #RGB / #RGBA — each digit is doubled
+        3 | 4 => {
+            let n = |i: usize| hex_nibble(h[i]).map(|d| d * 16 + d);
+            Some((n(0)?, n(1)?, n(2)?))
         }
-        // #RGBA
-        4 => {
-            let r = u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?;
-            let g = u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?;
-            let b = u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?;
-            Some((r, g, b))
-        }
-        // #RRGGBB
-        6 => {
-            let r = u8::from_str_radix(&h[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&h[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&h[4..6], 16).ok()?;
-            Some((r, g, b))
-        }
-        // #RRGGBBAA (alpha ignored)
-        8 => {
-            let r = u8::from_str_radix(&h[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&h[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&h[4..6], 16).ok()?;
-            Some((r, g, b))
-        }
+        // #RRGGBB / #RRGGBBAA (alpha ignored)
+        6 | 8 => Some((hex_pair(h, 0)?, hex_pair(h, 2)?, hex_pair(h, 4)?)),
         _ => None,
     }
 }
@@ -1293,24 +1301,27 @@ fn lerp(a: u8, b: u8, t: f64) -> u8 {
 /// Color each character of `text` by interpolating `from` → `to`. `bg` selects
 /// the 48;2 background plane instead of the 38;2 foreground plane.
 fn gradient_text(text: &str, from: (u8, u8, u8), to: (u8, u8, u8), bg: bool) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() {
+    use std::fmt::Write as _;
+
+    let plane = if bg { "48;2" } else { "38;2" };
+    // Counting costs one pass but avoids materialising the whole string as a
+    // Vec<char>; the escapes are then written straight into one pre-sized
+    // buffer instead of building a String per character.
+    let n = text.chars().count();
+    if n == 0 {
         return String::new();
     }
-    if chars.len() == 1 {
+    if n == 1 {
         let (r, g, b) = from;
-        let code = if bg { "48;2" } else { "38;2" };
-        return format!("\x1b[{code};{r};{g};{b}m{text}\x1b[0m");
+        return format!("\x1b[{plane};{r};{g};{b}m{text}\x1b[0m");
     }
-    let mut out = String::new();
-    let n = chars.len();
-    for (i, c) in chars.iter().enumerate() {
+    let mut out = String::with_capacity(text.len() + n * 22);
+    for (i, c) in text.chars().enumerate() {
         let t = i as f64 / (n - 1) as f64;
         let r = lerp(from.0, to.0, t);
         let g = lerp(from.1, to.1, t);
         let b = lerp(from.2, to.2, t);
-        let plane = if bg { "48;2" } else { "38;2" };
-        out.push_str(&format!("\x1b[{plane};{r};{g};{b}m{}\x1b[0m", c));
+        let _ = write!(out, "\x1b[{plane};{r};{g};{b}m{c}\x1b[0m");
     }
     out
 }
@@ -1318,15 +1329,16 @@ fn gradient_text(text: &str, from: (u8, u8, u8), to: (u8, u8, u8), bg: bool) -> 
 /// Color each character of `text` cycling through `colors`. `bg` selects the
 /// background plane.
 fn multicolor_text(text: &str, colors: &[(u8, u8, u8)], bg: bool) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() || colors.is_empty() {
+    use std::fmt::Write as _;
+
+    if text.is_empty() || colors.is_empty() {
         return text.to_string();
     }
-    let mut out = String::new();
     let plane = if bg { "48;2" } else { "38;2" };
-    for (i, c) in chars.iter().enumerate() {
+    let mut out = String::with_capacity(text.len() * 2 + text.chars().count() * 22);
+    for (i, c) in text.chars().enumerate() {
         let (r, g, b) = colors[i % colors.len()];
-        out.push_str(&format!("\x1b[{plane};{r};{g};{b}m{}\x1b[0m", c));
+        let _ = write!(out, "\x1b[{plane};{r};{g};{b}m{c}\x1b[0m");
     }
     out
 }
@@ -22125,5 +22137,67 @@ if len(s) == 2
         let mut rt = Runtime::new(dir.clone());
         let result = rt.run_file(&main_file);
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn color_names_parse_case_insensitively() {
+        // The table lookup replaced a `to_ascii_lowercase()` + `String` copy,
+        // so the case-insensitivity it relied on has to be an explicit
+        // property of the replacement.
+        for name in ["red", "RED", "Red", "rEd"] {
+            assert_eq!(color_to_rgb(name), Some((0xff, 0x4d, 0x4d)), "{name}");
+        }
+        assert_eq!(color_to_rgb(" gray "), Some((0x9c, 0xa3, 0xaf)));
+        assert_eq!(color_to_rgb("Grey"), color_to_rgb("grey"));
+        assert_eq!(color_to_rgb("zinc"), Some((0x71, 0x71, 0x7a)));
+        assert_eq!(color_to_rgb("notacolor"), None);
+    }
+
+    #[test]
+    fn color_hex_forms_parse() {
+        // #RGB / #RGBA double each digit; #RRGGBB / #RRGGBBAA read pairs and
+        // ignore the alpha byte.
+        assert_eq!(color_to_rgb("#f00"), Some((0xff, 0x00, 0x00)));
+        assert_eq!(color_to_rgb("#f00f"), Some((0xff, 0x00, 0x00)));
+        assert_eq!(color_to_rgb("#ff0000"), Some((0xff, 0x00, 0x00)));
+        assert_eq!(color_to_rgb("#ff0000ff"), Some((0xff, 0x00, 0x00)));
+        assert_eq!(color_to_rgb("#FF0000"), Some((0xff, 0x00, 0x00)));
+        assert_eq!(color_to_rgb("#3b82f6"), Some((0x3b, 0x82, 0xf6)));
+        // Odd lengths and non-hex digits are rejected, and a short string must
+        // not panic on the doubling path.
+        assert_eq!(color_to_rgb("#ff"), None);
+        assert_eq!(color_to_rgb("#fffff"), None);
+        assert_eq!(color_to_rgb("#gggggg"), None);
+        assert_eq!(color_to_rgb(""), None);
+        assert_eq!(color_to_rgb("#"), None);
+    }
+
+    #[test]
+    fn gradient_and_rainbow_render_the_same_bytes() {
+        // One escape per character, endpoints included, and the single-char
+        // and empty cases stay special.
+        let g = gradient_text("ab", (0, 0, 0), (255, 255, 255), false);
+        assert_eq!(g, "\x1b[38;2;0;0;0ma\x1b[0m\x1b[38;2;255;255;255mb\x1b[0m");
+        assert_eq!(
+            gradient_text("x", (1, 2, 3), (9, 9, 9), true),
+            "\x1b[48;2;1;2;3mx\x1b[0m"
+        );
+        assert_eq!(gradient_text("", (0, 0, 0), (1, 1, 1), false), "");
+
+        let palette = rainbow_palette();
+        let m = multicolor_text("abcd", &palette, false);
+        let expected: String = "abcd"
+            .chars()
+            .zip(palette.iter())
+            .map(|(c, (r, g, b))| format!("\x1b[38;2;{r};{g};{b}m{c}\x1b[0m"))
+            .collect();
+        assert_eq!(m, expected);
+        assert_eq!(multicolor_text("", &palette, false), "");
+        assert_eq!(multicolor_text("abc", &[], false), "abc");
+        // Non-ASCII characters are one escape each, not one per byte.
+        assert_eq!(
+            multicolor_text("é🚀", &palette[..1], false),
+            "\x1b[38;2;255;77;77mé\x1b[0m\x1b[38;2;255;77;77m🚀\x1b[0m"
+        );
     }
 }
