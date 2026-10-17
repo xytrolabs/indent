@@ -1,5 +1,39 @@
 # Indent Changelog
 
+## 2.4.1-exp5 — 2026-10-17 (experimental — VM slot roles)
+
+Fifth experimental build of 2.4.1.
+
+### Which slots are loop counters is decided once, not at every boundary
+
+`vm_pull_slots` runs at every point where the shadow VM leaves its fast path — a call,
+a builtin, a loop exit — and it skips slots that hold no name. Loop counters are the
+other set it must skip: they are VM-private, so restoring one into the tree-walker
+would be wrong. That test was `prog.counters.contains(&(i as u16))`, a linear scan of
+a `Vec` run once per *slot* at every boundary.
+
+The counters of a program are fixed when it is compiled, so the membership test is now
+precomputed: a `OnceLock<Vec<bool>>` indexed by slot, built on first use, read with one
+bounds-checked load. `counters` is still there — the compiled loop instructions carry
+their own counter slot, and this only changes how the pull path asks the question.
+
+No measurement is claimed for this one. The scan was over the loop-nesting depth, so
+the ceiling on the win is small, and the exp4 release build this should have been
+compared against had not finished publishing when the change was ready — comparing
+against anything else would have been comparing two different builds. What is verified
+is that it changes nothing observable: the full suite passes in both engines (73/73),
+golden outputs are byte-identical (8/8), and the unit tests are green (34/34).
+
+### Still open from the audit
+
+Module execution scope, copy-on-write object fields, operator enums and registry
+sharing for tasks are all real findings and all unstarted. The first three each change
+semantics that the suite currently pins, and the fourth's safe half — sharing the
+module parse cache — was already tried and measured at 0.4%, then reverted. None of
+them belong in a build that claims to be a tidy-up.
+
+---
+
 ## 2.4.1-exp4 — 2026-10-17 (experimental — method-call arguments, object aliasing pinned)
 
 Fourth experimental build of 2.4.1.
