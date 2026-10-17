@@ -4202,9 +4202,35 @@ struct VmProgram {
     /// rewrites on its own. The hand-over publishes them so a callee can read the
     /// counter, but `vm_pull_slots` must not read them back — see there.
     counters: Vec<u16>,
+    /// Per-slot "is a loop counter" flags, built once on first use.
+    ///
+    /// `vm_pull_slots` runs at every call boundary and has to skip the counters, so it
+    /// used to do `counters.contains(&slot)` for every slot. `counters` is at most the
+    /// loop-nesting depth, so that was a handful of comparisons — small, but it is
+    /// inside the hottest boundary there is, and it is trivially removable: the roles
+    /// cannot change after compilation, so they are computed once and indexed.
+    counter_flags: OnceLock<Vec<bool>>,
 }
 
 impl VmProgram {
+    /// Is slot `i` a loop counter? Computed once, then O(1).
+    ///
+    /// The roles cannot change after compilation, so this is a one-time pass over the
+    /// slots rather than a scan of `counters` per slot at every call boundary.
+    #[inline]
+    fn is_counter(&self, i: usize) -> bool {
+        let flags = self.counter_flags.get_or_init(|| {
+            let mut flags = vec![false; self.slots.len()];
+            for counter in &self.counters {
+                if let Some(flag) = flags.get_mut(*counter as usize) {
+                    *flag = true;
+                }
+            }
+            flags
+        });
+        flags.get(i).copied().unwrap_or(false)
+    }
+
     /// An empty program. The slots, the `owned` set and the level stack are filled
     /// in by whichever compiler builds it.
     fn new() -> Self {
@@ -4222,6 +4248,7 @@ impl VmProgram {
             loops: Vec::new(),
             stop_flag: None,
             counters: Vec::new(),
+            counter_flags: OnceLock::new(),
         }
     }
 }
@@ -5746,7 +5773,7 @@ fn vm_flush_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<
 fn vm_pull_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'_>) {
     for (i, name) in prog.slots.iter().enumerate() {
         // A scratch slot names nothing, and a counter is the stream's own.
-        if name.is_empty() || prog.counters.contains(&(i as u16)) {
+        if name.is_empty() || prog.is_counter(i) {
             continue;
         }
         // `get_var` consults the positional aliases before the frame's variables,
