@@ -21908,9 +21908,12 @@ mod tests {
     /// enum to 32); anything that pushes it back up is a silent tax on the whole
     /// interpreter, so fail loudly instead.
     ///
-    /// The bound is 40 rather than 32 so that the next change which needs a few
-    /// bytes is not blocked by a test — but not 64, which would let the string
-    /// allocation creep back inside the enum un-noticed.
+    /// It is 24 now: `Object`'s field array became a shared `Arc<Box<[Value]>>`, so
+    /// the widest payload is 16 bytes and the discriminant fits in the niche
+    /// `String` and `Arc` already leave. The bound is 32 rather than 24 so the next
+    /// change that needs a byte or two is not blocked — but not 40, because going
+    /// back up from 24 is a tax on every read, argument and element, and that is
+    /// exactly what the last three builds of this series spent their time removing.
     #[test]
     fn value_size_guardrail() {
         let value = std::mem::size_of::<Value>();
@@ -21924,9 +21927,9 @@ mod tests {
             std::mem::size_of::<Frame>(),
         );
         assert!(
-            value <= 40,
-            "Value grew to {value} bytes (was 32). Box large variants — every \
-             variable read, argument and list element moves this."
+            value <= 32,
+            "Value grew to {value} bytes (was 24). Box or share large variants — \
+             every variable read, argument and list element moves this."
         );
 
         // `Stmt` is the other width every statement in every program pays for, and

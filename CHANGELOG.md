@@ -27,6 +27,21 @@ out of another object's field are copies, and that writes through the variable i
 do persist. All fifteen of its checks pass in both engines, as do all 75 tests, the
 golden outputs and the 37 unit tests.
 
+### `Value` is 24 bytes now, not 32
+
+The widest payload in `Value` was `Object`, at `Arc` + `Box<[Value]>` = 24 bytes plus
+the discriminant. Sharing the field array brings the payload to 16, and the
+discriminant fits in the niche the `String` and `Arc` variants already leave unused, so
+the whole enum drops from 32 bytes to 24 — a quarter off every variable read, every
+argument, every list element and every map entry. `value_size_guardrail` measures it
+and now fails above 32 rather than the previous 40, which was set when 32 was the
+floor.
+
+That is also the likeliest account of the two measurements below: a 24-byte `Value`
+changes the stride of every array of them — the operand stack, the VM's slot vector, a
+frame's argument list — so instruction timings in code this build never touched move
+by a few percent, in both directions.
+
 Measured against the exp8 release build, interleaved, best of nine per section:
 
 | section | exp8 | exp9 | change |
