@@ -50,6 +50,26 @@ it: local call, module call, and a module call that reads module state.
 tests pass — including the six module tests — the installer safety checks pass, and
 `check_baselines.py` reports no case slower than the recorded baseline.
 
+### An experiment this build does not contain, and why
+
+`Expr` is 80 bytes for every expression in every program, and `Comprehension` is 80
+bytes on its own — two `String`s and four boxed expressions — while the forms that
+dominate real programs (`Int`, `Var`, `Binary`, `Call`) are 24 to 56. Boxing that one
+payload takes `Expr` to 56, **30% off every expression node in the AST**, and allocates
+only for a comprehension.
+
+It measured *slower*, consistently, so it is not here. Against this build, best of
+nine: `bench_hot_paths` "100k function calls" −7.4%, `bench_nested_loops` −6.4 to
+−8.1% on all four sections, `bench_int_arith` −6.4 to −9.6% on all six arithmetic
+sections. None of those paths reads the AST after compilation, so the change cannot
+have altered a single instruction they execute — and reverting it restored parity to
+within ±2% on every one of them, which is what makes it the cause rather than noise.
+
+That is a compiler code-layout side effect of an AST edit, and paying 7% of execution
+speed for 24 bytes per expression is not a trade worth making quietly. If it is tried
+again it should be measured the same way: interleaved, per section, against the build
+it replaces.
+
 ---
 
 ## 2.4.1-exp10 — 2026-10-17 (experimental — a spawn no longer copies the program)
