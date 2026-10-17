@@ -1,0 +1,90 @@
+#! object_aliasing.ind — objects are values: two names never share a field write.
+#!
+#! This is the safety net for making object fields copy-on-write. Object fields are a
+#! `Box<[Value]>` today, so cloning an object copies its field array, and every one of
+#! these checks passes for a trivial reason. If the fields move to shared storage
+#! (`Arc<Vec<Value>>` with `Arc::make_mut` on write), each of them has to keep passing
+#! for the *right* reason: the copy happens on the first write after sharing, not on the
+#! read, and never silently reaches the other name.
+#!
+#! Run it both ways — `indent tests/object_aliasing.ind` and with `INDENT_VM=0` — because
+#! the two engines take different paths to a field write (compiled slot instructions
+#! versus the tree-walker's frame lookup).
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+class Point
+    var x int
+    var y int
+
+    fun to_string
+        give "(" + string(x) + "," + string(y) + ")"
+
+    fun bump
+        x is x + 1
+        give x
+
+#! ---- 1. two names for one object are independent ----
+var a dynamic = Point(1, 2)
+var b dynamic = a
+b.x is 99
+assert (a.x == 1) "a field write through an alias leaves the original alone"
+assert (b.x == 99) "and the alias really did change"
+
+#! ---- 2. a method that writes a field, called on an alias ----
+var c dynamic = a
+c.bump
+assert (a.x == 1) "a method on an alias does not write through to the original"
+assert (c.x == 2) "but it did bump its own copy"
+
+#! ---- 3. an object read out of a list ----
+var list dynamic = [a]
+var from_list dynamic = list[0]
+from_list.x is 42
+assert (a.x == 1) "an object read out of a list is a copy"
+assert (from_list.x == 42) "and writing it works"
+
+#! ---- 4. through a function parameter ----
+fun tweak p
+    p.y is 77
+    give p.y
+
+var out dynamic = tweak(a)
+assert (a.y == 2) "a field write through a parameter does not reach the caller"
+assert (out == 77) "the callee saw its own write"
+
+#! ---- 5. a write through the variable itself does persist ----
+a.bump
+a.bump
+assert (a.x == 3) "writes through the variable do persist"
+assert (a.y == 2) "and the untouched field is still what it was"
+
+#! ---- 6. an object held in another object's field ----
+class Holder
+    var inner dynamic
+    var tag int
+
+var h dynamic = Holder(Point(5, 6), 1)
+var h2 dynamic = h
+h2.tag is 2
+assert (h.tag == 1) "an alias of a holder is independent"
+assert (h2.tag == 2) "and the alias carries the new tag"
+
+var inner_alias dynamic = h.inner
+inner_alias.x is 50
+assert (h.inner.x == 5) "an object read out of a field is a copy"
+
+#! ---- 7. the same object in two containers ----
+var shared dynamic = Point(7, 8)
+var l1 dynamic = [shared]
+var l2 dynamic = [shared]
+var e1 dynamic = l1[0]
+e1.x is 70
+assert (shared.x == 7) "writing a copy in one container leaves the value alone"
+assert (l2[0].x == 7) "and the other container is unaffected"
+
+say "object_aliasing: all checks passed"
