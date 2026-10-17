@@ -1,5 +1,34 @@
 # Indent Changelog
 
+## 2.4.1-exp4 — 2026-10-17 (experimental — method-call arguments, object aliasing pinned)
+
+Fourth experimental build of 2.4.1.
+
+### Method calls stop allocating their arguments too
+
+exp3 made the VM's ordinary `Call` instruction hand its operand-stack range to the
+callee instead of building a `Vec`. The two *method*-call instructions were left alone
+because they also clone the receiver — but they never needed a vector for the
+arguments, and `invoke_method_on_value`/`invoke_method_on_place` both already took a
+slice. They now pass the stack range directly.
+
+Measured against the exp3 release build, interleaved, best of seven, identical
+checksums: **`bench_method_calls` 35 → 33 ms (−5.7%)**, **`bench_calls` 178 → 166 ms
+(−6.7%)**, and the method-dispatch probe 166 → 164 ms.
+
+### Object pass-by-value pinned before its fields go copy-on-write
+
+`tests/object_aliasing.ind` records the behaviour a future copy-on-write field change
+must preserve: a field write through an alias, a field-writing method called on an
+alias, an object read out of a list, a field write through a parameter, writes through
+the variable itself (which must persist), an object held in another object's field, and
+one object referenced from two containers. It passes today for a trivial reason —
+object fields are a `Box<[Value]>`, so cloning an object copies the array — which is
+exactly what makes it a baseline rather than a description of the change. It runs in
+both engines, because the two take different paths to a field write.
+
+---
+
 ## 2.4.1-exp3 — 2026-10-16 (experimental — VM call arguments)
 
 Third experimental build of 2.4.1. A second external audit was verified item by item

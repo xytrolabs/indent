@@ -6027,9 +6027,12 @@ fn vm_run(
                         let n = *argc as usize;
                         sp = sp.checked_sub(n + 1).ok_or_else(vm_underflow)?;
                         let receiver = stack[sp].clone();
-                        let args: Vec<Value> = stack[sp + 1..sp + 1 + n].to_vec();
+                        // The operand stack range *is* the argument slice: no vector
+                        // and no clones. `receiver` is cloned because the callee can
+                        // write it back to the slot this statement overwrites.
+                        let args = &stack[sp + 1..sp + 1 + n];
                         vm_flush_slots(prog, &mut values, ctx);
-                        let result = invoke_method_on_value(receiver, method, &args, ctx);
+                        let result = invoke_method_on_value(receiver, method, args, ctx);
                         vm_pull_slots(prog, &mut values, ctx);
                         *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = result?;
                         sp += 1;
@@ -6038,7 +6041,8 @@ fn vm_run(
                     VmInstr::PlaceMethodCall { slot, method, argc } => {
                         let n = *argc as usize;
                         sp = sp.checked_sub(n).ok_or_else(vm_underflow)?;
-                        let args: Vec<Value> = stack[sp..sp + n].to_vec();
+                        // Same as `MethodCall`: the stack range is the argument slice.
+                        let args = &stack[sp..sp + n];
                         let name = prog.slots[*slot as usize].clone();
                         // A receiver that is a variable tries the place dispatch
                         // first — that is what lets a method assign its own field
@@ -6061,8 +6065,8 @@ fn vm_run(
                         };
                         vm_flush_slots(prog, &mut values, ctx);
                         let result = match by_value {
-                            Some(receiver) => invoke_method_on_value(receiver, method, &args, ctx),
-                            None => invoke_method_on_place(&name, method, &args, ctx)
+                            Some(receiver) => invoke_method_on_value(receiver, method, args, ctx),
+                            None => invoke_method_on_place(&name, method, args, ctx)
                                 .unwrap_or(Ok(Value::Empty)),
                         };
                         vm_pull_slots(prog, &mut values, ctx);
