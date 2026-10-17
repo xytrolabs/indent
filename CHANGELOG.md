@@ -1,5 +1,48 @@
 # Indent Changelog
 
+## 2.4.1-exp10 — 2026-10-17 (experimental — a spawn no longer copies the program)
+
+Tenth experimental build of 2.4.1. This is the audit's task-registry item.
+
+### Spawning a task cost a copy of every function, callable, class and async name
+
+`spawn`, `future`, `parallel` and every `*_async` builtin build a new `Runtime` for
+the task and handed it the spawner's `funcs`, `callables`, `classes` and
+`async_funcs` maps — by cloning them. Four hash tables rebuilt per task, sized by the
+*program* rather than by the task.
+
+Measured before touching anything: a spawn+wait cost 26 µs when the program defined
+one function, 33 µs at 50, 52 µs at 200 and **138 µs at 800**. That is 0.14 µs per
+entry in the table — five times the cost of starting the thread, paid by every spawn in
+a task-heavy program, for tables the task mostly never reads. A bot with a few hundred
+handlers and a spawn per event pays it per event.
+
+The four maps are now `Arc`s, shared copy-on-write. The hand-over is four refcount
+bumps, and a write — a `fun`, `class` or `async fun` statement — goes through
+`Arc::make_mut`, so the table is copied once by the first definition that happens
+*after* a task exists, instead of once per spawn. A task keeps exactly the snapshot it
+was given, which is what the clone gave it before: defining a function after a spawn
+still does not reach a task that is already running.
+
+After the change the same measurements are **26, 25, 25 and 25 µs** — the slope is
+gone. A 300-spawn loop in `benchmarks/bench_spawn_overhead.ind` (new, and not in the
+recorded baselines yet, so it is documentation rather than a gate) reports 29.9 µs per
+spawn+wait before and 25.3 µs after.
+
+`tests/registry_sharing.ind` pins the semantics that had to survive: a task uses a
+function that existed when it was spawned, a definition made after the spawn still
+reaches the spawner, a class defined after a spawn is constructible, a function defined
+*inside a method* survives the temporary runtime that methods borrow the tables for,
+and an `async fun` still schedules. All six checks pass in both engines.
+
+### Verification
+
+76 tests pass in both engines (75 before), golden outputs are byte-identical (8/8), 37
+unit tests pass, the installer safety checks pass, and `check_baselines.py` reports no
+case slower than the recorded baseline by more than its tolerance.
+
+---
+
 ## 2.4.1-exp9 — 2026-10-17 (experimental — object fields are copy-on-write)
 
 Ninth experimental build of 2.4.1. This is the audit's object item, the last of the

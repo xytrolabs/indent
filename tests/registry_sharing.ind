@@ -1,0 +1,56 @@
+#! The function, callable, class and async-name tables are shared between a task
+#! and its spawner now, instead of being copied per spawn. Two things must hold:
+#! a task still sees the definitions that existed when it was spawned, and a
+#! definition made *after* a spawn must not be lost or corrupted — it has to reach
+#! the spawner's runtime and leave the task with the snapshot it was given.
+
+fun early x
+    give x + 1
+
+fun task_body n
+    give early(n) + 10
+
+#! Spawn first, then define more: the task's snapshot is taken here.
+var id dynamic = spawn "task_body" 5
+
+fun late x
+    give x * 2
+
+var got dynamic = task_wait id
+say "task used the function it was given: " + string(got)
+say "spawner kept its later definition: " + string(late(4))
+
+class Holder
+    var v int = 0
+
+    fun bump
+        v is v + 1
+        give v
+
+var h dynamic = Holder(7)
+say "class defined after the spawn works: " + string(h.bump())
+
+#! A class method runs in a temporary runtime that borrows the tables and gives
+#! them back; defining a function inside one has to survive that round trip. (The
+#! function cannot read the class's fields once it is outside — a method's runtime
+#! is gone by then — so it only adds a constant.)
+class Registrar
+    var tag int = 0
+
+    fun register
+        fun from_method x
+            give x + 1
+        give from_method(1) + tag
+
+var r dynamic = Registrar(41)
+say "function defined inside a method: " + string(r.register())
+say "and it is reachable afterwards: " + string(from_method(1))
+
+#! Async functions are tracked in their own set, which is shared the same way.
+async fun later_task x
+    give x * 3
+
+var aid dynamic = future "later_task" 5
+say "async function still spawns: " + string(task_wait(aid))
+
+say "checks 16 8 8 43 2 15"
