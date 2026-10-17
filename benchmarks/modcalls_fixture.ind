@@ -1,0 +1,91 @@
+#! Fixture for bench_module_calls.ind: a module with a lot of exported
+#! functions, so that copying its symbol table per call is visible.
+fun Work x
+    give x + 1
+
+fun Helper01 x
+    give x
+fun Helper02 x
+    give x
+fun Helper03 x
+    give x
+fun Helper04 x
+    give x
+fun Helper05 x
+    give x
+fun Helper06 x
+    give x
+fun Helper07 x
+    give x
+fun Helper08 x
+    give x
+fun Helper09 x
+    give x
+fun Helper10 x
+    give x
+fun Helper11 x
+    give x
+fun Helper12 x
+    give x
+fun Helper13 x
+    give x
+fun Helper14 x
+    give x
+fun Helper15 x
+    give x
+fun Helper16 x
+    give x
+fun Helper17 x
+    give x
+fun Helper18 x
+    give x
+fun Helper19 x
+    give x
+fun Helper20 x
+    give x
+fun Helper21 x
+    give x
+fun Helper22 x
+    give x
+fun Helper23 x
+    give x
+fun Helper24 x
+    give x
+fun Helper25 x
+    give x
+fun Helper26 x
+    give x
+fun Helper27 x
+    give x
+fun Helper28 x
+    give x
+fun Helper29 x
+    give x
+fun Helper30 x
+    give x
+fun Helper31 x
+    give x
+fun Helper32 x
+    give x
+fun Helper33 x
+    give x
+fun Helper34 x
+    give x
+fun Helper35 x
+    give x
+fun Helper36 x
+    give x
+fun Helper37 x
+    give x
+fun Helper38 x
+    give x
+fun Helper39 x
+    give x
+fun Helper40 x
+    give x
+
+#! A module-level variable, so the same call has to reach module state.
+var Greeting string = "hi"
+
+fun Greets who
+    give Greeting + " " + who

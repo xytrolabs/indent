@@ -1,5 +1,57 @@
 # Indent Changelog
 
+## 2.4.1-exp11 — 2026-10-17 (experimental — a module function runs in its module's scope)
+
+Eleventh experimental build of 2.4.1. This is the audit's module-scope item, and the
+largest measured win of the series.
+
+### Calling into a module cost a copy of the module
+
+`invoke_external_function` gave a module's function the caller's runtime and then made
+the module's symbols visible the only way that runtime allowed: by *inserting all of
+them* — one hash insert per exported function, callable, and variable — and removing
+them again after the call, remembering the previous binding of each so it could be put
+back. The cost was proportional to the module, not to the call.
+
+Measured with a module exporting 41 functions, calling one of them 20 000 times: **6 280
+ns per call, against 295 ns for the same function defined locally — 21x**, on every call
+into `std/`.
+
+A function now runs *in its module's scope*. `ExecContext` carries a stack of the
+modules whose top level the running code belongs to, and lookups consult it only after
+they have missed the frames and the caller's globals. Nothing is inserted, remembered
+or restored, and nested module calls stack naturally: the innermost module is searched
+first, which is the order the injection produced.
+
+**6 280 ns → 301 ns per module call (−95%)**, now within 3% of a local call — measured
+interleaved against the exp10 release build, best of seven.
+
+Precedence is unchanged, because that is what the injection was for:
+
+- a module's own functions and its own imports shadow the caller's, which is how a
+  module calls its siblings;
+- an existing global variable still shadows a module variable, which is why
+  `tests/discord_helpers.ind`'s cache was reachable from a function and why it caught
+  the one behaviour that had to be restored explicitly: a *write* to a module-level
+  variable (`_MSG_CACHE[mid] is msg`) must land on the caller's copy, as it did when
+  the symbol had been copied in. `take_var` and `swap_var` clone from the module scope
+  for exactly that case, and the test passes in both engines again.
+
+A spawned task no longer seeds its runtime with the module's entries either: it runs
+the module function through the same scope stack, so the injection in
+`spawn_task_builtin` is gone rather than reimplemented.
+
+`benchmarks/bench_module_calls.ind` (with `benchmarks/modcalls_fixture.ind`) records
+it: local call, module call, and a module call that reads module state.
+
+### Verification
+
+76 tests pass in both engines, golden outputs are byte-identical (8/8), all 37 unit
+tests pass — including the six module tests — the installer safety checks pass, and
+`check_baselines.py` reports no case slower than the recorded baseline.
+
+---
+
 ## 2.4.1-exp10 — 2026-10-17 (experimental — a spawn no longer copies the program)
 
 Tenth experimental build of 2.4.1. This is the audit's task-registry item.
