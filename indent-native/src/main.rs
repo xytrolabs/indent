@@ -13341,16 +13341,6 @@ fn spawn_task_builtin(
     let callables = ctx.rt.callables.clone();
     let classes = ctx.rt.classes.clone();
     let async_funcs = ctx.rt.async_funcs.clone();
-    // The parsed-expression cache is shared with the task: it is keyed by expression
-    // text, its entries are immutable `Arc<Expr>`, and it is a pure cache, so a task
-    // can reuse what the parent (or an earlier task) already parsed instead of
-    // re-parsing every expression in its body on first run.
-    //
-    // The *module* cache is deliberately NOT shared: a `ModuleInstance` holds that
-    // module's variables, so lending it across tasks would let two concurrently
-    // running tasks see each other's module-level state. Isolation is the promise
-    // here, and only the parse cache is safe to hand over.
-    let expr_cache = Arc::clone(&ctx.rt.expr_cache);
     let args = args.to_vec();
 
     let done = Arc::new(AtomicBool::new(false));
@@ -13365,7 +13355,6 @@ fn spawn_task_builtin(
         rt.callables = callables;
         rt.classes = classes;
         rt.async_funcs = async_funcs;
-        rt.expr_cache = expr_cache;
 
         // Inject the external module so its functions are callable.
         if let Some(ref m) = module_ref {
