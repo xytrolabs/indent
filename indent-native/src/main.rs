@@ -7514,24 +7514,16 @@ fn invoke_method_on_place(
     args: &[Value],
     ctx: &mut ExecContext<'_>,
 ) -> Option<Result<Value, String>> {
-    // Fold only when there is something to fold: call sites spell methods
-    // canonically, and this runs on every object method call.
-    let owned_lc;
-    let method_lc: &str = if method.bytes().any(|b| b.is_ascii_uppercase()) {
-        owned_lc = method.to_ascii_lowercase();
-        &owned_lc
-    } else {
-        method
-    };
-
     // Look the method up on the instance as it stands, before taking it apart.
+    // `find_method` matches case-insensitively itself, so there is no folded copy
+    // to build here.
     let method_def = {
         let Value::Object { class, .. } = ctx.get_var_ref(receiver_name)? else {
             return None;
         };
         // `find_method` hits the map for the declared spelling and only scans for
         // a differently-cased call, which is what this loop used to do every time.
-        Arc::clone(class.find_method(method_lc)?)
+        Arc::clone(class.find_method(method)?)
     };
 
     let Some(Value::Object { class, fields }) = ctx.take_var(receiver_name) else {
@@ -7581,7 +7573,12 @@ fn invoke_method_on_value(
         ref fields,
     } = target_val
     {
-        if let Some(method_def) = class.methods.get(method_lc) {
+        // `find_method` for the same reason as the place path: an exact map hit for
+        // the declared spelling, and a case-insensitive match otherwise. This used
+        // to be `methods.get(method_lc)`, which could only ever find a method whose
+        // declared name was already lowercase. The folded name above is still needed
+        // below, because `map_object_method_builtin` takes the canonical form.
+        if let Some(method_def) = class.find_method(method) {
             return invoke_object_method(method_def, class, fields, args, ctx).map(|(value, _)| value);
         }
         // A function-valued field behaves as a method of the instance.

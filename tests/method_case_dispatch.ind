@@ -1,0 +1,56 @@
+#! method_case_dispatch.ind — a method is found whatever the case of its declaration
+#! and whatever the case of the call.
+#!
+#! Indent's method dispatch is case-insensitive, and this pins it on both dispatch
+#! paths: the *place* path (the receiver is a variable, so a method can assign its own
+#! field) and the *value* path (the receiver is a value). It also covers a call from
+#! inside a loop body, which is compiled to VM instructions rather than walked.
+#!
+#! It exists because the value path used to look the method up as
+#! `class.methods.get(method.to_ascii_lowercase())` — an exact map hit against a
+#! *folded* name, so a method declared `getValue` could not be found there at all.
+#! The two paths now share `ClassMeta::find_method`.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+class Widget
+    var n int
+
+    fun getValue extra
+        give n + extra
+
+    fun SCREAM extra
+        give n + extra
+
+var w dynamic = Widget(10)
+
+#! ---- the declaration's own spelling ----
+var a dynamic = w.getValue 1
+assert (a == 11) "declared getValue, called getValue"
+
+#! ---- folded calls against a mixed-case declaration ----
+var b dynamic = w.getvalue 1
+assert (b == 11) "declared getValue, called getvalue"
+
+var c dynamic = w.GETVALUE 1
+assert (c == 11) "declared getValue, called GETVALUE"
+
+#! ---- a declaration that is already upper case ----
+var d dynamic = w.scream 2
+assert (d == 12) "declared SCREAM, called scream"
+
+var e dynamic = w.SCREAM 2
+assert (e == 12) "declared SCREAM, called SCREAM"
+
+#! ---- and from inside a compiled loop body ----
+var total int = 0
+repeat i in range(3)
+    var each dynamic = w.getValue 1
+    total is total + each
+assert (total == 33) "inside a compiled loop body"
+
+say "method_case_dispatch: all checks passed"
