@@ -839,6 +839,53 @@ impl std::ops::Deref for SharedList {
     }
 }
 
+/// A class instance's field values, shared by every binding that holds the
+/// instance.
+///
+/// The same change as `SharedList` and for the same reason, one level up: an
+/// object's fields were a `Box<[Value]>`, so *reading* a variable that holds an
+/// instance copied the whole field array — every field, and every `Value` in it.
+/// Passing an object to a function, storing it in a list, or reading one inside a
+/// loop therefore cost a copy of the instance per use, which is the eager half of
+/// pass-by-value that `ListShared` already deferred.
+///
+/// Writes go through `Arc::make_mut`, so the first write after a second handle
+/// exists pays one copy and repeated writes do not. That is exactly the behaviour
+/// the old eager clone produced: a field written through an alias never reaches the
+/// original. `tests/object_aliasing.ind` pins all seven shapes that has to hold for.
+///
+/// `Arc<Box<[Value]>>` rather than `Arc<[Value]>` because `Arc::try_unwrap` needs a
+/// `Sized` payload — `Arc<[Value]>` cannot be taken apart in O(1), so the paths that
+/// move the array out would copy it every time. It is the same reason `SharedStr`
+/// holds an `Arc<String>` and not an `Arc<str>`.
+#[derive(Debug, Clone)]
+struct SharedFields(Arc<Box<[Value]>>);
+
+impl From<Vec<Value>> for SharedFields {
+    fn from(fields: Vec<Value>) -> Self {
+        SharedFields(Arc::new(fields.into_boxed_slice()))
+    }
+}
+
+impl From<Box<[Value]>> for SharedFields {
+    fn from(fields: Box<[Value]>) -> Self {
+        SharedFields(Arc::new(fields))
+    }
+}
+
+impl std::ops::Deref for SharedFields {
+    type Target = Box<[Value]>;
+    fn deref(&self) -> &Box<[Value]> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SharedFields {
+    fn deref_mut(&mut self) -> &mut Box<[Value]> {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
 /// A dictionary's entries, shared by every binding that holds them.
 ///
 /// Exactly the same change as `SharedList`, and it was measurable for exactly the same
@@ -1064,10 +1111,16 @@ enum Value {
     /// field name. Slots come from the class, so the instance holds values only:
     /// a field read is `class.field_index[name]` and then an index, and a
     /// five-field instance is five values instead of a table of five entries.
-    /// The `Box` keeps `Value` small; an inline slice would make it 32 bytes.
+    ///
+    /// The array itself is shared and copy-on-write, like `ListShared`: reading a
+    /// variable holding an instance used to deep-copy every field, so passing an
+    /// object to a function, storing one in a list, or reading one in a loop cost
+    /// the whole field array each time. A read is now a refcount bump and the copy
+    /// happens on the first *write* — the same pass-by-value result, paid later and
+    /// only when something is actually written.
     Object {
         class: Arc<ClassMeta>,
-        fields: Box<[Value]>,
+        fields: SharedFields,
     },
     Func(String),
     Module(Arc<ModuleInstance>),
@@ -1508,7 +1561,7 @@ fn instantiate_class(class_def: &ClassDef, args: &[Value], rt: &mut Runtime) -> 
     }
     Value::Object {
         class,
-        fields: fields.into_boxed_slice(),
+        fields: fields.into_boxed_slice().into(),
     }
 }
 
@@ -7917,7 +7970,7 @@ fn invoke_method_on_place(
         receiver_name,
         Value::Object {
             class,
-            fields: after,
+            fields: after.into(),
         },
     );
     Some(Ok(out))

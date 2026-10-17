@@ -204,6 +204,30 @@ def main():
         elif delta < -tolerance:
             improved.append((case, old, value, delta))
 
+    # A single best-of-N sample is not evidence of a regression on this machine: with
+    # 158 cases the odd one lands 15-30% "slower" purely from a background process, and
+    # which case it is changes from run to run. So a case that looks slower gets a
+    # second measurement with three times the runs before it can fail the gate. This is
+    # what the failure message has always told the reader to do by hand.
+    confirmed = []
+    for case, old, value, delta in regressed:
+        name = case.split("::", 1)[1]
+        path = os.path.join(ROOT, "benchmarks", case.split("::", 1)[0])
+        again = run_case(args.binary, path, runs * 3) if os.path.exists(path) else None
+        new_value = again.get(name) if again else None
+        if new_value is None:
+            confirmed.append((case, old, value, delta))
+            continue
+        ndelta = (new_value - old) / old * 100.0
+        if ndelta > tolerance:
+            confirmed.append((case, old, new_value, ndelta))
+        else:
+            print(
+                f"  recovered on re-measure (best of {runs * 3}): {case}   "
+                f"{delta:+.1f}% -> {ndelta:+.1f}%"
+            )
+    regressed = confirmed
+
     print()
     print(f"baseline: {doc.get('binary', '?')} recorded {doc.get('recorded', '?')}")
     print(f"tolerance: {tolerance:.0f}%   cases compared: {len(measured) - len(missing)}")

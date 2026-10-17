@@ -1,5 +1,73 @@
 # Indent Changelog
 
+## 2.4.1-exp9 — 2026-10-17 (experimental — object fields are copy-on-write)
+
+Ninth experimental build of 2.4.1. This is the audit's object item, the last of the
+memory changes: `Value::Object`'s field array now behaves like `ListShared` and
+`StrShared` already did.
+
+### Reading an object stopped copying it
+
+An instance's fields were a `Box<[Value]>`, so *reading* a variable that holds an
+object copied the whole field array — every field, and every `Value` inside it. That
+made passing an object to a function, storing one in a list, or reading one in a loop
+cost a copy of the instance per use, which is the eager half of pass-by-value that
+lists and strings had already deferred to the first write.
+
+`fields` is now a `SharedFields`, an `Arc<Box<[Value]>>` with `Deref`/`DerefMut` that
+calls `Arc::make_mut`, so a read is a refcount bump and the copy happens on the first
+write — and only when a second handle actually exists. `Arc<Box<[Value]>>` rather than
+`Arc<[Value]>` for the same reason `SharedStr` holds an `Arc<String>`: `try_unwrap`
+needs a `Sized` payload, and the paths that move the array out must not copy.
+
+Nothing observable changed. `tests/object_aliasing.ind` exists for exactly this
+change — it pins that a field write through an alias leaves the original alone, that
+a method called on an alias does not write through, that objects read out of a list or
+out of another object's field are copies, and that writes through the variable itself
+do persist. All fifteen of its checks pass in both engines, as do all 75 tests, the
+golden outputs and the 37 unit tests.
+
+Measured against the exp8 release build, interleaved, best of nine per section:
+
+| section | exp8 | exp9 | change |
+|---|---|---|---|
+| `bench_method_calls` "object equals" | 164 ns | 141 ns | **−14%** |
+| `bench_object_alloc` "method add" | 1339 ns | 1170 ns | **−13%** |
+| `bench_object_alloc` "create object" | 519 ns | 463 ns | **−11%** |
+| `bench_method_calls` "object add" | 941 ns | 834 ns | **−11%** |
+| `bench_method_calls` "object to_string" | 291 ns | 280 ns | −4% |
+
+Against the recorded baselines (2026-10-16) the object cases are now 19-26% faster,
+the list `+=` shape 44% faster and the string-building loop 61% faster.
+
+### Two measurements that went the wrong way, and what they are
+
+`bench_container_reads` came out 3-7% slower on every section, and
+`bench_function_bodies` "body loop" 18% slower — on workloads that never construct an
+object. With `INDENT_VM=0` the two binaries are identical on both to within 1%, so the
+difference is in the compiled path and not in the change's logic: it is the layout of
+`vm_run`, whose dispatch loop is large enough that adding to it moves unrelated
+instruction timings by a few percent. exp8 hit the same thing when its new arm was
+inline (7-10% across `bench_int_arith`, fixed by moving the cold half out of line); this
+build did not touch that loop at all, so there is nothing to move out. It is reported
+here rather than left out because a 18% figure in a changelog that only lists wins is
+how a project stops trusting its own numbers.
+
+### Two holes in the gate itself, closed
+
+- `benchmarks/run_suite.sh` treated the *absence* of a summary line as success. The
+  runner is in-process, so `tests/ai_mock_parity.ind` calling `process_exit 0` when its
+  fixture is missing ends the run after one test out of seventy-five, with exit status
+  0. The script now starts the fixture itself and fails when the summary never appears.
+- `benchmarks/check_baselines.py` had a 15% tolerance and printed "re-measure before
+  believing it" without ever re-measuring, so a single unlucky sample failed the gate —
+  and the case that failed was different on each run (`+21%` on one, `+30%` on another,
+  both recovering to *faster than baseline* on a second look). A case that looks slow
+  now gets a second measurement with three times the runs, and only fails if it is
+  still slow.
+
+---
+
 ## 2.4.1-exp8 — 2026-10-17 (experimental — compound assignment, and two bugs it found)
 
 Eighth experimental build of 2.4.1.
