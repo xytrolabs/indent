@@ -1,0 +1,21 @@
+#! Does a compiled `p is p + q` keep the value when `p` is an object whose class
+#! defines `add`? The compiled path has an in-place concat instruction, and its
+#! Object branch has to keep the operator method's result.
+class Vec2
+    var x int = 0
+    var y int = 0
+
+    fun add other
+        var out dynamic = Vec2(0, 0)
+        out.x is x + other.x
+        out.y is y + other.y
+        give out
+
+    fun to_string
+        give "(" + string(x) + "," + string(y) + ")"
+
+var total dynamic = Vec2(0, 0)
+repeat 3
+    var step dynamic = Vec2(1, 2)
+    total is total + step
+say total

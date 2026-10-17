@@ -4091,7 +4091,13 @@ impl BinaryOp {
     /// product past `2^26` must go through the float path that `eval_binary` uses
     /// for it. Every guard here mirrors a guard in `eval_binary`; the two are
     /// tested against each other by the suite, which runs in both engines.
-    #[inline]
+    ///
+    /// `inline(always)` because it is called from the two hottest instruction arms
+    /// (`Bin` and `AssignOpSlot`), and left to its own judgement the compiler
+    /// stopped inlining it once there were two call sites — which cost every
+    /// arithmetic section about 7% (measured, best of fifteen) for a call that the
+    /// whole point of this function is to avoid.
+    #[inline(always)]
     fn int_fast(self, x: i64, y: i64) -> Option<Value> {
         let exact = x.unsigned_abs() <= EXACT_INT_MAG && y.unsigned_abs() <= EXACT_INT_MAG;
         match self {
@@ -4229,6 +4235,27 @@ enum VmInstr {
     AppendSlot { slot: u16, callee: String },
     /// Pop a value and concatenate it onto frame slot `slot` in place.
     ConcatSlot(u16),
+    /// Pop a value and combine it into frame slot `slot`: `x += value`.
+    ///
+    /// `Stmt::AssignOp` — `i += 1`, `total *= 2`, `s += chunk` — is one of the
+    /// commonest statements there is, and it was not one the compiler accepted, so a
+    /// body containing it went back to the tree-walker in its entirety: a `while`
+    /// loop whose counter is bumped with `+=` got no compiled form at all, however
+    /// simple the rest of it was. That was the reason `bench_string_ops` and
+    /// `bench_string_build` never appeared to benefit from any VM work.
+    ///
+    /// It is its own instruction rather than `LoadSlot` + `Bin` + `StoreSlot` for two
+    /// reasons: the operand order (`Bin` pops the left operand first, but the value
+    /// is what the source evaluates first) and, for `+=`, the same in-place growth
+    /// `ConcatSlot` does — `s += x` in a loop must not copy the accumulated string
+    /// per iteration.
+    ///
+    /// `line` is carried so a failure reports exactly what `exec_stmt` reports.
+    AssignOpSlot {
+        slot: u16,
+        op: BinaryOp,
+        line: usize,
+    },
     /// Pop one operand and push the result of a unary operator.
     Unary(UnaryOp),
     /// Pop one value and push its truth as a boolean.
@@ -5136,6 +5163,7 @@ fn vm_compile_while(cond: &str, until: bool, body: &[Stmt], rt: &Runtime) -> Opt
     let end = prog.instrs.len();
     vm_close_loop(&mut prog, end, cont);
     if !compiled {
+        vm_trace_refusal(body, rt);
         return None;
     }
     prog.instrs[exit_jump] = if until {
@@ -5191,6 +5219,7 @@ fn vm_compile_for(item_name: &str, body: &[Stmt], rt: &Runtime) -> Option<VmProg
     let compiled = vm_compile_stmts(body, &mut prog, rt);
     prog.reps_stack.pop();
     if !compiled {
+        vm_trace_refusal(body, rt);
         return None;
     }
     prog.instrs.push(VmInstr::Jump(start));
@@ -5400,6 +5429,7 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
     let compiled = vm_compile_stmts(body, prog, rt);
     prog.reps_stack.pop();
     if !compiled {
+        vm_trace_refusal(body, rt);
         prog.loops.pop();
         return false;
     }
@@ -5601,6 +5631,31 @@ fn vm_compile_stmts(stmts: &[Stmt], prog: &mut VmProgram, rt: &Runtime) -> bool 
                 prog.instrs.push(VmInstr::IndexStoreSlot { slot });
             }
             Stmt::AssignIndex { .. } => return false,
+            // `x += y`. The operator is the compound form minus its `=`, which is
+            // exactly how `exec_stmt` reads it; an operator this stage does not know
+            // refuses the body, as everywhere else.
+            Stmt::AssignOp {
+                line,
+                name,
+                op,
+                value,
+            } if is_bare_identifier(name) && positional_alias_index(name).is_none() => {
+                let Some(op) = op.strip_suffix('=').and_then(BinaryOp::from_name) else {
+                    return false;
+                };
+                // The value is evaluated before the variable is read, which is what
+                // `exec_stmt` does — and what makes `x += x` well defined.
+                if !vm_compile_value(value, prog, rt) {
+                    return false;
+                }
+                let slot = vm_slot(&mut prog.slots, name);
+                prog.instrs.push(VmInstr::AssignOpSlot {
+                    slot,
+                    op,
+                    line: *line,
+                });
+            }
+            Stmt::AssignOp { .. } => return false,
             // `var x ty = value`. At the top of a body there is no frame to pop and
             // nothing to shadow, so this is an ordinary rebinding of the slot the
             // name already has — exactly what `define_local` on the function frame
@@ -6483,17 +6538,48 @@ fn vm_run(
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
                         let rhs = stack[sp].clone();
                         let idx = *slot as usize;
-                        if matches!(values[idx], Value::Object { .. }) {
-                            // An operator method is user code, so this one case
-                            // takes the hand-over a call takes.
+                        // Either operand being an `Object` means an operator method
+                        // can run — user code, which needs the hand-over a call gets
+                        // and whose *result is the new value of the variable*.
+                        if matches!(values[idx], Value::Object { .. })
+                            || matches!(rhs, Value::Object { .. })
+                        {
+                            // The operand is cloned rather than moved out of the slot:
+                            // the method has to see the variable as it stands, and on
+                            // error the variable has to keep its old value exactly as
+                            // the tree-walker leaves it (the write-back at the end of
+                            // `vm_run` would otherwise store `Empty`).
+                            let lhs = values[idx].clone();
                             vm_flush_slots(prog, &mut values, ctx);
-                            let lhs = std::mem::replace(&mut values[idx], Value::Empty);
                             let result = eval_binary("+", lhs, rhs, ctx);
                             vm_pull_slots(prog, &mut values, ctx);
-                            result?;
+                            // `x is x + y` assigns: the operator's result wins over
+                            // anything the method did to the name itself, which is what
+                            // `exec_stmt`'s assignment does afterwards too.
+                            values[idx] = result?;
                         } else {
                             vm_concat_slot(&mut values, idx, rhs, ctx)?;
                         }
+                        ip += 1;
+                    }
+                    VmInstr::AssignOpSlot { slot, op, line } => {
+                        sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
+                        let rhs = stack[sp].clone();
+                        let idx = *slot as usize;
+                        // Two ints: answered here, exactly as `Bin` answers them, so a
+                        // compiled `total -= n` does not pay for a call into
+                        // `eval_binary` that the same operation spelled `x is x - n`
+                        // does not. Everything else — strings, containers, operator
+                        // methods, every error — is out of line, which keeps this arm
+                        // (and therefore the dispatch loop it lives in) small.
+                        if let (Value::Int(x), Value::Int(y)) = (&values[idx], &rhs) {
+                            if let Some(v) = op.int_fast(*x, *y) {
+                                values[idx] = v;
+                                ip += 1;
+                                continue;
+                            }
+                        }
+                        vm_assign_slot(prog, &mut values, idx, *op, rhs, *line, ctx)?;
                         ip += 1;
                     }
                     VmInstr::Pop => {
@@ -6687,6 +6773,48 @@ fn vm_run(
     })
 }
 
+/// `x += value` for everything the integer fast path does not answer: strings,
+/// lists and dicts grow in place, an `Object` operand runs an operator method, and
+/// anything else goes through `eval_binary`.
+///
+/// Deliberately out of line. The instruction arm that calls it is in the dispatch
+/// loop, and every byte of that loop is paid for by every instruction of every
+/// compiled body; the integer case — which is the one that has to be fast — is
+/// decided in the arm itself, before this is called.
+fn vm_assign_slot(
+    prog: &VmProgram,
+    values: &mut [Value],
+    idx: usize,
+    op: BinaryOp,
+    rhs: Value,
+    line: usize,
+    ctx: &mut ExecContext<'_>,
+) -> Result<(), String> {
+    let prefixed = |e: String| format!("Line {line}: {e}");
+    if matches!(values[idx], Value::Object { .. }) || matches!(rhs, Value::Object { .. }) {
+        // An operator method is user code: it sees the variable as it stands, and its
+        // result becomes the variable's value. The operand is cloned rather than
+        // moved out of the slot so that a failing method leaves the variable exactly
+        // as the tree-walker leaves it.
+        let lhs = values[idx].clone();
+        vm_flush_slots(prog, values, ctx);
+        let result = eval_binary(op.as_str(), lhs, rhs, ctx);
+        vm_pull_slots(prog, values, ctx);
+        values[idx] = result.map_err(prefixed)?;
+        return Ok(());
+    }
+    if op == BinaryOp::Add {
+        // `+=` on a string, list or dict grows the slot's own buffer, exactly as the
+        // tree-walker's in-place arm does.
+        return vm_concat_slot(values, idx, rhs, ctx).map_err(prefixed);
+    }
+    // Everything else has no in-place form; the value is moved out (a move, so a
+    // container is not copied) and put back.
+    let lhs = std::mem::replace(&mut values[idx], Value::Empty);
+    values[idx] = eval_binary(op.as_str(), lhs, rhs, ctx).map_err(prefixed)?;
+    Ok(())
+}
+
 fn vm_overflow() -> String {
     // Unreachable for a body that compiled: `vm_verify_stack` checks the emitted
     // program's operand stack before it runs.
@@ -6715,6 +6843,7 @@ fn vm_instr_stack_effect(instr: &VmInstr) -> (usize, usize) {
         | VmInstr::JumpIfTrue(_)
         | VmInstr::AppendSlot { .. }
         | VmInstr::ConcatSlot(_)
+        | VmInstr::AssignOpSlot { .. }
         | VmInstr::CheckCount { .. }
         | VmInstr::IterPrepare { .. }
         | VmInstr::DefVarSlot { .. }

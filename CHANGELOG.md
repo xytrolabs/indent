@@ -1,5 +1,80 @@
 # Indent Changelog
 
+## 2.4.1-exp8 — 2026-10-17 (experimental — compound assignment, and two bugs it found)
+
+Eighth experimental build of 2.4.1.
+
+### `x += y` is a compiled statement now
+
+`Stmt::AssignOp` — `i += 1`, `total -= n`, `s += chunk` — was not one of the
+statements the VM compiler accepted, so a body containing *one* of them went back to
+the tree-walker in its entirety. A `while` loop whose counter is bumped with `+=` got
+no compiled form at all, however simple everything else in it was. That is why
+`bench_string_ops` never moved: its timed loop is `big is big + unit` plus `i += 1`,
+and the second statement was enough to disqualify the whole thing.
+
+It compiles to a new instruction, `AssignOpSlot`, rather than to `LoadSlot` + `Bin` +
+`StoreSlot`, for two reasons: the operand order (the source evaluates the value
+before it reads the variable, and `Bin` pops the left operand first), and the
+in-place growth `+=` already relies on — `s += x` in a loop must not copy the
+accumulated string per iteration. Two `Int` operands are answered in the instruction
+itself, exactly as `Bin` answers them, so `total -= n` does not pay for a call that
+`total is total - n` does not.
+
+Measured against the exp7 release build, interleaved, best of nine per section, using
+the benchmark's own timings rather than whole-process wall clock:
+
+| section | exp7 | exp8 | change |
+|---|---|---|---|
+| `bench_string_ops` "build 110000 chars" | 514.7 µs | 216.5 µs | **−58%** |
+| `bench_string_ops` "split 20001 parts" | 1105.8 µs | 1102.9 µs | 0% |
+| `bench_int_arith` (all eight sections) | — | — | within ±3% |
+
+The first version of this instruction put all of its logic inline in the dispatch
+loop, and that measured a uniform 7-10% regression on every `bench_int_arith`
+section — loops whose instruction sequence this build does not change at all, so the
+only thing that had moved was the size of the loop the CPU has to keep in cache.
+Moving the non-integer half out of line into `vm_assign_slot` brought those sections
+back to noise. The lesson is in the code: the arm decides the integer case and calls
+out for everything else.
+
+### A compiled `p is p + q` threw the operator method's result away
+
+`ConcatSlot`'s `Object` branch computed `eval_binary("+", lhs, rhs)` and then dropped
+the value on the floor with `result?` — the slot kept whatever the hand-over had left
+in it, which is `Empty`. So in any compiled body, adding two objects with an `add`
+method produced `empty`, while the same statement on the tree-walker produced the
+sum. `tests/object_concat_self.ind` reproduces it: `(3,6)` on the tree-walker,
+`Cannot access '.x' on empty value` on the VM before this build, `(3,6)` on both
+after.
+
+Two things were wrong. The result has to be assigned — `x is x + y` *assigns*, and the
+operator's answer wins over anything the method did to the name itself. And the
+operand has to be *cloned* rather than moved out of the slot, so that a method which
+raises leaves the variable exactly as the tree-walker leaves it; moving it out meant
+the write-back at the end of the run stored `Empty` over the old value. The same
+check now covers an `Object` as the *right* operand, where `+` reaches `b.add(a)` and
+so can run user code with stale frames.
+
+### The suite can no longer pass while stopping early
+
+`tests/ai_mock_parity.ind` calls `process_exit 0` when its fixture server is missing.
+The runner is in-process, so that ends the whole run — the summary line is never
+printed, one test out of seventy-five has executed, and the exit status is 0. A
+truncated run and a clean pass were indistinguishable. `benchmarks/run_suite.sh` now
+starts the fixture itself, and treats the summary line as the contract: no summary,
+no pass, and an error that names the missing fixture.
+
+### Verification
+
+75 tests pass in both engines (73 before; the two new ones are
+`tests/compound_assign.ind`, which covers `+=`, `-=`, `*=`, `/=`, `%=` on ints,
+floats, strings, lists and dicts plus the error path's line number, and
+`tests/object_concat_self.ind`), golden outputs are byte-identical (8/8), and all 37
+unit tests pass.
+
+---
+
 ## 2.4.1-exp7 — 2026-10-17 (experimental — operators as enums)
 
 Seventh experimental build of 2.4.1. This is the audit's operator item, and it

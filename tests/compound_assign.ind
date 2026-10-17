@@ -1,0 +1,76 @@
+#! Compound assignment, in both engines.
+#!
+#! `x += y` used to refuse compilation for the whole enclosing body, so nothing here
+#! ran on the VM at all. Every shape below therefore has to produce identical output
+#! with the shadow VM on and off — including the in-place growth of a string, a list
+#! and a dict, which the compiled path does by growing the slot's own buffer.
+
+var total int = 0
+var n int = 5
+repeat n
+    total += 2
+say "int add " + string(total)
+
+var diff int = 10
+repeat 3
+    diff -= 1
+say "int sub " + string(diff)
+
+var prod int = 1
+repeat 5
+    prod *= 2
+say "int mul " + string(prod)
+
+var quot int = 100
+quot /= 4
+say "int div " + string(quot)
+
+var rem int = 17
+rem %= 5
+say "int rem " + string(rem)
+
+var f float = 1.5
+f *= 2.0
+say "float mul " + string(f)
+
+#! Grown in a loop, so the in-place path is what keeps this from copying the
+#! accumulated string on every pass.
+var text string = ""
+var i int = 0
+while i < 200
+    text += "ab"
+    i += 1
+say "string len " + string(len(text))
+
+var xs dynamic = []
+repeat 100
+    xs += [7]
+say "list len " + string(len(xs))
+
+var d dynamic = {"a": 1}
+repeat 3
+    d += {"b": 1}
+say "dict len " + string(len(d))
+
+#! The value is evaluated before the variable is read, so this is well defined.
+var selfadd int = 3
+selfadd += selfadd
+say "self add " + string(selfadd)
+
+#! A `+=` inside a `while` condition's body, and inside a function body.
+fun sum_to limit
+    var acc int = 0
+    var k int = 1
+    while k <= limit
+        acc += k
+        k += 1
+    give acc
+say "sum " + string(sum_to(10))
+
+#! Failing compound assignment reports the same line and text in both engines.
+do:
+    var bad dynamic = []
+    bad -= 1
+    say "unreachable"
+catch as err:
+    say "caught " + error_type(err) + ": " + error_message(err)
