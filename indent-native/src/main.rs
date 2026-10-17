@@ -739,6 +739,26 @@ struct ClassMeta {
     is_dataclass: bool,
 }
 
+impl ClassMeta {
+    /// Find a method by name, matching case-insensitively.
+    ///
+    /// The map lookup comes first. Call sites spell methods the way they were
+    /// declared, and this used to be a scan of the whole method table on *every*
+    /// object method call and on every special-method lookup — `say obj`, `+`,
+    /// `==`, `string()`, `len()` and the VM's `PlaceMethodCall` guard. A call
+    /// spelled differently still works, at the price of the linear fallback, which
+    /// is what keeps Indent's case-insensitive dispatch intact.
+    fn find_method(&self, name: &str) -> Option<&Arc<FunctionDef>> {
+        if let Some(def) = self.methods.get(name) {
+            return Some(def);
+        }
+        self.methods
+            .iter()
+            .find(|(declared, _)| declared.eq_ignore_ascii_case(name))
+            .map(|(_, def)| def)
+    }
+}
+
 /// A function body is immutable once parsed, so it is shared behind an `Arc`.
 /// This matters enormously: `resolve_callable` clones the resolved callable on
 /// **every call**, and a by-value `FunctionDef` would deep-copy the parameters
@@ -1837,19 +1857,21 @@ struct Debugger {
 }
 
 impl Runtime {
-    /// A runtime with empty tables.
+    /// A temporary runtime for one method body, sharing the caller's caches from
+    /// the start.
     ///
-    /// `Runtime::new` also builds the 11-entry colour palette, which is pure
-    /// waste for the temporary runtimes that method dispatch used to create on
-    /// every call and then immediately overwrite `vars` on.
-    /// A throwaway runtime used to evaluate one method body.
+    /// This used to be `bare()`: it allocated three cache `Arc`s and a fresh
+    /// 32-slot expression memo, and every caller then handed the runtime the
+    /// caller's own handles through `lend_tables_to` — so all four allocations were
+    /// discarded before the body ran, on every method call. The memo was the
+    /// expensive one: 32 slots of `Option<ExprMemoSlot>`, each slot an enum plus a
+    /// `String`.
     ///
-    /// The three `Arc`s below are replaced moments later by `lend_tables_to`, so
-    /// every dispatch pays three allocations that are then discarded — real but
-    /// tiny next to the tables that get handed over (see below). `Arc::default()`
-    /// is not a drop-in for them: the same fields are swapped back and forth by
-    /// `lend_tables_to`/`reclaim_tables_from`, so they are never simply overwritten.
-    fn bare(module_dir: PathBuf) -> Self {
+    /// The handles now come from the caller up front, and the memo starts *empty*
+    /// because the lender moves its own in. That is why `memo_get`/`memo_put`
+    /// tolerate a short vector: until the lend happens there is no memo, and a
+    /// missing memo only means the slow path runs.
+    fn bare_sharing(module_dir: PathBuf, from: &Runtime) -> Self {
         Self {
             module_dir,
             vars: Map::default(),
@@ -1857,12 +1879,12 @@ impl Runtime {
             callables: Map::default(),
             modules: Map::default(),
             classes: Map::default(),
-            module_cache: Arc::new(Mutex::new(HashMap::new())),
-            module_loading: Arc::new(Mutex::new(HashSet::new())),
-            expr_cache: Arc::new(RwLock::new(Map::default())),
+            module_cache: Arc::clone(&from.module_cache),
+            module_loading: Arc::clone(&from.module_loading),
+            expr_cache: Arc::clone(&from.expr_cache),
             class_meta_cache: HashMap::new(),
             class_gen: 0,
-            expr_memo: (0..EXPR_MEMO_SLOTS).map(|_| None).collect(),
+            expr_memo: Vec::new(),
             debugger: None,
             async_funcs: HashSet::new(),
         }
@@ -2575,7 +2597,9 @@ impl<'a> ExecContext<'a> {
     /// which just means the slow path runs.
     #[inline]
     fn memo_get(&self, expr: &str) -> Option<ExprKind> {
-        let slot = self.rt.expr_memo[expr_memo_index(expr)].as_ref()?;
+        // `get`, not indexing: a temporary runtime has no slots until the caller's
+        // memo is lent to it, and a miss is always safe here.
+        let slot = self.rt.expr_memo.get(expr_memo_index(expr))?.as_ref()?;
         if slot.text == expr {
             Some(slot.kind.clone())
         } else {
@@ -2586,10 +2610,13 @@ impl<'a> ExecContext<'a> {
     /// Remember how `expr` was classified, replacing whatever held its slot.
     #[inline]
     fn memo_put(&mut self, expr: &str, kind: ExprKind) {
-        match &mut self.rt.expr_memo[expr_memo_index(expr)] {
-            Some(slot) if slot.text == expr => slot.kind = kind,
-            slot => {
-                *slot = Some(ExprMemoSlot {
+        let Some(slot) = self.rt.expr_memo.get_mut(expr_memo_index(expr)) else {
+            return;
+        };
+        match slot {
+            Some(existing) if existing.text == expr => existing.kind = kind,
+            other => {
+                *other = Some(ExprMemoSlot {
                     text: expr.to_string(),
                     kind,
                 })
@@ -6025,7 +6052,7 @@ fn vm_run(
                         let is_class_method = matches!(
                             &values[*slot as usize],
                             Value::Object { class, .. }
-                                if class.methods.keys().any(|m| m.eq_ignore_ascii_case(method))
+                                if class.find_method(method).is_some()
                         );
                         let by_value = if is_class_method {
                             None
@@ -7320,8 +7347,7 @@ fn invoke_object_method(
     // empty `expr_cache` so every expression in the body was re-parsed on every
     // call. Both are now O(1): the tables are lent and reclaimed, and the caches
     // are shared.
-    let mut temp_rt = Runtime::bare(PathBuf::from("."));
-    temp_rt.vars = Map::default();
+    let mut temp_rt = Runtime::bare_sharing(PathBuf::from("."), ctx.rt);
     for (slot, name) in class.field_names.iter().enumerate() {
         temp_rt.vars.insert(name.clone(), fields[slot].clone());
     }
@@ -7372,17 +7398,13 @@ fn call_object_method_value(
     ctx: &mut ExecContext<'_>,
 ) -> Option<Result<Value, String>> {
     if let Value::Object { class, fields } = receiver {
-        for (name, mdef) in class.methods.iter() {
-            // `eq_ignore_ascii_case` compares exactly like folded copies would
-            // (ASCII-only folding, non-ASCII bytes compared verbatim) but
-            // allocates nothing.  This loop used to allocate twice per declared
-            // method -- once for the callee, once per candidate -- on every
-            // special-method lookup (`+`, `==`, `string()`, `len`, ...).
-            if name.eq_ignore_ascii_case(method) {
-                return Some(
-                    invoke_object_method(mdef, class, fields, args, ctx).map(|(value, _)| value),
-                );
-            }
+        // Special methods are looked up on every `say obj`, `+`, `==`, `string()`
+        // and `len()` of an object, so this takes the class's map rather than
+        // scanning it; a differently-cased call falls back inside `find_method`.
+        if let Some(mdef) = class.find_method(method) {
+            return Some(
+                invoke_object_method(mdef, class, fields, args, ctx).map(|(value, _)| value),
+            );
         }
         // dataclass auto-generated defaults (when no user method is defined).
         if class.is_dataclass {
@@ -7507,14 +7529,9 @@ fn invoke_method_on_place(
         let Value::Object { class, .. } = ctx.get_var_ref(receiver_name)? else {
             return None;
         };
-        let mut found = None;
-        for (name, def) in class.methods.iter() {
-            if name.eq_ignore_ascii_case(method_lc) {
-                found = Some(Arc::clone(def));
-                break;
-            }
-        }
-        found?
+        // `find_method` hits the map for the declared spelling and only scans for
+        // a differently-cased call, which is what this loop used to do every time.
+        Arc::clone(class.find_method(method_lc)?)
     };
 
     let Some(Value::Object { class, fields }) = ctx.take_var(receiver_name) else {
@@ -7584,7 +7601,7 @@ fn invoke_method_on_value(
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
-            let mut temp_rt = Runtime::bare(PathBuf::from("."));
+            let mut temp_rt = Runtime::bare_sharing(PathBuf::from("."), ctx.rt);
             for (slot, name) in class.field_names.iter().enumerate() {
                 temp_rt.vars.insert(name.clone(), fields[slot].clone());
             }
@@ -7610,7 +7627,7 @@ fn invoke_method_on_value(
                 Value::Empty => Expr::Empty,
                 _ => Expr::Str(v.to_string()),
             }).collect();
-            let mut temp_rt = Runtime::bare(PathBuf::from("."));
+            let mut temp_rt = Runtime::bare_sharing(PathBuf::from("."), ctx.rt);
             temp_rt.vars = dict_to_map(map);
             ctx.rt.lend_tables_to(&mut temp_rt);
             let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
@@ -7622,7 +7639,7 @@ fn invoke_method_on_value(
     // 2b. Module function invocation
     if let Value::Module(ref m) = target_val {
         if let Some(ModuleEntry::Func(func_def)) = m.entries.get(method) {
-            let mut temp_rt = Runtime::bare(PathBuf::from("."));
+            let mut temp_rt = Runtime::bare_sharing(PathBuf::from("."), ctx.rt);
             // The module's variables seed the temporary runtime; a function or an
             // import sharing a name is not one, and the old `vars` map did not
             // hold it either.

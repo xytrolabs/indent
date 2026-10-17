@@ -1,6 +1,60 @@
 # Indent Changelog
 
-## 2.4.1 — 2026-10-16 (experimental — `exp` channel)
+## 2.4.1-exp2 — 2026-10-16 (experimental — per-call overhead)
+
+Second experimental build of 2.4.1. An external source audit of this tree was checked
+line by line first: all six of its findings were real, and its list of things already
+implemented was accurate (shared class metadata, slot-indexed fields, `SmallDict`,
+copy-on-write values, sized thread stacks, frame shrinking, bounded caches, `Arc`
+function bodies, boxed AST variants, direct-slice serialisation, borrowing comment
+stripping). The two it ranked highest are in this build.
+
+- **Temporary runtimes no longer allocate caches they throw away.** `Runtime::bare()`
+  built three cache `Arc`s *and* a fresh 32-slot expression memo, and every caller
+  then handed the runtime the caller's own handles immediately afterwards — so all
+  four allocations were discarded before the method body ran, on every call (the memo
+  being the expensive one: 32 slots of an enum plus a `String`). It is
+  `Runtime::bare_sharing(dir, &caller)` now: the handles come from the caller up
+  front and the memo starts empty until it is lent. Measured on 100 000 method calls
+  plus 20 000 `to_string` lookups: **148 → 134 ms (−9.5%)**, identical output.
+  The memo is indexed by the interpreter, so the accessors use `get`/`get_mut`; a
+  missing memo means "no cache", never a panic.
+- **Method lookup is a hash hit before it is a scan.** `find_method` takes the class's
+  method map for the declared spelling and only falls back to the case-insensitive
+  scan when a call is spelled differently, so case-insensitive dispatch is unchanged.
+  This runs on every object method call, every special-method lookup (`say obj`, `+`,
+  `==`, `string()`, `len()`) and the VM's `PlaceMethodCall` guard, each of which
+  walked the whole method table. Worst case — calling the last of thirteen declared
+  methods, 50 000 times — is **35 → 33 ms (−5.7%)**; it is neutral on the existing
+  method benchmarks, which use small tables.
+
+### Found while measuring, and deliberately not changed
+
+**A zero-argument method called as a dotted name inside an expression is not
+dispatched.** `w.plain` on its own line calls the method; `say w.plain` or
+`var x = w.plain` resolves it as a *field* read and fails with
+`Object has no field 'plain'`, while `w.plain()` and `w.calc 0` work. Both engines
+behave identically, so it is one resolution path disagreeing with another rather than
+a VM divergence — but fixing it changes language semantics, so it is left for a
+decision instead of being slipped into a performance build.
+
+### Measured or reasoned, not yet done
+
+- **Field-map churn per method call** (the audit's #3): `invoke_object_method` inserts
+  every field by name into the temporary runtime and reads them back out afterwards,
+  so a call costs O(fields) whatever the body touches. The fix is a field-backed scope
+  or name interning — both larger than this build.
+- **AST-cache validation**: the read path loads the whole source to hash it and holds
+  the whole cache payload while deserialising. A streaming hash is small; the rest
+  needs large-file startup measurements to justify it.
+- **Parser-owned `String` per line**: needs a lifetime change in the parser.
+- **VM boundary synchronisation**: `vm_pull_slots` scans a `Vec` of counters once per
+  slot. The audit itself says to profile before adding bookkeeping, so it waits for
+  that profile.
+
+---
+
+## 2.4.1-exp1 — 2026-10-16 (experimental — `exp` channel)
 
 This one is aimed at the **`exp` channel** rather than stable. It closes out the
 mechanical phase of the memory plan and lands the measurement scaffolding the plan

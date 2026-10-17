@@ -1,0 +1,62 @@
+#! wide_method.ind — isolate method *lookup* cost: call the last-declared method, and
+#! the special `to_string` path, on a class with thirteen methods. A linear scan costs
+#! up to 13 name comparisons per lookup here; a map hit costs one.
+class Many
+    var v int
+
+    fun m01 extra
+        give v + 1 + extra
+
+    fun m02 extra
+        give v + 2 + extra
+
+    fun m03 extra
+        give v + 3 + extra
+
+    fun m04 extra
+        give v + 4 + extra
+
+    fun m05 extra
+        give v + 5 + extra
+
+    fun m06 extra
+        give v + 6 + extra
+
+    fun m07 extra
+        give v + 7 + extra
+
+    fun m08 extra
+        give v + 8 + extra
+
+    fun m09 extra
+        give v + 9 + extra
+
+    fun m10 extra
+        give v + 10 + extra
+
+    fun m11 extra
+        give v + 11 + extra
+
+    fun m12 extra
+        give v + 12 + extra
+
+    fun to_string
+        give "Many(" + string(v) + ")"
+
+var many dynamic = Many(0)
+
+#! Worst case for a scan: the method is declared last.
+var t int = 0
+var i int = 0
+while i < 50000
+    t is t + many.m12 0
+    i is i + 1
+say "calls " + string(t)
+
+#! The special-method path (`string()`, `say`, `+`) does its own lookup.
+var text string = ""
+var j int = 0
+while j < 20000
+    text is string(many)
+    j is j + 1
+say "to_string " + string(len(text))
