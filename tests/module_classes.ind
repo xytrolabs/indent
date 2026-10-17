@@ -1,0 +1,27 @@
+#! A class defined in a module has to be reachable three ways. All three used to
+#! fail: a module's class table was dropped when the module was folded into its
+#! `ModuleInstance`, so `get Point from <mod>` reported "Module does not export
+#! 'Point'" and the other two reported "Module has no function 'Point'".
+#!
+#! Covered here:
+#!   1. `get Point from <mod>` and then construct it
+#!   2. `<mod>.Point(...)` — the parser reads that as a *method* call on the module,
+#!      which is why it takes a separate arm to construct
+#!   3. a module function that returns an instance
+#!   4. a method that constructs another instance of its own class
+
+get Point from module_class_fixture
+var p dynamic = Point(3, 4)
+say "imported class: " + string(p.total())
+
+get module_class_fixture
+var q dynamic = module_class_fixture.Point(5, 6)
+say "module-qualified: " + string(q.total())
+
+get MakePoint from module_class_fixture
+var r dynamic = MakePoint(7, 8)
+say "from module function: " + string(r.total())
+
+var s dynamic = p.moved(1, 1)
+say "method makes another: " + string(s.total())
+say "and the original is untouched: " + string(p.total())

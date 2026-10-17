@@ -1,0 +1,13 @@
+#! Fixture for tests/module_classes.ind: a class that lives in a module.
+class Point
+    var x int = 0
+    var y int = 0
+
+    fun total
+        give x + y
+
+    fun moved dx dy
+        give Point(x + dx, y + dy)
+
+fun MakePoint a b
+    give Point(a, b)

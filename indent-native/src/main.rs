@@ -791,6 +791,14 @@ enum ModuleEntry {
     Value(Value),
     Func(Arc<FunctionDef>),
     Imported(Callable),
+    /// A class the module defines.
+    ///
+    /// Classes were simply dropped when a module's runtime was folded into a
+    /// `ModuleInstance`: `get Point from geom` reported "Module 'geom' does not
+    /// export 'Point'" no matter how the class was written. They are a namespace of
+    /// their own in `Runtime` (a class is not a callable and not a variable), so the
+    /// entry type is what carries them across the module boundary.
+    Class(Arc<ClassDef>),
 }
 
 #[derive(Debug, Clone)]
@@ -7275,6 +7283,13 @@ fn import_stmt(
                 Some(ModuleEntry::Value(v)) => {
                     ctx.rt.vars.insert(bind, v.clone());
                 }
+                // An imported class goes into the caller's class table, which is
+                // where `exec_call_inner` looks when it is asked to construct one.
+                Some(ModuleEntry::Class(class_def)) => {
+                    Arc::make_mut(&mut ctx.rt.classes)
+                        .insert(bind, (**class_def).clone());
+                    ctx.rt.class_gen += 1;
+                }
                 _ => {
                     return Err(format!(
                         "Module '{}' does not export '{}'",
@@ -7346,6 +7361,16 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
     }
     for (name, f) in Arc::make_mut(&mut module_runtime.funcs).drain() {
         entries.insert(name, ModuleEntry::Func(f));
+    }
+    // Classes last: they are a separate namespace, so their order against the other
+    // three does not matter — but they have to be *here*, which they were not. A
+    // module may export the same name as both a variable and a class (`std/discord`
+    // exports `Bot` as a namespace object), and the variable is what `get X from
+    // mod` resolved before classes could travel at all, so it keeps the name.
+    for (name, class_def) in Arc::make_mut(&mut module_runtime.classes).drain() {
+        entries
+            .entry(name)
+            .or_insert(ModuleEntry::Class(Arc::new(class_def)));
     }
     let module = Arc::new(ModuleInstance { entries });
 
@@ -7517,6 +7542,11 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
+    }
+
+    // A class that lives in a module: `geom.Point(3, 4)`.
+    if let Some(class_def) = module_member_class(callee, ctx) {
         return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
@@ -8135,6 +8165,15 @@ fn invoke_method_on_value(
             ctx.rt.reclaim_tables_from(temp_rt);
             return out;
         }
+        // `geom.Point(5, 6)` arrives here, not as a plain call: the parser sees
+        // `name.member(...)` as a method call on `name`, so a module-qualified
+        // constructor is a method call whose receiver is the module. Without this
+        // arm a class exported by a module could be imported but never constructed
+        // through the module's own name.
+        if let Some(ModuleEntry::Class(class_def)) = m.entries.get(method) {
+            let class_def = (**class_def).clone();
+            return Ok(instantiate_class(&class_def, args, ctx.rt));
+        }
         return Err(format!("Module has no function '{method}'"));
     }
 
@@ -8272,16 +8311,39 @@ fn invoke_callable_value(
     }
 }
 
+/// The class a module-qualified name refers to: `geom.Point`.
+///
+/// A class is neither a callable nor a variable, so it cannot travel through
+/// `resolve_callable`; the call paths ask this question before they resolve a
+/// function, which is what makes `geom.Point(3, 4)` construct an instance instead of
+/// reporting "Module has no function 'Point'".
+fn module_member_class(callee: &str, ctx: &ExecContext<'_>) -> Option<ClassDef> {
+    let (left, right) = callee.split_once('.')?;
+    let module = ctx.get_module(left)?;
+    match module.entries.get(right) {
+        Some(ModuleEntry::Class(class_def)) => Some((**class_def).clone()),
+        _ => None,
+    }
+}
+
 fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, String> {
     if let Some((left, right)) = callee.split_once('.') {
         let module = ctx
             .get_module(left)
             .ok_or_else(|| format!("Undefined module '{}'", left))?;
-        if matches!(module.entries.get(right), Some(ModuleEntry::Func(_))) {
-            return Ok(Callable::External {
-                module,
-                name: right.to_string(),
-            });
+        match module.entries.get(right) {
+            Some(ModuleEntry::Func(_)) => {
+                return Ok(Callable::External {
+                    module,
+                    name: right.to_string(),
+                })
+            }
+            Some(ModuleEntry::Class(_)) => {
+                return Err(format!(
+                    "'{callee}' is a class; construct it with {callee}(...)"
+                ))
+            }
+            _ => {}
         }
         return Err(format!("Module '{}' has no function '{}'", left, right));
     }
@@ -8649,6 +8711,11 @@ fn invoke_callable_values(
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
+    }
+
+    // A class that lives in a module, reached through the module's name.
+    if let Some(class_def) = module_member_class(callee, ctx) {
         return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
