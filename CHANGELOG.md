@@ -1,5 +1,69 @@
 # Indent Changelog
 
+## 2.4.1-exp7 — 2026-10-17 (experimental — operators as enums)
+
+Seventh experimental build of 2.4.1. This is the audit's operator item, and it
+turned up a second, larger finding on the way.
+
+### A compiled body no longer re-reads its operators as text
+
+`VmInstr::Bin` and `VmInstr::Unary` carried the operator as a `String` — one heap
+allocation per operator per compiled body — and handed it to `eval_binary`, which
+opens with a match over `&str` literals. So every `<`, `+` and `==` a compiled loop
+evaluated paid a length compare and a `memcmp` for each arm it rejected, to work out
+something the *parser* already knew.
+
+The set of operators is fixed, so the name is now resolved to a `BinaryOp` /
+`UnaryOp` discriminant at compile time and the run-time decision is a jump table. A
+body carrying an operator the enums do not know is simply not compiled, which keeps
+the tree-walker the fallback for anything unusual.
+
+The pay-off is a second, narrower step that the enum makes possible: for two `Int`
+operands the VM now answers the operator itself, with no call into `eval_binary` at
+all. Every guard in that fast path mirrors a guard in `eval_binary` — the `2^52`
+bound where integer and `f64` arithmetic still agree, the tighter `2^26` bound for
+`*`, "only an exact division is an int" so `7 / 2` stays `3.5`, a zero divisor
+falling through so `1 / 0` stays infinity, and shift counts outside the type falling
+through. `eval_binary` remains the single source of truth for what an operator
+*means*: mixed types, strings and containers, `Object` operator methods and every
+error message still go through it.
+
+Measured against the exp6 release build, interleaved, best of seven, on this
+machine:
+
+| benchmark | exp6 | exp7 | change |
+|---|---|---|---|
+| `bench_nested_loops` | 833.7 ms | 727.3 ms | **−12%** |
+| `bench_branch_loop` | 18.7 ms | 16.4 ms | **−12%** |
+| `bench_int_arith` | 54.2 ms | 50.0 ms | **−7%** |
+| `bench_while_loop` | 18.8 ms | 17.6 ms | **−6%** |
+| `bench_for_loop` | 80.6 ms | 78.2 ms | −2% |
+| `bench_loops` | 15.1 ms | 14.8 ms | −2% |
+| `bench_hot_paths` | 74.4 ms | 73.7 ms | −1% |
+| `bench_calls` | 170.3 ms | 167.5 ms | −1% |
+| `bench_dict_heavy` | 53.2 ms | 52.8 ms | 0% |
+| `bench_string_ops` | 5.63 ms | 5.83 ms | +3% (see below) |
+
+`bench_string_ops` measured 3-4% slower in two separate 20-repetition runs, and it is
+worth saying why that number is not attributable to this change. Its hot loop
+increments with `i += 1`, which the parser turns into `Stmt::AssignOp` — and
+`AssignOp` is not one of the statements the VM compiler accepts, so that whole
+`while` body runs on the tree-walker in **both** builds. Nothing this build changed
+is on its path. As a control, the same binary pair measured with `INDENT_VM=0` came
+out 1% *faster* on the new build, i.e. within this machine's per-operation noise
+floor. It is layout, not operator dispatch — and the reason the loop is not compiled
+is the subject of the next build.
+
+### Overflow of `+` now wraps, like every other integer arm
+
+`eval_binary`'s `(Int, Int)` arm for `+` was the one integer operation written as
+`x + y` while its neighbours used `wrapping_add`/`wrapping_sub`. A release build wraps
+either way, so this changes nothing that ships — but it is the kind of difference
+that makes a fast path disagree with the slow path it is meant to reproduce, and the
+new integer fast path is exactly that kind of duplicate.
+
+---
+
 ## 2.4.1-exp6 — 2026-10-17 (experimental — colour parsing and gradient rendering)
 
 Sixth experimental build of 2.4.1.

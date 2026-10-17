@@ -3981,6 +3981,184 @@ fn vm_enabled() -> bool {
 /// Maximum operand-stack depth. Deeper bodies stay in the tree-walker.
 const VM_STACK: usize = 16;
 
+/// A binary operator, resolved once when the body is compiled.
+///
+/// The VM used to carry the operator as a `String` per instruction and hand it to
+/// `eval_binary`, which opened with a match over `&str` literals — a length
+/// compare plus a `memcmp` for each arm it rejects, on every `<`, `+` and `==` a
+/// compiled loop evaluates. The set of operators is fixed by the parser, so the
+/// name can be turned into a discriminant at compile time (a body that somehow
+/// carries an unknown operator is simply not compiled) and the run-time decision
+/// is a jump table.
+///
+/// `eval_binary` stays the single source of truth for *what an operator means*:
+/// `as_str` gives the name back, so anything the fast path below does not cover —
+/// mixed types, string and container arms, `Object` operator methods, every error
+/// message — is decided in exactly one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Pow,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    In,
+    NotIn,
+    Is,
+    IsNot,
+    And,
+    Or,
+    BitOr,
+    BitAnd,
+    BitXor,
+    Shl,
+    Shr,
+}
+
+impl BinaryOp {
+    /// The operator a name denotes. `None` for anything the parser cannot emit,
+    /// which is what keeps a hand-written or future operator on the tree-walker.
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "+" => BinaryOp::Add,
+            "-" => BinaryOp::Sub,
+            "*" => BinaryOp::Mul,
+            "/" => BinaryOp::Div,
+            "%" => BinaryOp::Rem,
+            "**" => BinaryOp::Pow,
+            "==" => BinaryOp::Eq,
+            "!=" => BinaryOp::Ne,
+            "<" => BinaryOp::Lt,
+            "<=" => BinaryOp::Le,
+            ">" => BinaryOp::Gt,
+            ">=" => BinaryOp::Ge,
+            "in" => BinaryOp::In,
+            "not in" => BinaryOp::NotIn,
+            "is" => BinaryOp::Is,
+            "is not" => BinaryOp::IsNot,
+            "and" => BinaryOp::And,
+            "or" => BinaryOp::Or,
+            "|" => BinaryOp::BitOr,
+            "&" => BinaryOp::BitAnd,
+            "^" => BinaryOp::BitXor,
+            "<<" => BinaryOp::Shl,
+            ">>" => BinaryOp::Shr,
+            _ => return None,
+        })
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Rem => "%",
+            BinaryOp::Pow => "**",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Le => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Ge => ">=",
+            BinaryOp::In => "in",
+            BinaryOp::NotIn => "not in",
+            BinaryOp::Is => "is",
+            BinaryOp::IsNot => "is not",
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+            BinaryOp::BitOr => "|",
+            BinaryOp::BitAnd => "&",
+            BinaryOp::BitXor => "^",
+            BinaryOp::Shl => "<<",
+            BinaryOp::Shr => ">>",
+        }
+    }
+
+    /// The answer for two integer operands, when it is exactly what `eval_binary`
+    /// would return from integer arithmetic alone.
+    ///
+    /// `None` means "ask `eval_binary`": either the operation is not one of these,
+    /// or the operands are outside the range where the integer and floating-point
+    /// paths agree — `7 / 2` must stay `3.5`, `1 / 0` must stay infinity, and a
+    /// product past `2^26` must go through the float path that `eval_binary` uses
+    /// for it. Every guard here mirrors a guard in `eval_binary`; the two are
+    /// tested against each other by the suite, which runs in both engines.
+    #[inline]
+    fn int_fast(self, x: i64, y: i64) -> Option<Value> {
+        let exact = x.unsigned_abs() <= EXACT_INT_MAG && y.unsigned_abs() <= EXACT_INT_MAG;
+        match self {
+            BinaryOp::Add => Some(Value::Int(x.wrapping_add(y))),
+            BinaryOp::Sub if exact => Some(Value::Int(x.wrapping_sub(y))),
+            BinaryOp::Mul
+                if x.unsigned_abs() <= EXACT_INT_MUL_MAG && y.unsigned_abs() <= EXACT_INT_MUL_MAG =>
+            {
+                Some(Value::Int(x.wrapping_mul(y)))
+            }
+            // Only an exact division is an int; `7 / 2` and `1 / 0` belong to the
+            // float path.
+            BinaryOp::Div if exact && y != 0 && x % y == 0 => Some(Value::Int(x / y)),
+            // A zero divisor is NaN on the float path, not an error, so it falls
+            // through like the rest.
+            BinaryOp::Rem if exact && y != 0 => Some(Value::Int(x % y)),
+            BinaryOp::Eq => Some(Value::Bool(x == y)),
+            BinaryOp::Ne => Some(Value::Bool(x != y)),
+            BinaryOp::Lt if exact => Some(Value::Bool(x < y)),
+            BinaryOp::Le if exact => Some(Value::Bool(x <= y)),
+            BinaryOp::Gt if exact => Some(Value::Bool(x > y)),
+            BinaryOp::Ge if exact => Some(Value::Bool(x >= y)),
+            // Bitwise operators are integer-only in `eval_binary` too, so these
+            // are the whole arm rather than a fast path into it.
+            BinaryOp::BitOr => Some(Value::Int(x | y)),
+            BinaryOp::BitAnd => Some(Value::Int(x & y)),
+            BinaryOp::BitXor => Some(Value::Int(x ^ y)),
+            // A shift count outside the type is a panic in Rust and a plain wrong
+            // answer after wrapping, so only sane counts take this path.
+            BinaryOp::Shl if (0..64).contains(&y) => Some(Value::Int(x << y)),
+            BinaryOp::Shr if (0..64).contains(&y) => Some(Value::Int(x >> y)),
+            _ => None,
+        }
+    }
+}
+
+/// A unary operator, resolved once when the body is compiled. Same reasoning as
+/// `BinaryOp`; `apply_unary` still decides what an operator means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnaryOp {
+    Neg,
+    Pos,
+    Not,
+    BitNot,
+}
+
+impl UnaryOp {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "-" => UnaryOp::Neg,
+            "+" => UnaryOp::Pos,
+            "not" => UnaryOp::Not,
+            "~" => UnaryOp::BitNot,
+            _ => return None,
+        })
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            UnaryOp::Neg => "-",
+            UnaryOp::Pos => "+",
+            UnaryOp::Not => "not",
+            UnaryOp::BitNot => "~",
+        }
+    }
+}
+
 /// One instruction of a compiled program.
 #[derive(Debug, Clone)]
 enum VmInstr {
@@ -3991,7 +4169,7 @@ enum VmInstr {
     /// Pop a value into frame slot `n`.
     StoreSlot(u16),
     /// Pop two operands and push `eval_binary(op, a, b)`.
-    Bin(String),
+    Bin(BinaryOp),
     /// Pop and discard an expression statement's result.
     Pop,
     /// Pop a condition and jump to the given instruction when it is falsy.
@@ -4052,7 +4230,7 @@ enum VmInstr {
     /// Pop a value and concatenate it onto frame slot `slot` in place.
     ConcatSlot(u16),
     /// Pop one operand and push the result of a unary operator.
-    Unary(String),
+    Unary(UnaryOp),
     /// Pop one value and push its truth as a boolean.
     ToBool,
     /// Peek at the top of the stack: jump when it is falsy, leaving it there, so
@@ -4489,7 +4667,10 @@ fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
             if !vm_compile_expr(rhs, prog) {
                 return false;
             }
-            prog.instrs.push(VmInstr::Unary(op.clone()));
+            match UnaryOp::from_name(op) {
+                Some(op) => prog.instrs.push(VmInstr::Unary(op)),
+                None => return false,
+            }
         }
         Expr::Binary { op, lhs, rhs } if op == "and" || op == "or" => {
             // Short-circuit, as `eval_ast` does: the right operand is only
@@ -4535,7 +4716,11 @@ fn vm_compile_expr(e: &Expr, prog: &mut VmProgram) -> bool {
             if !vm_compile_expr(rhs, prog) {
                 return false;
             }
-            prog.instrs.push(VmInstr::Bin(op.clone()));
+            // Resolved here, once, rather than matched as text on every pass.
+            match BinaryOp::from_name(op) {
+                Some(op) => prog.instrs.push(VmInstr::Bin(op)),
+                None => return false,
+            }
         }
         Expr::Ternary {
             cond,
@@ -5161,7 +5346,7 @@ fn vm_compile_nested(mode: &RepeatMode, body: &[Stmt], prog: &mut VmProgram, rt:
             let count = count.unwrap_or(reps);
             prog.instrs.push(VmInstr::LoadSlot(reps));
             prog.instrs.push(VmInstr::LoadSlot(count));
-            prog.instrs.push(VmInstr::Bin("<".to_string()));
+            prog.instrs.push(VmInstr::Bin(BinaryOp::Lt));
             exit = prog.instrs.len();
             prog.instrs.push(VmInstr::JumpIfFalse(usize::MAX));
         }
@@ -5898,6 +6083,17 @@ fn vm_run(
                         sp = sp.checked_sub(2).ok_or_else(vm_underflow)?;
                         let a = stack[sp].clone();
                         let b = stack[sp + 1].clone();
+                        // Two ints: the whole operator is decided here, with no
+                        // string match, no operand copy for a method lookup and no
+                        // possibility of user code running.
+                        if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
+                            if let Some(v) = op.int_fast(*x, *y) {
+                                *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = v;
+                                sp += 1;
+                                ip += 1;
+                                continue;
+                            }
+                        }
                         // Only an Object operand can reach user code (through one
                         // of its operator methods).
                         let object_operand =
@@ -5905,7 +6101,7 @@ fn vm_run(
                         if object_operand {
                             vm_flush_slots(prog, &mut values, ctx);
                         }
-                        let result = eval_binary(op, a, b, ctx);
+                        let result = eval_binary(op.as_str(), a, b, ctx);
                         if object_operand {
                             vm_pull_slots(prog, &mut values, ctx);
                         }
@@ -5917,7 +6113,8 @@ fn vm_run(
                     VmInstr::Unary(op) => {
                         sp = sp.checked_sub(1).ok_or_else(vm_underflow)?;
                         let v = stack[sp].clone();
-                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? = apply_unary(op, v)?;
+                        *stack.get_mut(sp).ok_or_else(|| vm_overflow())? =
+                            apply_unary(op.as_str(), v)?;
                         sp += 1;
                         ip += 1;
                     }
@@ -16264,7 +16461,11 @@ fn eval_binary(op: &str, a: Value, b: Value, ctx: &mut ExecContext<'_>) -> Resul
             let a_type = a.type_name();
             let b_type = b.type_name();
             match (a, b) {
-            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
+            // `wrapping_add`, like every other integer arm here (`-` already used
+            // `wrapping_sub`): overflow wraps in a release build anyway, and saying
+            // so keeps a debug build from panicking where a release build does not
+            // — and keeps the VM's integer fast path bit-identical to this one.
+            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
             (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 + y)),
             (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
