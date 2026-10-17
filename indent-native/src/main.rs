@@ -6130,12 +6130,16 @@ fn vm_run(
                     VmInstr::Call { callee, argc } => {
                         let n = *argc as usize;
                         sp = sp.checked_sub(n).ok_or_else(vm_underflow)?;
-                        let args: Vec<Value> = stack[sp..sp + n].to_vec();
+                        // The operand stack range *is* the argument slice: no vector
+                        // and no clone per call. It borrows `stack` only until the
+                        // call returns, and the push below overwrites the range that
+                        // held the arguments, so the order here matters.
+                        let args = &stack[sp..sp + n];
                         // Hand the loop's variables over before user code can look
                         // at them, and read its writes back afterwards — including
                         // when it fails, so the write-back below cannot put a value
                         // the callee replaced back into the frame.
-                        let user_code = vm_call_runs_user_code(callee, &args, ctx);
+                        let user_code = vm_call_runs_user_code(callee, args, ctx);
                         if user_code {
                             vm_flush_slots(prog, &mut values, ctx);
                         }
@@ -7205,7 +7209,7 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
     if let Ok(callable) = resolve_callable(callee, ctx) {
         // An `async fun` call returns a future: schedule it on a background thread.
         if ctx.rt.async_funcs.contains(callee) && matches!(callable, Callable::Local(_)) {
-            let task_args: Vec<Value> = positional.clone();
+            let task_args: Vec<Value> = positional.to_vec();
             return spawn_task_builtin(callee, &task_args, ctx);
         }
         return match callable {
@@ -8060,10 +8064,16 @@ fn invoke_callable_expr(
     for arg in args {
         positional.push(eval_ast(arg, ctx)?);
     }
-    invoke_callable_values(callee, positional, ctx)
+    invoke_callable_values(callee, &positional, ctx)
 }
 
 /// Invoke `callee` with already-evaluated positional arguments.
+///
+/// Takes a **slice**, not a `Vec`: the VM's call instruction used to build a fresh
+/// vector out of its operand stack for every call, which is an allocation plus an
+/// argument clone per call on the hottest path there is. Everything here reads the
+/// arguments; the two places that need to own them (the `spawn`/`future` thread
+/// boundary) copy explicitly, which is where a copy belongs.
 ///
 /// Split out of `invoke_callable_expr` so a compiled expression reaches exactly
 /// the same dispatch — the same prefixes, the same shadowing order, the same
@@ -8071,7 +8081,7 @@ fn invoke_callable_expr(
 /// therefore agree on what a call means by construction.
 fn invoke_callable_values(
     callee: &str,
-    positional: Vec<Value>,
+    positional: &[Value],
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
     // Object `len` special method (natural name).
@@ -8164,7 +8174,7 @@ fn invoke_callable_values(
     if let Ok(callable) = resolve_callable(callee, ctx) {
         // An `async fun` call returns a future: schedule it on a background thread.
         if ctx.rt.async_funcs.contains(callee) && matches!(callable, Callable::Local(_)) {
-            let task_args: Vec<Value> = positional.clone();
+            let task_args: Vec<Value> = positional.to_vec();
             return spawn_task_builtin(callee, &task_args, ctx);
         }
         return match callable {

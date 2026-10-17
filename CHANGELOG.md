@@ -1,5 +1,56 @@
 # Indent Changelog
 
+## 2.4.1-exp3 — 2026-10-16 (experimental — VM call arguments)
+
+Third experimental build of 2.4.1. A second external audit was verified item by item
+against the source: all seven of its findings are real. This build carries the one that
+is both contained and measurable, plus the correctness unification that came out of
+checking the rest.
+
+### Calls no longer build an argument vector in the VM
+
+`invoke_callable_values` took a `Vec<Value>`, so the VM's `Call` instruction built a
+fresh vector out of its own operand stack for **every call** — an allocation and an
+argument clone on the hottest path in the interpreter. It takes `&[Value]` now, and the
+instruction passes its stack range directly. The two places that genuinely need to own
+their arguments — the `spawn` and `async fun` thread boundaries — copy explicitly, so
+that cost is paid where a copy is unavoidable instead of by every call in the program.
+
+Measured against the exp2 release build, interleaved, best of nine, identical
+checksums: **`bench_calls` 181 → 167 ms (−7.7%)**, and the method-call probe
+167 → 164 ms.
+
+### Method dispatch unified across both paths
+
+`invoke_method_on_place` and `invoke_method_on_value` both resolve names through
+`ClassMeta::find_method` now. The value path used to look methods up as
+`methods.get(method.to_ascii_lowercase())` — an exact hit against a *folded* name,
+which can never match a method declared `getValue`. It was not reachable from user
+syntax (`make(1).getValue 2` and `list[0].getValue 3` do not parse), so the defect
+never showed, but the inconsistency is gone, and `tests/method_case_dispatch.ind` pins
+case-insensitive dispatch on every path that is reachable — including inside a
+compiled loop body. The place path also stopped building a folded copy it no longer
+needs, so it can take the exact map hit.
+
+### Not in this build, and why
+
+- **Module-call injection (#01), copy-on-write object fields (#02), shared task
+  registries (#06)** are architectural: each changes name-resolution or value-sharing
+  semantics across the whole interpreter, and #02 should be preceded by object-aliasing
+  tests that do not exist yet. They belong in their own builds, each with the
+  measurement that justifies it — the audit itself says it has not benchmarked them.
+- **Operator enums (#04)** span the parser, the instruction set and `eval_binary`. A
+  closely related change (a specialised `BinOp`) measured as a net loss earlier in this
+  project, so this needs its own measurement rather than an assumption.
+- **VM slot flush/pull (#05)**: the cheap half is precomputed slot roles, but `counters`
+  holds at most the loop-nesting depth, so the flagged `contains` is a handful of
+  integer comparisons per slot. The audit's own advice — instrument before adding
+  bookkeeping — is the prerequisite, not the change.
+- The smaller #07 targets (ANSI rendering, colour parsing, the task-history queue,
+  `VM_STACK`) are cold paths, or need fallback statistics before they can be sized.
+
+---
+
 ## 2.4.1-exp2 — 2026-10-16 (experimental — per-call overhead)
 
 Second experimental build of 2.4.1. An external source audit of this tree was checked
