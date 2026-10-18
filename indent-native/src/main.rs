@@ -791,19 +791,23 @@ enum ModuleEntry {
     Value(Value),
     Func(Arc<FunctionDef>),
     Imported(Callable),
-    /// A class the module defines.
-    ///
-    /// Classes were simply dropped when a module's runtime was folded into a
-    /// `ModuleInstance`: `get Point from geom` reported "Module 'geom' does not
-    /// export 'Point'" no matter how the class was written. They are a namespace of
-    /// their own in `Runtime` (a class is not a callable and not a variable), so the
-    /// entry type is what carries them across the module boundary.
-    Class(Arc<ClassDef>),
 }
 
 #[derive(Debug, Clone)]
 struct ModuleInstance {
     entries: Map<String, ModuleEntry>,
+    /// The classes the module defines, kept in their own namespace.
+    ///
+    /// A class is neither a value nor a callable, so it does not belong in
+    /// `entries` — and squeezing it in there cost exactly what you would expect: a
+    /// module that exports a *namespace variable* and a *class* under the same name
+    /// (the pattern `std/discord` uses for `Bot`, and the natural way to write
+    /// `class Bot` next to a `Bot` helper table) can only keep one of them, so the
+    /// class silently disappeared. `Runtime` has always kept classes apart from
+    /// variables; this makes the module namespace match it, so both are reachable at
+    /// once: `get Bot from mod` can bind the value while `Bot(...)` constructs the
+    /// class.
+    classes: Map<String, Arc<ClassDef>>,
 }
 
 /// A list's elements, shared by every binding that holds them.
@@ -7272,30 +7276,36 @@ fn import_stmt(
                     .modules
                     .insert(module_name.to_string(), module.clone());
             }
+            // The two namespaces are independent, so a name can arrive twice: a
+            // module exporting `Bot` as a table *and* as a class gives the importer
+            // both, and `Bot.foo` reads the table while `Bot(...)` constructs. Binding
+            // one and not the other is what made a same-named class look "dropped".
+            let mut bound = false;
             match module.entries.get(symbol) {
                 Some(ModuleEntry::Func(_)) => {
                     let callable = Callable::External {
                         module: module.clone(),
                         name: symbol.to_string(),
                     };
-                Arc::make_mut(&mut ctx.rt.callables).insert(bind, callable);
+                    Arc::make_mut(&mut ctx.rt.callables).insert(bind.clone(), callable);
+                    bound = true;
                 }
                 Some(ModuleEntry::Value(v)) => {
-                    ctx.rt.vars.insert(bind, v.clone());
+                    ctx.rt.vars.insert(bind.clone(), v.clone());
+                    bound = true;
                 }
-                // An imported class goes into the caller's class table, which is
-                // where `exec_call_inner` looks when it is asked to construct one.
-                Some(ModuleEntry::Class(class_def)) => {
-                    Arc::make_mut(&mut ctx.rt.classes)
-                        .insert(bind, (**class_def).clone());
-                    ctx.rt.class_gen += 1;
-                }
-                _ => {
-                    return Err(format!(
-                        "Module '{}' does not export '{}'",
-                        module_name, symbol
-                    ));
-                }
+                _ => {}
+            }
+            if let Some(class_def) = module.classes.get(symbol) {
+                Arc::make_mut(&mut ctx.rt.classes).insert(bind, (**class_def).clone());
+                ctx.rt.class_gen += 1;
+                bound = true;
+            }
+            if !bound {
+                return Err(format!(
+                    "Module '{}' does not export '{}'",
+                    module_name, symbol
+                ));
             }
         }
     }
@@ -7362,17 +7372,15 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
     for (name, f) in Arc::make_mut(&mut module_runtime.funcs).drain() {
         entries.insert(name, ModuleEntry::Func(f));
     }
-    // Classes last: they are a separate namespace, so their order against the other
-    // three does not matter — but they have to be *here*, which they were not. A
-    // module may export the same name as both a variable and a class (`std/discord`
-    // exports `Bot` as a namespace object), and the variable is what `get X from
-    // mod` resolved before classes could travel at all, so it keeps the name.
-    for (name, class_def) in Arc::make_mut(&mut module_runtime.classes).drain() {
-        entries
-            .entry(name)
-            .or_insert(ModuleEntry::Class(Arc::new(class_def)));
-    }
-    let module = Arc::new(ModuleInstance { entries });
+    // Classes last, into their own map: they are a separate namespace, so a module
+    // may export a variable and a class under one name and both stay reachable. They
+    // also have to be *here*, which is the part that was missing — a module's class
+    // table was dropped on the floor when its runtime was folded into this struct.
+    let classes: Map<String, Arc<ClassDef>> = Arc::make_mut(&mut module_runtime.classes)
+        .drain()
+        .map(|(name, class_def)| (name, Arc::new(class_def)))
+        .collect();
+    let module = Arc::new(ModuleInstance { entries, classes });
 
     {
         let mut cache = ctx.rt.module_cache.lock().unwrap();
@@ -8170,7 +8178,7 @@ fn invoke_method_on_value(
         // constructor is a method call whose receiver is the module. Without this
         // arm a class exported by a module could be imported but never constructed
         // through the module's own name.
-        if let Some(ModuleEntry::Class(class_def)) = m.entries.get(method) {
+        if let Some(class_def) = m.classes.get(method) {
             let class_def = (**class_def).clone();
             return Ok(instantiate_class(&class_def, args, ctx.rt));
         }
@@ -8320,10 +8328,7 @@ fn invoke_callable_value(
 fn module_member_class(callee: &str, ctx: &ExecContext<'_>) -> Option<ClassDef> {
     let (left, right) = callee.split_once('.')?;
     let module = ctx.get_module(left)?;
-    match module.entries.get(right) {
-        Some(ModuleEntry::Class(class_def)) => Some((**class_def).clone()),
-        _ => None,
-    }
+    module.classes.get(right).map(|class_def| (**class_def).clone())
 }
 
 fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, String> {
@@ -8338,7 +8343,7 @@ fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, Str
                     name: right.to_string(),
                 })
             }
-            Some(ModuleEntry::Class(_)) => {
+            _ if module.classes.contains_key(right) => {
                 return Err(format!(
                     "'{callee}' is a class; construct it with {callee}(...)"
                 ))

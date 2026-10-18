@@ -11,3 +11,16 @@ class Point
 
 fun MakePoint a b
     give Point(a, b)
+
+#! Deliberately exports `Bot` twice — as a class *and* as a namespace table, which is
+#! the shape a real module ends up with. Classes are a separate namespace from
+#! variables, so both have to survive the trip; collapsing them into one entry meant
+#! whichever was folded last silently won.
+class Bot
+    var token string = ""
+    var prefix string = ""
+
+    fun describe
+        give "bot(" + prefix + ")"
+
+var Bot dynamic = {"kind": "bot-namespace", "version": 2}

@@ -25,3 +25,10 @@ say "from module function: " + string(r.total())
 var s dynamic = p.moved(1, 1)
 say "method makes another: " + string(s.total())
 say "and the original is untouched: " + string(p.total())
+
+#! A name exported as both a class and a table: the class has to construct, and the
+#! table has to still be readable, because they are different namespaces.
+get Bot from module_class_fixture
+var b dynamic = Bot("tok", "!")
+say "same-name class: " + string(b.describe())
+say "same-name table: " + string(Bot.kind) + " v" + string(Bot.version)
