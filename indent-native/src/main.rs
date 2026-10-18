@@ -8136,19 +8136,21 @@ fn invoke_method_on_value(
     // 2. Dict with function property (JS-style objects)
     if let Value::DictShared(ref map) = target_val {
         if let Some(Value::Func(fn_name)) = map.get(method) {
-            let exprs: Vec<Expr> = args.iter().map(|v| match v {
-                Value::Int(i) => Expr::Int(*i),
-                Value::Float(f) => Expr::Float(*f),
-                Value::Bool(b) => Expr::Bool(*b),
-                Value::StrShared(s) => Expr::Str(s.to_string()),
-                Value::Empty => Expr::Empty,
-                _ => Expr::Str(v.to_string()),
-            }).collect();
-            let mut temp_rt = Runtime::bare_sharing(PathBuf::from("."), ctx.rt);
-            temp_rt.vars = dict_to_map(map);
-            ctx.rt.lend_tables_to(&mut temp_rt);
-            let out = invoke_callable_expr(fn_name, &exprs, &mut ExecContext::new(&mut temp_rt));
-            ctx.rt.reclaim_tables_from(temp_rt);
+            let fn_name = fn_name.clone();
+            // The table's keys are visible to the method as variables — that is how
+            // `ctx.send(...)` reaches `token` and `channel_id`. They go into a frame
+            // of the *caller's* context rather than a temporary runtime: a throwaway
+            // runtime lost every write the method made to module state, so
+            // `bot.command(...)` registered nothing, and it flattened list and dict
+            // arguments to text on the way in.
+            ctx.push_frame();
+            if let Some(frame) = ctx.frames.last_mut() {
+                for (k, v) in map.iter() {
+                    frame.vars.insert(k.clone(), v.clone());
+                }
+            }
+            let out = invoke_callable_value(&Value::Func(fn_name), args, ctx);
+            ctx.pop_frame();
             return out;
         }
     }

@@ -1,33 +1,37 @@
 #! =============================================================================
-#! discord.ind 6.7 — The Indent Discord bot library
+#! discord.ind 6.9 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
 #! command routing, event system, puzzle/cog loader, a discord.py-style `ctx`
 #! system, clean block-style helpers, and a built-in audit/monitoring suite.
-#! Import it and write your bot.
 #!
-#! 🆕 v6.0 adds: Real Bot API (Bot, Command, Ready, Message, Interaction,
-#! MemberJoin, MemberLeave, Start, Audit) — production-grade, minimal boilerplate.
-#! Also: voice gateway, file attachments, 36-flag permissions, paginators,
-#! enhanced cache, auto-complete, ResolveUser, cooldowns, and more.
+#! 🆕 v6.9 — AMBIENT BOT: no `bot` argument, no `bot is ...` reassignment!
+#! Just like discord.py:
 #!
-#! NOTE: the native Indent runtime passes function arguments by value, so every
-#! function that modifies the bot RETURNS the modified bot. Always reassign:
-#!   bot is addCmd bot "kick" kickCmd ["user"]
-#!   bot is LoadPuzzles bot "puzzles"
+#!   get BotFromEnv, Command, On, Start, CtxReply from discord
+#!   BotFromEnv                             # create the ambient bot
+#!   Command "help" "Show help" helpCmd     # no bot, no reassignment
+#!   On "message" onMsg
+#!   fun helpCmd ctx args                   # handlers get ctx, not bot
+#!       CtxReply ctx "Hi!"
+#!   fun onMsg msg
+#!       say "someone said " + msg.content
+#!   Start
 #!
-#! 🚀 3-line bot:
-#!   get QuickBot from discord
-#!   var bot dynamic = QuickBot "TOKEN" "!"
-#!   Run bot
+#! Handlers receive their event data only (e.g. `fun onMsg msg`). Need the bot
+#! itself? call `GetBot()` (e.g. `GetBot().user.id`).
 #!
-#! ⚡ With commands:
-#!   get QuickBot from discord
-#!   var bot dynamic = QuickBot "TOKEN" "!"
-#!   AddCommand bot "ping" "Check latency" handler
-#!   On bot "ready" readyHandler
-#!   Run bot
+#! 🆕 v6.8 — concise registration + typed args (explicit-bot forms still work):
+#!   Command bot "greet" "Greet someone"      # handler defaults to the name
+#!   bot is Commands bot [["riddle","A riddle"], ["echo","Answer"]]
+#!   bot is Group bot "role" "Roles" [["add","Add","roleAdd"]]
+#!   var uid string = CtxArgUser ctx 1        # typed args (mention-aware)
+#!
+#! NOTE on semantics: the native runtime passes arguments by value, so a helper
+#! given an explicit `bot` only mutates a copy and must be reassigned. The
+#! ambient API sidesteps this by storing the bot in a module-level `_Bot` and
+#! mutating it in place — that is why `Command "help" ...` needs no reassignment.
 #!
 #! 🔒 Permission checks (new in 4.0):
 #!   get AddCheck, HasRole from discord
@@ -56,7 +60,7 @@ var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 #! discord package version
-var DiscordVersion string = "6.7.0"
+var DiscordVersion string = "7.0.0"
 
 #! REST layer configuration. The base is overridable for testing, self-hosting
 #! or going through a proxy; the retry cap mirrors discord.py's max_retries.
@@ -88,6 +92,76 @@ var _SESSION_ID string = ""
 var _RESUME_URL string = ""
 var _SEQ int = 0
 var _LAST_ACK float = 0.0
+
+#! ==============================================================
+#! 🌍  AMBIENT BOT — discord.py-style, no `bot` arg, no reassignment
+#! ==============================================================
+#! The native runtime passes dicts BY VALUE, so a helper that receives `bot`
+#! only mutates a copy — that is why older code needed `bot is Command bot ...`.
+#! To make the API feel like discord.py, this module keeps ONE ambient bot here
+#! and registration helpers mutate it in place (a module-level var is not a
+#! pass-by-value copy, so writes stick). You create it with `Bot`/`BotFromEnv`
+#! and then write `Command "help" ...`, `On "message" onMsg`, `Start` — with no
+#! `bot` argument and no `bot is ...` reassignment.
+#!
+#! Handlers are called with their event data only (no `bot`); call `GetBot()`
+#! when a handler needs the bot itself (e.g. `GetBot().user.id`).
+var _Bot dynamic = {"token": "", "prefix": "!", "commands": {}, "handlers": {}, "_checks": {}, "_cooldowns": {}, "_aliases": {}, "_globalChecks": [], "_userCommands": {}, "_messageCommands": {}, "user": {}}
+
+#! The ambient bot (created by `Bot` / `BotFromEnv`). Returns the bot dict.
+fun GetBot
+    give _Bot
+
+#! Replace the ambient bot (useful for tests or multi-bot scripts).
+fun SetBot b
+    _Bot is _AttachSurface b
+    give _Bot
+
+#! Is `x` a bot dict (vs a string/number)? Used to let the registration helpers
+#! accept both `Command bot "name"` (explicit) and `Command "name"` (ambient).
+fun _IsBot x
+    var isBot int = 0
+    do:
+        var _kp dynamic = keys x
+        if has_key x "commands"
+            isBot is 1
+    catch as e:
+        isBot is 0
+    give isBot
+
+#! The discord.py spelling: attach `bot.command`, `bot.on`, `bot.run`, … to a bot.
+#!
+#! A bot is a table, so these are table entries whose values are this module's
+#! functions. They are called with their arguments as values and they mutate the
+#! ambient bot, so
+#!     bot.command("greet", "Greet someone")
+#! and
+#!     Command "greet" "Greet someone"
+#! are the same registration. The table form exists so code written against
+#! discord.py's `@bot.command()` reads the same way here; nothing else changes.
+#! Keys never collide with the bot's data (`commands`, `handlers`, `token`, …).
+fun _AttachSurface b
+    b["command"] is Command
+    b["on"] is On
+    b["event"] is On
+    b["handler"] is BotHandler
+    b["slash"] is Slash
+    b["add_slash"] is AddSlash
+    b["add_commands"] is Commands
+    b["alias"] is CommandAlias
+    b["check"] is AddCheck
+    b["global_check"] is AddGlobalCheck
+    b["cooldown"] is SetCooldown
+    b["error"] is SetErrorHandler
+    b["load"] is LoadPuzzles
+    b["run"] is Run
+    b["start"] is Run
+    b["ready"] is Ready
+    b["message"] is Message
+    b["interaction"] is Interaction
+    b["member_join"] is MemberJoin
+    b["member_leave"] is MemberLeave
+    give b
 
 #! Lightweight in-memory message cache (keyed by message id) so MESSAGE_DELETE
 #! / MESSAGE_UPDATE handlers can see the last-known message content.
@@ -644,6 +718,7 @@ fun HandleDispatch
 
     if t == "READY"
         bot.user is d.user
+        _Bot.user is d.user
         say "✅ Logged in as: " + d.user.username
         CallEvent bot "ready" d
 
@@ -999,6 +1074,13 @@ fun RunCommand
     #! remember the current source so clean-block helpers can reply
     _CTX is source
 
+    #! resolve command aliases (discord.py-style). A message/slash command sent
+    #! under an alias is redirected to its canonical command name.
+    if has_key bot "_aliases"
+        var _aliasMap dynamic = bot._aliases
+        if has_key _aliasMap cmd
+            cmd is _aliasMap[cmd]
+
     #! built-in: ping (measures REST latency)
     if cmd == "ping"
         var start float = time_perf_counter
@@ -1170,6 +1252,9 @@ fun ReplyTo
     #! interaction source
     InteractionReply token source content
 
+#! Fire an event. Handlers are called with the event data ONLY — no `bot`
+#! argument — matching discord.py's `on_message(message)`. Handlers that need
+#! the bot call `GetBot()`.
 fun CallEvent
     bot
     event
@@ -1181,7 +1266,7 @@ fun CallEvent
         if k == event
             found is handlers[k]
     if found != empty and found != ""
-        call_func_lenient found bot args ""
+        call_func_lenient found args
 
 #! ==============================
 #! ⏳  WAIT_FOR (4.0) — wait for the next occurrence of an event
@@ -1238,7 +1323,10 @@ fun WaitForPoll
 fun QuickBot
     token
     prefix
-    give {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0, "_checks": {}, "_cooldowns": {}, "_tasks": [], "_globalChecks": [], "_userCommands": {}, "_messageCommands": {}, "_waitData": empty, "_waitDone": 0}
+    var _nb dynamic = {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0, "_checks": {}, "_cooldowns": {}, "_tasks": [], "_globalChecks": [], "_userCommands": {}, "_messageCommands": {}, "_waitData": empty, "_waitDone": 0, "_aliases": {}}
+    _nb is _AttachSurface _nb
+    _Bot is _nb
+    give _nb
 
 #! Add a prefix command (handler = function reference — limited support)
 #! Returns bot — reassign:  bot is AddCommand bot "name" "desc" handler
@@ -1252,31 +1340,49 @@ fun AddCommand
     bot.commands is _cmds4
     give bot
 
-#! Add a handler-based command (handler_name = string function name)
-#! The handler is dispatched through the "command" event with a ctx object:
-#!   fun myHandler ctx args
-#!       CtxSend ctx "Hello!"
-#! Returns bot — reassign:  bot is BotHandler bot "name" "desc" "handlerName"
-fun BotHandler
-    bot
-    name
-    desc
-    handlerName
-    var _cmds5 dynamic = bot.commands
-    _cmds5[name] is {"description": desc, "handler_name": handlerName}
-    bot.commands is _cmds5
-    give bot
+#! Add a handler-based command (handler_name = string function name).
+#!   BotHandler bot "name" "desc" "handlerName"   (explicit bot — returns bot)
+#!   BotHandler "name" "desc" "handlerName"       (ambient — mutates _Bot)
+fun BotHandler ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var name dynamic = args[1]
+        var desc dynamic = args[2]
+        var handlerName dynamic = args[3]
+        var _cmds5 dynamic = bot.commands
+        _cmds5[name] is {"description": desc, "handler_name": handlerName}
+        bot.commands is _cmds5
+        give bot
+    var _nameA dynamic = args[0]
+    var _descA dynamic = args[1]
+    var _handA dynamic = args[2]
+    var _cmdsA dynamic = _Bot.commands
+    _cmdsA[_nameA] is {"description": _descA, "handler_name": _handA}
+    _Bot.commands is _cmdsA
+    give _Bot
 
-#! Add an event handler (handler is a string function name or a callable)
-#! Returns bot — reassign:  bot is On bot "ready" "onReady"
-fun On
-    bot
-    event
-    handler
-    var _handlers2 dynamic = bot.handlers
-    _handlers2[event] is handler
-    bot.handlers is _handlers2
-    give bot
+#! Add an event handler.
+#!   On bot "ready" "onReady"      (explicit bot — returns bot)
+#!   On "ready" "onReady"          (ambient — mutates _Bot)
+fun On ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var event dynamic = args[1]
+        var handler dynamic = args[2]
+        var _handlers2 dynamic = bot.handlers
+        _handlers2[event] is handler
+        bot.handlers is _handlers2
+        give bot
+    var _eventA dynamic = args[0]
+    var _handlerA dynamic = args[1]
+    var _handlersA dynamic = _Bot.handlers
+    _handlersA[_eventA] is _handlerA
+    _Bot.handlers is _handlersA
+    give _Bot
 
 #! ==============================
 #! ==============================
@@ -1300,19 +1406,23 @@ fun On
 #!
 #!   Start bot
 
-fun Bot
-    token
-    prefix
+#! Create the ambient bot and register the built-in ping/help/error handlers.
+#!   var bot = NewBot "TOKEN" "!"      # then register with the ambient helpers:
+#!   Command "help" "Show help" "helpCommand"
+#!   On "message" "onMessage"
+#!   Start
+#! (Registration helpers mutate the ambient bot directly, so both the ambient
+#!  spelling above and the discord.py spelling `bot.command(...)` / `bot.run()`
+#!  persist — see `_AttachSurface`.)
+fun NewBot token prefix
     var bot dynamic = QuickBot token prefix
-    #! Built-in commands
     bot is BotHandler bot "ping" "Check bot latency" "_bot_ping"
     bot is BotHandler bot "help" "List all commands" "_bot_help"
-    #! Built-in error handler
     bot is SetErrorHandler bot "_bot_error"
-    #! Health tracking
     bot._started is time_now
     bot._reconnects is 0
     bot._lastHb is time_now
+    _Bot is bot
     give bot
 
 fun _bot_ping
@@ -1326,9 +1436,8 @@ fun _bot_ping
 fun _bot_help
     ctx
     args
-    var cmds dynamic = {}
-    if has_key ctx "_bot"
-        cmds is ctx._bot.commands
+    var b dynamic = GetBot()
+    var cmds dynamic = b.commands
     var msg string = "**Commands:**\n"
     var keysList dynamic = keys cmds
     repeat k in keysList
@@ -1355,32 +1464,84 @@ fun _bot_error
         msg is msg + ": " + err
     CtxSend source msg
 
-#! Register a prefix+slash command with a ctx-based handler.
-#!   Command bot "greet" "Greet someone" "onGreet"
-#!   fun onGreet ctx
-#!       CtxSend ctx "Hello " + CtxUserName ctx
+#! Register a command whose handler receives `(ctx, args)`.
 #!
-#! Accepts the legacy 6.0 shapes too, so the same code works whether this module
-#! or a compatibility shim is the one that resolves:
-#!   Command bot prefix name desc handler          (5 args)
-#!   Command bot prefix name desc handler options  (6 args)
+#! 🆕 CONCISE FORM (recommended) — the handler defaults to the command name, so
+#! you never repeat the name and you never type the prefix:
+#!   Command bot "greet"                    # handler = "greet", no description
+#!   Command bot "greet" "Greet someone"    # handler = "greet"
 #!
-#! Taking `...args` rather than fixed parameters is deliberate: the two shapes are
-#! indistinguishable positionally, and picking one meant that whichever `discord`
-#! module the loader found first decided whether a bot started at all — a 5-arg
-#! call against the 4-param version failed with "Too many positional arguments"
-#! depending on module search order.
+#! FULL FORMS:
+#!   Command bot name                        -> handler=name, desc="", no options
+#!   Command bot name desc                   -> handler=name
+#!   Command bot name desc handler           -> explicit handler
+#!   Command bot name desc handler options   -> explicit handler + slash options
+#!
+#! LEGACY 6.0 FORMS (still accepted; the prefix is stripped because the bot's
+#! own prefix is what routes commands):
+#!   Command bot prefix name desc handler
+#!   Command bot prefix name desc handler options
+#!
+#! `handler` may be a name string or a function reference. The modified bot is
+#! returned — or, in ambient form, `_Bot` is mutated and returned (no reassign):
+#!   Command bot "greet" "Greet someone"     (explicit)
+#!   Command "greet" "Greet someone"         (ambient — recommended)
 fun Command ...args
-    var n int = len(args)
-    if n == 4
-        give CommandCtx args[0] args[1] args[2] args[3] empty
-    if n == 5
-        #! [bot, prefix, name, desc, handler] — the prefix is ignored: routing
-        #! uses the bot's own prefix.
-        give CommandCtx args[0] args[2] args[3] args[4] empty
-    if n == 6
-        give CommandCtx args[0] args[2] args[3] args[4] args[5]
-    give empty
+    if len(args) < 1
+        give _Bot
+    #! Explicit-bot form: Command bot "name" [desc] [handler] [options]
+    if _IsBot args[0]
+        give _CommandOn args[0] args[1:]
+    #! Ambient form: Command "name" [desc] [handler] [options]
+    _Bot is _CommandOn _Bot args
+    give _Bot
+
+#! Internal: register a command on a specific bot, inferring the handler.
+fun _CommandOn bot rest
+    var r int = len(rest)
+    if r < 1
+        give bot
+    #! Strip a legacy leading prefix token ("!"/"?"/...) if present.
+    var start int = 0
+    if r >= 2
+        if _IsPrefixToken bot rest[0]
+            start is 1
+    var a dynamic = rest[start:]
+    var m int = len(a)
+    if m == 1
+        give CommandCtx bot a[0] "" a[0] empty
+    if m == 2
+        give CommandCtx bot a[0] a[1] a[0] empty
+    if m == 3
+        give CommandCtx bot a[0] a[1] a[2] empty
+    give CommandCtx bot a[0] a[1] a[2] a[3]
+
+#! True when `token` looks like a command prefix ("!", "?", "$", ".", "/", ...)
+#! rather than a command name. A token is a prefix if it equals the bot's own
+#! prefix, or if its first character is not a letter, digit, underscore or dash.
+#! This is what lets `Command` accept both the concise and the legacy shapes.
+fun _IsPrefixToken bot token
+    if has_key bot "prefix"
+        if bot.prefix != empty and bot.prefix != ""
+            if token == bot.prefix
+                give 1
+    if len(token) == 0
+        give 0
+    var c int = ord token
+    if c >= 48
+        if c <= 57
+            give 0
+    if c >= 65
+        if c <= 90
+            give 0
+    if c >= 97
+        if c <= 122
+            give 0
+    if c == 95
+        give 0
+    if c == 45
+        give 0
+    give 1
 
 #! Register a prefix+slash command whose handler receives `(ctx, args)`.
 #! This is the simplest command API in the package — no event plumbing:
@@ -1401,54 +1562,280 @@ fun CommandCtx bot name desc handlerName options = empty
     bot.commands is cmds
     give bot
 
-#! Register a READY event handler. Handler receives (bot).
-#!   Ready bot "onReady"
-#!   fun onReady bot
-#!       say "Bot online as " + bot.user.username
-fun Ready
-    bot
-    handlerName
-    bot is On bot "ready" handlerName
-    give bot
+#! ==============================================================
+#! 🧰  DISCORD.PY-STYLE ERGONOMICS (v6.8)
+#! ==============================================================
+#! Terser registration helpers plus typed argument converters so command code
+#! looks much closer to discord.py: name handlers once, get typed args back.
 
-#! Register a MESSAGE event handler. Handler receives (bot, msg).
-#!   Message bot "onMsg"
-#!   fun onMsg bot msg
-#!       CtxSend msg "Hello!"
-fun Message
-    bot
-    handlerName
-    bot is On bot "message" handlerName
-    give bot
+#! Register MANY commands in a single call — the terse command table.
+#! Each entry is a list; the handler defaults to the command name:
+#!   [name]                          handler = name
+#!   [name, description]             handler = name
+#!   [name, description, handler]
+#!   [name, description, handler, options]
+#!
+#!   bot is Commands bot [
+#!       ["riddle", "A riddle"],
+#!       ["echo",   "Riddle answer"],
+#!       ["math",   "A math puzzle"],
+#!       ["guess",  "Guess a number"],
+#!       ["puzzles","List puzzle commands"]
+#!   ]
+fun Commands ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        give _CommandsOn args[0] args[1]
+    _Bot is _CommandsOn _Bot args[0]
+    give _Bot
+
+fun _CommandsOn bot specs
+    var b dynamic = bot
+    repeat spec in specs
+        var entry dynamic = spec
+        var cnt int = len(entry)
+        if cnt == 1
+            b is CommandCtx b entry[0] "" entry[0] empty
+        or cnt == 2
+            b is CommandCtx b entry[0] entry[1] entry[0] empty
+        or cnt == 3
+            b is CommandCtx b entry[0] entry[1] entry[2] empty
+        otherwise
+            b is CommandCtx b entry[0] entry[1] entry[2] entry[3]
+    give b
+
+#! Concise slash-command registration. The handler defaults to the name.
+#!   Slash bot "greet" "Greet someone"                 -> handler = "greet"
+#!   Slash bot "ban" "Ban a member" "onBan"            -> explicit handler
+#!   Slash bot "ban" "Ban" "onBan" [UserOption "user" "Who" true]
+fun Slash ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var snameX dynamic = args[1]
+        var sdescX dynamic = args[2]
+        var hsX dynamic = snameX
+        if len(args) >= 4
+            hsX is args[3]
+        var optX dynamic = []
+        if len(args) >= 5
+            optX is args[4]
+        give AddSlash bot snameX sdescX hsX optX
+    var snameA dynamic = args[0]
+    var sdescA dynamic = args[1]
+    var hsA dynamic = snameA
+    if len(args) >= 3
+        hsA is args[2]
+    var optA dynamic = []
+    if len(args) >= 4
+        optA is args[3]
+    _Bot is AddSlash _Bot snameA sdescA hsA optA
+    give _Bot
+
+#! Give a command one or more aliases (discord.py-style `aliases=[...]`).
+#!   bot is CommandAlias bot "ban" "b"
+#!   bot is CommandAlias bot "help" "h" "commands"
+fun CommandAlias ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var target dynamic = args[1]
+        var amap dynamic = {}
+        if has_key bot "_aliases"
+            amap is bot._aliases
+        var i int = 2
+        repeat while i < len(args)
+            amap[args[i]] is target
+            i is i + 1
+        bot._aliases is amap
+        give bot
+    var targetA dynamic = args[0]
+    var amapA dynamic = {}
+    if has_key _Bot "_aliases"
+        amapA is _Bot._aliases
+    var j int = 1
+    repeat while j < len(args)
+        amapA[args[j]] is targetA
+        j is j + 1
+    _Bot._aliases is amapA
+    give _Bot
+
+#! Register a command that GROUPS several subcommands, routed as
+#! `!group sub ...`. Each sub is [name, description, handler] (handler defaults
+#! to the sub name). A bare `!group` lists the subcommands.
+#!
+#!   bot is Group bot "role" "Role management" [
+#!       ["add",    "Add a role",    "roleAdd"],
+#!       ["remove", "Remove a role", "roleRemove"]
+#!   ]
+#! `!role add 123 456` calls `fun roleAdd ctx args` with args = ["123","456"].
+fun Group bot name desc subs
+    var b dynamic = bot
+    var subList dynamic = []
+    repeat spec in subs
+        var entry dynamic = spec
+        var sname string = entry[0] + ""
+        var sdesc string = ""
+        if len(entry) >= 2
+            sdesc is entry[1] + ""
+        var shandler string = sname
+        if len(entry) >= 3
+            shandler is entry[2] + ""
+        subList is append subList {"name": sname, "handler": shandler, "description": sdesc}
+    var groupCmd dynamic = {"description": desc, "ctx_handler": "_group_dispatch", "slash": 1, "options": [], "group": subList}
+    var cmds dynamic = b.commands
+    cmds[name] is groupCmd
+    b.commands is cmds
+    give b
+
+#! Internal dispatcher for `Group` commands: routes `!group sub rest...` to the
+#! sub handler, or lists the subcommands when none is given.
+fun _group_dispatch ctx args
+    var cmdName string = ctx.cmd
+    var entry dynamic = ctx.bot.commands[cmdName]
+    var subs dynamic = entry.group
+    if len(args) < 1
+        var lines string = ""
+        repeat s in subs
+            lines is lines + "\n`" + cmdName + " " + s.name + "` — " + s.description
+        CtxReply ctx ("**" + cmdName + "** subcommands:" + lines)
+        give empty
+    var subName string = args[0]
+    var rest dynamic = args[1:]
+    repeat s in subs
+        if s.name == subName
+            call_func_lenient s.handler ctx rest
+            give empty
+    CtxReply ctx ("Unknown subcommand `" + subName + "`")
+
+#! ---- Argument converters (discord.py-style typed arguments) ----
+#! Ctx args are raw strings for message commands. These helpers read the Nth
+#! (1-based) argument and convert it, mirroring discord.py's converters:
+#!   fun ban ctx args
+#!       var uid string = CtxArgUser ctx 1        # "<@123>" or "123" -> "123"
+#!       var days int = CtxArgInt ctx 2 7         # 2nd arg or default 7
+#!   CtxArg / CtxArgUser / CtxArgRole / CtxArgChannel / CtxArgInt / CtxArgFloat
+#!   / CtxArgMention
+
+#! Raw Nth (1-based) argument as a value. Message commands pass a list of
+#! strings, so this returns the Nth string ("" when missing). Slash commands
+#! deliver already-typed values in a dict — read those directly from ctx.args.
+fun CtxArg ctx n
+    var a dynamic = ctx.args
+    var idx int = n - 1
+    if idx < 0
+        give ""
+    var total int = len(a)
+    if idx >= total
+        give ""
+    var out dynamic = ""
+    do:
+        out is a[idx]
+    catch as e1:
+        out is ""
+    give out
+
+#! Nth argument cleaned to a Discord user ID (strips "<@...>" / "<@!...>").
+fun CtxArgUser ctx n
+    var raw dynamic = CtxArg ctx n
+    give ConvertUserId raw
+
+#! Nth argument cleaned to a role ID (strips "<@&...>").
+fun CtxArgRole ctx n
+    var raw dynamic = CtxArg ctx n
+    give ConvertRoleId raw
+
+#! Nth argument cleaned to a channel ID (strips "<#...>").
+fun CtxArgChannel ctx n
+    var raw dynamic = CtxArg ctx n
+    give ConvertChannelId raw
+
+#! Nth argument as an integer, or `default` when missing / not numeric.
+fun CtxArgInt ctx n default = 0
+    var rawVal dynamic = CtxArg ctx n
+    var raw string = string(rawVal)
+    if raw == "" or raw == empty
+        give default
+    var out int = default
+    do:
+        out is int(raw)
+    catch as err:
+        out is default
+    give out
+
+#! Nth argument as a float, or `default` when missing / not numeric.
+fun CtxArgFloat ctx n default = 0.0
+    var rawVal dynamic = CtxArg ctx n
+    var raw string = string(rawVal)
+    if raw == "" or raw == empty
+        give default
+    var out float = default
+    do:
+        out is float(raw)
+    catch as err:
+        out is default
+    give out
+
+#! Nth argument rendered as a user mention "<@id>" (empty when missing).
+fun CtxArgMention ctx n
+    var rawVal dynamic = CtxArg ctx n
+    var uid string = ConvertUserId rawVal
+    if uid == ""
+        give ""
+    give "<@" + uid + ">"
+
+#! Register a READY event handler. Handlers receive the event data only (no bot).
+#!   Ready "onReady"        (ambient)
+#!   Ready bot "onReady"    (explicit)
+#!   fun onReady            # no args; use GetBot() if you need the bot
+fun Ready ...args
+    if _IsBot args[0]
+        give On args[0] "ready" args[1]
+    _Bot is On _Bot "ready" args[0]
+    give _Bot
+
+#! Register a MESSAGE event handler. Handler receives the message (no bot).
+#!   Message "onMsg"        fun onMsg msg
+fun Message ...args
+    if _IsBot args[0]
+        give On args[0] "message" args[1]
+    _Bot is On _Bot "message" args[0]
+    give _Bot
 
 #! Register an INTERACTION event handler.
-#!   Interaction bot "onBtn"
-#!   fun onBtn bot interaction
-#!       CtxSend interaction "Clicked!"
-fun Interaction
-    bot
-    handlerName
-    bot is On bot "interaction" handlerName
-    give bot
+#!   Interaction "onBtn"    fun onBtn interaction
+fun Interaction ...args
+    if _IsBot args[0]
+        give On args[0] "interaction" args[1]
+    _Bot is On _Bot "interaction" args[0]
+    give _Bot
 
 #! Register a member-join handler.
-fun MemberJoin
-    bot
-    handlerName
-    bot is On bot "member_join" handlerName
-    give bot
+fun MemberJoin ...args
+    if _IsBot args[0]
+        give On args[0] "member_join" args[1]
+    _Bot is On _Bot "member_join" args[0]
+    give _Bot
 
 #! Register a member-leave handler.
-fun MemberLeave
-    bot
-    handlerName
-    bot is On bot "member_leave" handlerName
-    give bot
+fun MemberLeave ...args
+    if _IsBot args[0]
+        give On args[0] "member_leave" args[1]
+    _Bot is On _Bot "member_leave" args[0]
+    give _Bot
 
 #! Start the bot: sync slash commands, connect gateway, run forever.
-#! Handles auto-reconnect, health logging.
-fun Start
-    bot
+#!   Start          (ambient — the normal case)
+#!   Start bot      (explicit)
+fun Start ...args
+    var bot dynamic = _Bot
+    if len(args) >= 1
+        if _IsBot args[0]
+            bot is args[0]
+    _Bot is bot
     say "Starting bot..."
     SyncSlash bot
     say "Slash commands synced. Connecting to Discord..."
@@ -1477,28 +1864,49 @@ fun Audit
 
 #! Register a check function for a specific command.
 #! Returns bot — reassign:  bot is AddCheck bot "kick" "IsModerator"
-fun AddCheck
-    bot
-    cmdName
-    checkFnName
-    var checksStore dynamic = {}
-    if has_key bot "_checks"
-        checksStore is bot._checks
-    checksStore[cmdName] is checkFnName
-    bot._checks is checksStore
-    give bot
+fun AddCheck ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var cmdName dynamic = args[1]
+        var checkFnName dynamic = args[2]
+        var checksStore dynamic = {}
+        if has_key bot "_checks"
+            checksStore is bot._checks
+        checksStore[cmdName] is checkFnName
+        bot._checks is checksStore
+        give bot
+    var cmdA dynamic = args[0]
+    var chkA dynamic = args[1]
+    var storeA dynamic = {}
+    if has_key _Bot "_checks"
+        storeA is _Bot._checks
+    storeA[cmdA] is chkA
+    _Bot._checks is storeA
+    give _Bot
 
 #! Register a global check (runs for ALL commands).
 #! Returns bot — reassign:  bot is AddGlobalCheck bot "IsOwner"
-fun AddGlobalCheck
-    bot
-    checkFnName
-    var gcs dynamic = []
-    if has_key bot "_globalChecks"
-        gcs is bot._globalChecks
-    append gcs checkFnName
-    bot._globalChecks is gcs
-    give bot
+fun AddGlobalCheck ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var checkFnName dynamic = args[1]
+        var gcs dynamic = []
+        if has_key bot "_globalChecks"
+            gcs is bot._globalChecks
+        append gcs checkFnName
+        bot._globalChecks is gcs
+        give bot
+    var chkA dynamic = args[0]
+    var gcsA dynamic = []
+    if has_key _Bot "_globalChecks"
+        gcsA is _Bot._globalChecks
+    append gcsA chkA
+    _Bot._globalChecks is gcsA
+    give _Bot
 
 #! Built-in: check that the user has at least one of the given role IDs.
 #! Usage:  bot is AddCheck bot "kick" "IsModerator"
@@ -1569,11 +1977,15 @@ fun IsOwnerCheck
 #!   bot is SetErrorHandler bot "onCmdError"
 #!   fun onCmdError bot cmd err
 #!       CtxSend err.ctx "❌ " + err.message
-fun SetErrorHandler
-    bot
-    handlerName
-    bot._errorHandler is handlerName
-    give bot
+fun SetErrorHandler ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        bot._errorHandler is args[1]
+        give bot
+    _Bot._errorHandler is args[0]
+    give _Bot
 
 #! ==============================
 #! ⏱️  COOLDOWNS (4.0)
@@ -1583,16 +1995,27 @@ var _COOLDOWNS dynamic = {}
 
 #! Set a cooldown (seconds) on a command. 0 = no cooldown.
 #! Returns bot — reassign:  bot is SetCooldown bot "kick" 30
-fun SetCooldown
-    bot
-    cmdName
-    seconds
-    var cds dynamic = {}
-    if has_key bot "_cooldowns"
-        cds is bot._cooldowns
-    cds[cmdName] is seconds
-    bot._cooldowns is cds
-    give bot
+fun SetCooldown ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        var bot dynamic = args[0]
+        var cmdName dynamic = args[1]
+        var seconds dynamic = args[2]
+        var cds dynamic = {}
+        if has_key bot "_cooldowns"
+            cds is bot._cooldowns
+        cds[cmdName] is seconds
+        bot._cooldowns is cds
+        give bot
+    var cmdA dynamic = args[0]
+    var secA dynamic = args[1]
+    var cdsA dynamic = {}
+    if has_key _Bot "_cooldowns"
+        cdsA is _Bot._cooldowns
+    cdsA[cmdA] is secA
+    _Bot._cooldowns is cdsA
+    give _Bot
 
 #! Check+enforce cooldown. Returns "" if OK, or an error message if on cooldown.
 #! Called automatically by RunCommand before executing a handler.
@@ -2454,6 +2877,7 @@ fun connectOnce
 
                 if t == "READY"
                     bot.user is d.user
+                    _Bot.user is d.user
                     if has_key d "session_id"
                         _SESSION_ID is d.session_id
                     if has_key d "resume_gateway_url"
@@ -2582,9 +3006,14 @@ fun connectOnce
             #! heartbeat ACK — the socket is healthy
             _LAST_ACK is time_now
 
-#! Start the bot — connects, and reconnects automatically if dropped
-fun Run
-    bot
+#! Start the bot — connects, and reconnects automatically if dropped.
+#!   Run          (ambient)      Run bot      (explicit)
+fun Run ...args
+    var bot dynamic = _Bot
+    if len(args) >= 1
+        if _IsBot args[0]
+            bot is args[0]
+    _Bot is bot
     say "🤖 Connecting to Discord..."
     var attempts int = 0
     repeat
@@ -2623,15 +3052,24 @@ fun Run
 #!   command "greet" "Say hello"
 #!   reply "Hello there! 👋"
 
-#! Load all puzzles from a directory (.ind files — legacy .ath also accepted).
-#! Returns bot — reassign:  bot is LoadPuzzles bot "puzzles"
-fun LoadPuzzles
-    bot
-    dir
+#! Load all puzzles from a directory.   LoadPuzzles "puzzles"   (ambient)
+#!                                        LoadPuzzles bot "puzzles"  (explicit)
+fun LoadPuzzles ...args
+    var bot dynamic = _Bot
+    var dir dynamic = "puzzles"
+    var _amb int = 1
+    if len(args) >= 1
+        if _IsBot args[0]
+            bot is args[0]
+            dir is args[1]
+            _amb is 0
+        otherwise
+            dir is args[0]
     say "Loading puzzles from " + dir + "..."
     var files dynamic = os_list_dir dir
     if files == empty
         say "   (no puzzle files found)"
+        _Bot is bot
         give bot
 
     repeat file in files
@@ -2649,6 +3087,7 @@ fun LoadPuzzles
             bot is LoadPuzzle bot path name
         catch as err:
             say "   ⚠️ puzzle error in " + file + ": " + err
+    _Bot is bot
     give bot
 
 #! Load a single puzzle file. Returns bot.
@@ -2778,14 +3217,12 @@ fun BotFromEnv
         say "❌ Set DISCORD_TOKEN or BOT_TOKEN in .glo or .env"
         process_exit 1
     var prefix string = os_getenv "DISCORD_PREFIX" "!"
-    give Bot token prefix
+    give NewBot token prefix
 
-#! Run a bot with puzzle auto-loading
+#! Run a bot with puzzle auto-loading (ambient)
 fun RunWithPuzzles
-    bot
-    bot is LoadPuzzles bot "puzzles"
-    bot is LoadPuzzles bot "./puzzles"
-    Run bot
+    LoadPuzzles "puzzles"
+    Run
 
 #! ==============================
 #! ✨  CLEANER HELPERS
@@ -2883,7 +3320,41 @@ fun RegisterCog
 #!
 #! Helpers: CtxSend, CtxReply, CtxEmbed, CtxEphemeral, CtxEdit
 
-#! Build a context dict from command data
+#! 🧭  CONTEXT — a dict with callable methods (Python-like), usable from modules
+#! Handlers receive `ctx`, and call methods on it directly:
+#!   fun help ctx args
+#!       ctx.send("Hello " + ctx.user_name)   # or ctx.reply(...), ctx.embed(e)
+#! Fields: ctx.author, ctx.user_id, ctx.user_name, ctx.guild_id, ctx.channel_id,
+#!         ctx.args, ctx.cmd, ctx.source, ctx.bot
+#! (Each ctx.method is a function-valued key on the dict; the runtime passes the
+#!  dict's keys in as variables when called, so the method can use token/channel.)
+fun _ctx_send content
+    give Send token channel_id content
+fun _ctx_reply content
+    give ReplyTo token source content
+fun _ctx_embed e
+    give SendEmbed token channel_id e
+fun _ctx_send_embed e
+    give SendEmbed token channel_id e
+fun _ctx_ephemeral content
+    give InteractionEphemeral token source content
+fun _ctx_edit content
+    give InteractionEdit token source content
+fun _ctx_is_interaction
+    var hasA int = 0
+    if has_key source "author"
+        hasA is 1
+    if hasA == 0
+        give true
+    give false
+fun _ctx_user
+    give author
+fun _ctx_guild
+    give guild_id
+fun _ctx_channel
+    give channel_id
+
+#! Build a Context dict (with callable methods) from command data.
 fun Ctx
     bot
     token
@@ -2895,7 +3366,7 @@ fun Ctx
     var guildId string = ""
     #! Guard every field: DM messages have no guild_id and interactions carry
     #! their channel under different keys, so a plain `source.guild_id` would
-    #! throw "Dictionary has no key 'guild_id'" for perfectly valid events.
+    #! throw for perfectly valid events.
     if has_key source "author"
         if source.author != empty
             author is source.author
@@ -2912,25 +3383,48 @@ fun Ctx
                 guildId is source.guild_id
     if author == empty or author == {}
         author is {"id": "", "username": "unknown"}
-    give {"bot": bot, "token": token, "source": source, "cmd": cmd, "args": args, "author": author, "channel_id": channelId, "guild_id": guildId}
+    var uid string = ""
+    var uname string = ""
+    if has_key author "id"
+        uid is author.id
+    if has_key author "username"
+        uname is author.username
+    var c dynamic = {"bot": bot, "token": token, "source": source, "cmd": cmd, "args": args, "author": author, "channel_id": channelId, "guild_id": guildId, "user_id": uid, "user_name": uname}
+    c["send"] is _ctx_send
+    c["reply"] is _ctx_reply
+    c["embed"] is _ctx_embed
+    c["send_embed"] is _ctx_send_embed
+    c["ephemeral"] is _ctx_ephemeral
+    c["edit"] is _ctx_edit
+    c["is_interaction"] is _ctx_is_interaction
+    c["user"] is _ctx_user
+    c["guild"] is _ctx_guild
+    c["channel"] is _ctx_channel
+    give c
 
-#! Send a message to the context's channel
+#! Send a message to the context's channel (works on Context objects & dicts)
 fun CtxSend
     ctx
     content
     give Send ctx.token ctx.channel_id content
 
 #! Reply to the context's source (message reply or interaction reply).
-#! A ctx built by hand with only `token`/`channel_id` (no `source`) falls back
-#! to sending in the channel, so simple contexts always work.
+#! Falls back to a plain channel send when there is no source.
 fun CtxReply
     ctx
     content
-    if not has_key ctx "source"
+    var hasSrc int = 0
+    var src dynamic = empty
+    do:
+        src is ctx.source
+        hasSrc is 1
+    catch as e0:
+        hasSrc is 0
+    if hasSrc == 0
         give Send ctx.token ctx.channel_id content
-    if ctx.source == empty
+    if src == empty or src == {}
         give Send ctx.token ctx.channel_id content
-    give ReplyTo ctx.token ctx.source content
+    give ReplyTo ctx.token src content
 
 #! Send an embed to the context's channel
 fun CtxEmbed
@@ -2942,11 +3436,18 @@ fun CtxEmbed
 fun CtxEphemeral
     ctx
     content
-    if not has_key ctx "source"
+    var hasSrc int = 0
+    var src dynamic = empty
+    do:
+        src is ctx.source
+        hasSrc is 1
+    catch as e0:
+        hasSrc is 0
+    if hasSrc == 0
         give Send ctx.token ctx.channel_id content
-    if ctx.source == empty
+    if src == empty or src == {}
         give Send ctx.token ctx.channel_id content
-    give InteractionEphemeral ctx.token ctx.source content
+    give InteractionEphemeral ctx.token src content
 
 #! Edit the original interaction response
 fun CtxEdit
@@ -3065,8 +3566,8 @@ fun replyEmbed token source title description color
     var iPath string = "/interactions/" + source.id + "/" + source.token + "/callback"
     Post iPath token {"type": 4, "data": {"embeds": [embed]}}
 
-#! ---- Clean bot creator ----
-fun NewBot token prefix
+#! ---- Clean bot creator (legacy dict form) ----
+fun NewBotDict token prefix
     give {"token": token, "prefix": prefix, "commands": {}, "handlers": {}, "user": {}, "_socketId": 0, "_ctx": {}}
 
 #! ---- Set command context (called internally before running a command) ----
@@ -3261,12 +3762,17 @@ fun NumberOption name desc required
 
 #! Register a slash command locally. handlerName receives (ctx, args) where
 #! args is a dict of option-name → value. Returns bot — reassign.
-fun AddSlash
-    bot
-    name
-    description
-    handlerName
-    options
+#! Register a slash command.  AddSlash bot name desc handler options  (explicit)
+#!                           AddSlash name desc handler options      (ambient)
+fun AddSlash ...args
+    if len(args) < 1
+        give _Bot
+    if _IsBot args[0]
+        give _AddSlashOn args[0] args[1] args[2] args[3] args[4]
+    _Bot is _AddSlashOn _Bot args[0] args[1] args[2] args[3]
+    give _Bot
+
+fun _AddSlashOn bot name description handlerName options
     var cmds dynamic = bot.commands
     #! Merge into an existing entry instead of replacing it, so a command first
     #! registered with `CommandCtx` keeps its (ctx, args) handler.

@@ -1,4 +1,4 @@
-# discord.ind 6.0 — The Discord Bot Library for Indent
+# discord.ind 7.0 — The Discord Bot Library for Indent
 
 A standalone Discord library (like discord.py) providing REST API, WebSocket
 Gateway, command routing, event system, puzzle/cog loader, a discord.py-style
@@ -18,6 +18,48 @@ your bot.
 > bot is On bot "ready" "onReady"
 > bot is LoadPuzzles bot "puzzles"
 > ```
+
+## 🐍 The discord.py method surface (v7.0)
+
+A bot also carries discord.py-style methods, so code written against
+`discord.py` reads the same way here. `bot.command(...)`, `bot.on(...)`,
+`bot.slash(...)` and `bot.run()` are the same registrations the ambient helpers
+perform — no `bot` argument to thread through, no reassignment:
+
+```indent
+get NewBot from discord
+
+var bot dynamic = NewBot token "!"
+
+bot.command("riddle", "A riddle")      # handler defaults to the name
+bot.on("ready", "onReady")
+bot.slash("ban", "Ban a member", "onBan")
+bot.run()
+```
+
+| discord.py | discord.ind |
+|---|---|
+| `@bot.command()` | `bot.command("name" [, desc [, handler [, options]]])` |
+| `@bot.event` | `bot.on("message", "handler")` — also `bot.event` |
+| `@bot.tree.command()` | `bot.slash("name", desc, handler, options)` |
+| `@bot.check` | `bot.check("fn")`, `bot.global_check("fn")` |
+| `@commands.cooldown` | `bot.cooldown("cmd", seconds)` |
+| `@bot.error` | `bot.error("fn")` |
+| `bot.load_extension` | `bot.load("puzzles")` |
+| `bot.run(token)` | `bot.run()` |
+| `ctx.send(...)` | `ctx.send(...)` (also `reply`, `embed`, `ephemeral`, `edit`) |
+
+Both spellings write to the same bot, so mixing them is fine:
+
+```indent
+bot.command("ping", "Check latency")
+Command "status" "Show status"      # ambient helper — same bot
+```
+
+Method dispatch passes argument *values* through, so option lists are real
+lists (`bot.slash("ban", "Ban", "onBan", [UserOption "user" "Who" true])`),
+and the method runs in the caller's scope, so the registration it performs is
+the one that sticks.
 
 ```indent
 get NewBot  from discord
@@ -74,6 +116,129 @@ Real-bot hardening, mirroring what `discord.py` does:
 
 ---
 
+## 🆕 v6.9 — Ambient bot: no `bot` argument, no reassignment
+
+The runtime passes dicts **by value**, so a helper given `bot` only mutates a
+copy — that's why older code needed `bot is Command bot …` everywhere. v6.9 adds
+an **ambient bot**: you create it once (`Bot`/`BotFromEnv`) and registration
+helpers mutate it in place, so there is **no `bot` argument and no
+reassignment** — exactly like a discord.py module-level `bot`.
+
+```indent
+get BotFromEnv, Command, On, Start, CtxReply from discord
+
+BotFromEnv                                   # create the ambient bot
+Command "help" "Show help" helpCmd           # no bot, no `bot is ...`
+Command "ping"
+On "ready" onReady
+On "message" onMsg
+
+fun helpCmd ctx args                         # commands get ctx (never bot)
+    CtxReply ctx "Hi!"
+fun onReady                                  # events get their data only
+    say "online as " + GetBot().user.username
+fun onMsg msg
+    say "someone said " + msg.content
+
+Start
+```
+
+Key rules:
+
+- **Handlers receive their event data only** — `fun onMsg msg`, never
+  `fun onMsg bot msg`. Need the bot? call `GetBot()` (e.g. `GetBot().user.id`).
+- **Registration mutates the ambient bot in place** — `Command "help" …`,
+  `On "message" onMsg`, `Slash "status" …`, `AddCheck`, `SetCooldown`,
+  `SetErrorHandler`, `LoadPuzzles "puzzles"`. No `bot is …`.
+- **Explicit-bot forms still work** (`Command bot "help" …` returns the bot) —
+  useful for tests or multiple bots; the helpers detect which form you used.
+- `GetBot()` / `SetBot b` read/replace the ambient bot.
+
+| Task | discord.py | discord.ind 6.9 (ambient) |
+|---|---|---|
+| create bot | `bot = Bot(...)` | `BotFromEnv` / `Bot token prefix` |
+| command | `@bot.command()` | `Command "name" [desc] [handler]` |
+| event | `@bot.event` `async def on_message(m)` | `On "message" onMsg` + `fun onMsg msg` |
+| slash | `@bot.tree.command()` | `Slash "name" "desc"` |
+| checks | `@commands.has_roles(...)` | `AddCheck "cmd" "checkFn"` |
+| cooldown | `@commands.cooldown(...)` | `SetCooldown "cmd" 30` |
+| error | `@command.error` | `SetErrorHandler "onErr"` |
+| cogs | `bot.add_cog(Cog())` | `LoadPuzzles "puzzles"` |
+| run | `bot.run(token)` | `Start` |
+
+---
+
+## 🆕 v6.8 — Concise, discord.py-style syntax
+
+Registering commands is now as terse as discord.py: the handler defaults to the
+command name, the prefix is never typed, and there is no trailing empty list.
+
+```indent
+get Bot from discord
+get Command from discord
+get Commands from discord
+get CtxReply from discord
+get CtxUserName from discord
+
+var bot dynamic = Bot "TOKEN" "!"
+
+#! One command — name only, or name + description (handler inferred):
+bot is Command bot "greet" "Greet someone"
+
+#! …or a whole command table in one call:
+var cmds dynamic = [["riddle", "A riddle"], ["echo", "Riddle answer"], ["math", "A math puzzle"]]
+bot is Commands bot cmds
+
+fun greet ctx args
+    CtxReply ctx ("Hello " + CtxUserName ctx)
+fun riddle ctx args
+    CtxReply ctx "I speak without a mouth and hear without ears. What am I?"
+```
+
+### `Command` — flexible shapes (all backward compatible)
+
+| Call | handler | notes |
+|---|---|---|
+| `Command bot name` | `name` | no description |
+| `Command bot name desc` | `name` | handler inferred |
+| `Command bot name desc handler` | `handler` | |
+| `Command bot name desc handler options` | `handler` | |
+| `Command bot prefix name desc handler` | `handler` | legacy 6.0 — prefix stripped |
+| `Command bot prefix name desc handler options` | `handler` | legacy 6.0 — prefix stripped |
+
+### New helpers (v6.8)
+
+| Function | Purpose |
+|---|---|
+| `Commands bot entries` | Register many commands at once. Each entry is `[name]`, `[name, desc]`, `[name, desc, handler]` or `[name, desc, handler, options]`. |
+| `Slash bot name desc [handler] [options]` | Slash-only command; handler defaults to the name. |
+| `CommandAlias bot name alias1 [alias2 …]` | Add one or more aliases (discord.py `aliases=[...]`). |
+| `Group bot name desc subs` | Register subcommands routed as `!group sub …`; a bare `!group` lists them. |
+| `CtxArgUser / CtxArgRole / CtxArgChannel ctx n` | Nth (1-based) arg converted to a clean ID (mention-aware). |
+| `CtxArgInt ctx n [default]` / `CtxArgFloat ctx n [default]` | Nth arg as a number, with a default. |
+| `CtxArgMention ctx n` | Nth arg rendered as `<@id>`. |
+| `CtxArg ctx n` | Nth raw argument. |
+
+### discord.py parity at a glance
+
+| discord.py | discord.ind |
+|---|---|
+| `@bot.command()` | `Command bot "name" …` / `Commands` |
+| `@bot.slash_command()` | `Slash bot …` / `AddSlash` |
+| `aliases=[...]` | `CommandAlias bot name alias` |
+| `commands.group` / subcommands | `Group bot name desc subs` |
+| converters (`Member`, `int`, …) | `CtxArgUser`, `CtxArgInt`, `CtxArgRole`, `CtxArgChannel`, `CtxArgFloat` |
+| `@commands.has_roles` | `AddCheck` + `HasRole` |
+| `@commands.cooldown` | `SetCooldown` |
+| `@command.error` | `SetErrorHandler` |
+| `ctx.send` / `ctx.reply` / `ctx.author` | `CtxSend` / `CtxReply` / `CtxUserId` + `CtxUserName` |
+| `discord.Embed` | `MakeEmbed` / `CtxEmbed` |
+| `discord.ui.Button` / `Select` | `Button`, `PrimaryButton`, `SelectMenu` |
+| `Cogs` | puzzles (`LoadPuzzles`) |
+| `Intents` | `bot.intents` / `DEFAULT_INTENTS` |
+
+---
+
 ## 🚀 v6.0 Bot API — the recommended way (minimal boilerplate)
 
 Discord 6.0 adds a production-grade Bot API: built-in `ping`/`help`, error
@@ -110,7 +275,8 @@ Start bot
 |---|---|---|
 | `Bot` | `token, prefix` | Create the bot: `QuickBot` + built-in `ping`/`help` + error handler + health timers. |
 | `CommandCtx` | `bot, name, desc, handler, [options]` | Register a **prefix + slash** command whose handler receives `(ctx, args)`. The simplest command API. |
-| `Command` | `bot, name, desc, handlerName` | Register a **prefix + slash** command that fires the `"command"` event (see note below). |
+| `Command` | `bot, name, [desc], [handler], [options]` | Register a **prefix + slash** command. Handler defaults to the command name (v6.8), so `Command bot "greet" "Greet someone"` just works. Legacy `bot, prefix, name, desc, handler` shapes still accepted. |
+| `Commands` | `bot, entries` | Register many commands in one call; handler inferred per entry. |
 | `Ready` | `bot, handlerName` | Register a READY handler. |
 | `Message` | `bot, handlerName` | Register a message handler. |
 | `Interaction` | `bot, handlerName` | Register an interaction (buttons/menus) handler. |
