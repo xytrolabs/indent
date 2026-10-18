@@ -7558,6 +7558,11 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
         return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
+    // A class of the module whose code is running: `fun NewT: give T "x"`.
+    if let Some(class_def) = module_scope_class(callee, ctx) {
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
+    }
+
     // Object `len` special method (natural name).
     if callee == "len" && positional.len() == 1 {
         if let Some(r) = call_object_method_value(&positional[0], "len", &[], ctx) {
@@ -8150,28 +8155,18 @@ fn invoke_method_on_value(
 
     // 2b. Module function invocation
     if let Value::Module(ref m) = target_val {
-        if let Some(ModuleEntry::Func(func_def)) = m.entries.get(method) {
-            let mut temp_rt = Runtime::bare_sharing(PathBuf::from("."), ctx.rt);
-            // The module's variables seed the temporary runtime; a function or an
-            // import sharing a name is not one, and the old `vars` map did not
-            // hold it either.
-            temp_rt.vars = m
-                .entries
-                .iter()
-                .filter_map(|(k, e)| match e {
-                    ModuleEntry::Value(v) => Some((k.clone(), v.clone())),
-                    _ => None,
-                })
-                .collect();
-            ctx.rt.lend_tables_to(&mut temp_rt);
-            let out = invoke_function(
-                func_def,
-                args,
-                &HashMap::new(),
-                &mut ExecContext::new(&mut temp_rt),
-            );
-            ctx.rt.reclaim_tables_from(temp_rt);
-            return out;
+        if let Some(ModuleEntry::Func(_)) = m.entries.get(method) {
+            // A module function called through the module object is the same function
+            // as one imported with `get Fn from mod`, so it runs the same way: in the
+            // caller's runtime, with the module pushed onto the scope stack. It used
+            // to run in a temporary runtime seeded with a *copy* of the module's
+            // variables, which meant every write a module function made to module
+            // state was thrown away with that runtime — `ai.SetBase(...)` followed by
+            // `ai.Chat(...)` sent the request to an empty base URL and came back
+            // empty, and the same code written as `get Chat from ai` behaved
+            // differently. One function, one meaning.
+            let module = Arc::clone(m);
+            return invoke_external_function(module, method, args, &HashMap::new(), ctx);
         }
         // `geom.Point(5, 6)` arrives here, not as a plain call: the parser sees
         // `name.member(...)` as a method call on `name`, so a module-qualified
@@ -8305,6 +8300,24 @@ fn invoke_callable_value(
 ) -> Result<Value, String> {
     match callee_val {
         Value::Func(name) => {
+            // The arguments are already evaluated, so hand the values straight to
+            // the function. Re-serialising them to `Expr` (the old path) flattened
+            // lists and dicts into strings: a table-dispatched call such as
+            // `bot.slash "cmd" [[...]]` arrived with its options as text.
+            if let Ok(callable) = resolve_callable(name, ctx) {
+                return match callable {
+                    Callable::Local(f) => invoke_function(&f, args, &HashMap::new(), ctx),
+                    Callable::External { module, name } => {
+                        invoke_external_function(module, &name, args, &HashMap::new(), ctx)
+                    }
+                    Callable::Builtin(name) => {
+                        invoke_builtin_callable(&name, args, &HashMap::new())
+                    }
+                };
+            }
+            // Builtins and call paths `resolve_callable` does not know still take
+            // the expression route, which is what makes `{"f": say}["f"] "hi"`
+            // (and a function value pointing at a class) reach `exec_call_expr`.
             let exprs: Vec<Expr> = args.iter().map(|v| match v {
                 Value::Int(i) => Expr::Int(*i),
                 Value::Float(f) => Expr::Float(*f),
@@ -8329,6 +8342,26 @@ fn module_member_class(callee: &str, ctx: &ExecContext<'_>) -> Option<ClassDef> 
     let (left, right) = callee.split_once('.')?;
     let module = ctx.get_module(left)?;
     module.classes.get(right).map(|class_def| (**class_def).clone())
+}
+
+/// A class defined by the module whose code is currently running.
+///
+/// `module_member_class` answers `geom.Point(3, 4)` — a class reached through a
+/// module name. This answers the bare `Point(3, 4)` that a module function writes
+/// when the class belongs to its *own* module, e.g. `std/discord.ind` doing
+/// `class Bot` … `fun NewBot: give Bot token`. A class is not a value, so it can
+/// never be exported into the runtime's symbol table; the scope stack is where
+/// sibling functions are already resolved, so classes are resolved there too.
+fn module_scope_class(callee: &str, ctx: &ExecContext<'_>) -> Option<ClassDef> {
+    if callee.contains('.') {
+        return None;
+    }
+    for module in ctx.module_scope.iter().rev() {
+        if let Some(class_def) = module.classes.get(callee) {
+            return Some((**class_def).clone());
+        }
+    }
+    None
 }
 
 fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, String> {
@@ -8721,6 +8754,11 @@ fn invoke_callable_values(
 
     // A class that lives in a module, reached through the module's name.
     if let Some(class_def) = module_member_class(callee, ctx) {
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
+    }
+
+    // A class of the module whose code is running (see `module_scope_class`).
+    if let Some(class_def) = module_scope_class(callee, ctx) {
         return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 

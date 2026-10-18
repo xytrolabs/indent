@@ -24,3 +24,17 @@ class Bot
         give "bot(" + prefix + ")"
 
 var Bot dynamic = {"kind": "bot-namespace", "version": 2}
+
+#! Module state set through a module function has to be visible to the next one.
+#! `mod.SetTag(...)` used to run in a throwaway runtime, so the write was discarded
+#! and every later call saw the module's original value — which is how `ai.SetBase`
+#! followed by `ai.Chat` ended up posting to an empty URL.
+var _tag string = "unset"
+
+fun SetTag t
+    _tag is t
+    give _tag
+
+fun GetTag
+    give _tag
+

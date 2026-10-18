@@ -32,3 +32,10 @@ get Bot from module_class_fixture
 var b dynamic = Bot("tok", "!")
 say "same-name class: " + string(b.describe())
 say "same-name table: " + string(Bot.kind) + " v" + string(Bot.version)
+
+#! State a module function writes must survive to the next module function call,
+#! whether it is reached through the module object or by a direct import.
+module_class_fixture.SetTag("through-object")
+get GetTag from module_class_fixture
+say "state set through the module object: " + string(module_class_fixture.GetTag())
+say "and through the import:            " + string(GetTag())
