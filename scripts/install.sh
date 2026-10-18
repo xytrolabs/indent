@@ -144,6 +144,10 @@ else
   fi
 
   RELEASE_JSON="$(curl "${CURL_OPTS[@]}" "$API_URL" 2>/dev/null || true)"
+  # The tag this run installs, so it can be recorded next to `channel` afterwards.
+  # Empty when it cannot be determined (a pinned URL), which is fine: the record is
+  # an aid to `--update`, not a requirement.
+  INSTALL_TAG=""
   if [[ "$INDENT_CHANNEL" == "exp" && "$INDENT_VERSION" == "latest" ]]; then
     EXP_TAG="$(printf "%s" "$RELEASE_JSON" | grep -oE '"tag_name": *"v[0-9][^"]*-[^"]*"' | head -n1 | sed -E 's/.*"(v[^"]+)".*/\1/' || true)"
     if [[ -z "$EXP_TAG" ]]; then
@@ -154,12 +158,19 @@ else
       echo "        https://github.com/${REPO}/releases"
       exit 1
     fi
+    INSTALL_TAG="$EXP_TAG"
     DOWNLOAD_URL="$(printf "%s" "$RELEASE_JSON" | grep -oE "https://[^\"]*indent-${EXP_TAG}-${TARGET}\\.tar\\.gz" | head -n1 || true)"
     if [[ -z "$DOWNLOAD_URL" ]]; then
       DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${EXP_TAG}/indent-${EXP_TAG}-${TARGET}.tar.gz"
     fi
   else
     DOWNLOAD_URL="$(printf "%s" "$RELEASE_JSON" | grep -oE "https://[^\"]*indent-v[^\"]*-${TARGET}\\.tar\\.gz" | head -n1 || true)"
+    # The stable URL names the tag, so it can be read back out of it.
+    INSTALL_TAG="$(printf "%s" "$DOWNLOAD_URL" | sed -nE 's#.*/download/(v[^/]+)/.*#\1#p')"
+    # A pinned --version is the tag itself.
+    if [[ -z "$INSTALL_TAG" && "$INDENT_VERSION" != "latest" ]]; then
+      INSTALL_TAG="v${INDENT_VERSION#v}"
+    fi
   fi
 
   if [[ -z "$DOWNLOAD_URL" ]]; then
@@ -342,6 +353,15 @@ TOOLEOF
   # `indent --channel` can report it and `indent --update` keeps following it.
   # (A local build or a source build records nothing, which reads as stable.)
   printf '%s\n' "$INDENT_CHANNEL" > "${INDENT_HOME}/channel"
+  # And the tag it was installed from. The compiled version cannot stand in for it:
+  # an experimental tag on a patch release reports the same version as the stable
+  # release that follows (`v2.4.1-exp11` and `v2.4.1` are both `2.4.1`), so without
+  # this record `--update` cannot tell whether it is already on the newest build of
+  # its channel — and a stale `channel` file with no tag behind it is exactly how a
+  # stable install ended up following experimental releases.
+  if [[ -n "${INSTALL_TAG:-}" ]]; then
+    printf '%s\n' "$INSTALL_TAG" > "${INDENT_HOME}/installed-tag"
+  fi
   green "✓ Downloaded indent"
 
   # Install companion tools from the same release

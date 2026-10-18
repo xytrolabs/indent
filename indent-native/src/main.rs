@@ -791,6 +791,14 @@ enum ModuleEntry {
     Value(Value),
     Func(Arc<FunctionDef>),
     Imported(Callable),
+    /// A class the module defines.
+    ///
+    /// Classes were simply dropped when a module's runtime was folded into a
+    /// `ModuleInstance`: `get Point from geom` reported "Module 'geom' does not
+    /// export 'Point'" no matter how the class was written. They are a namespace of
+    /// their own in `Runtime` (a class is not a callable and not a variable), so the
+    /// entry type is what carries them across the module boundary.
+    Class(Arc<ClassDef>),
 }
 
 #[derive(Debug, Clone)]
@@ -7275,6 +7283,13 @@ fn import_stmt(
                 Some(ModuleEntry::Value(v)) => {
                     ctx.rt.vars.insert(bind, v.clone());
                 }
+                // An imported class goes into the caller's class table, which is
+                // where `exec_call_inner` looks when it is asked to construct one.
+                Some(ModuleEntry::Class(class_def)) => {
+                    Arc::make_mut(&mut ctx.rt.classes)
+                        .insert(bind, (**class_def).clone());
+                    ctx.rt.class_gen += 1;
+                }
                 _ => {
                     return Err(format!(
                         "Module '{}' does not export '{}'",
@@ -7346,6 +7361,16 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
     }
     for (name, f) in Arc::make_mut(&mut module_runtime.funcs).drain() {
         entries.insert(name, ModuleEntry::Func(f));
+    }
+    // Classes last: they are a separate namespace, so their order against the other
+    // three does not matter — but they have to be *here*, which they were not. A
+    // module may export the same name as both a variable and a class (`std/discord`
+    // exports `Bot` as a namespace object), and the variable is what `get X from
+    // mod` resolved before classes could travel at all, so it keeps the name.
+    for (name, class_def) in Arc::make_mut(&mut module_runtime.classes).drain() {
+        entries
+            .entry(name)
+            .or_insert(ModuleEntry::Class(Arc::new(class_def)));
     }
     let module = Arc::new(ModuleInstance { entries });
 
@@ -7517,6 +7542,11 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
+    }
+
+    // A class that lives in a module: `geom.Point(3, 4)`.
+    if let Some(class_def) = module_member_class(callee, ctx) {
         return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
@@ -8135,6 +8165,15 @@ fn invoke_method_on_value(
             ctx.rt.reclaim_tables_from(temp_rt);
             return out;
         }
+        // `geom.Point(5, 6)` arrives here, not as a plain call: the parser sees
+        // `name.member(...)` as a method call on `name`, so a module-qualified
+        // constructor is a method call whose receiver is the module. Without this
+        // arm a class exported by a module could be imported but never constructed
+        // through the module's own name.
+        if let Some(ModuleEntry::Class(class_def)) = m.entries.get(method) {
+            let class_def = (**class_def).clone();
+            return Ok(instantiate_class(&class_def, args, ctx.rt));
+        }
         return Err(format!("Module has no function '{method}'"));
     }
 
@@ -8272,16 +8311,39 @@ fn invoke_callable_value(
     }
 }
 
+/// The class a module-qualified name refers to: `geom.Point`.
+///
+/// A class is neither a callable nor a variable, so it cannot travel through
+/// `resolve_callable`; the call paths ask this question before they resolve a
+/// function, which is what makes `geom.Point(3, 4)` construct an instance instead of
+/// reporting "Module has no function 'Point'".
+fn module_member_class(callee: &str, ctx: &ExecContext<'_>) -> Option<ClassDef> {
+    let (left, right) = callee.split_once('.')?;
+    let module = ctx.get_module(left)?;
+    match module.entries.get(right) {
+        Some(ModuleEntry::Class(class_def)) => Some((**class_def).clone()),
+        _ => None,
+    }
+}
+
 fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, String> {
     if let Some((left, right)) = callee.split_once('.') {
         let module = ctx
             .get_module(left)
             .ok_or_else(|| format!("Undefined module '{}'", left))?;
-        if matches!(module.entries.get(right), Some(ModuleEntry::Func(_))) {
-            return Ok(Callable::External {
-                module,
-                name: right.to_string(),
-            });
+        match module.entries.get(right) {
+            Some(ModuleEntry::Func(_)) => {
+                return Ok(Callable::External {
+                    module,
+                    name: right.to_string(),
+                })
+            }
+            Some(ModuleEntry::Class(_)) => {
+                return Err(format!(
+                    "'{callee}' is a class; construct it with {callee}(...)"
+                ))
+            }
+            _ => {}
         }
         return Err(format!("Module '{}' has no function '{}'", left, right));
     }
@@ -8649,6 +8711,11 @@ fn invoke_callable_values(
 
     // Check if callee is a class name — instantiate it
     if let Some(class_def) = ctx.rt.classes.get(callee).cloned() {
+        return Ok(instantiate_class(&class_def, &positional, ctx.rt));
+    }
+
+    // A class that lives in a module, reached through the module's name.
+    if let Some(class_def) = module_member_class(callee, ctx) {
         return Ok(instantiate_class(&class_def, &positional, ctx.rt));
     }
 
@@ -20008,6 +20075,74 @@ fn read_channel() -> String {
     parse_channel(fs::read_to_string(channel_file()).ok().as_deref())
 }
 
+/// The release tag this installation was installed *from* — `v2.4.0`,
+/// `v2.4.1-exp11` — or `None` for an install that predates the record.
+///
+/// The compiled version cannot answer this. An experimental tag on a patch release
+/// produces the same `INDENT_VERSION` as the stable release that follows it
+/// (`v2.4.1-exp11` and `v2.4.1` are both `2.4.1`), so "is this install ahead of
+/// stable?" and "is it already the newest build on my channel?" are both
+/// unanswerable from `--version`. Recording the tag at install time answers both,
+/// and it is the only thing that can: `--update` on an experimental install used to
+/// re-download the identical binary on every run because `2.4.1-exp11` never equals
+/// `2.4.1`, and the same missing fact is why a stable install could end up following
+/// the experimental channel.
+fn installed_tag_file() -> PathBuf {
+    indent_home_dir().join("installed-tag")
+}
+
+fn read_installed_tag() -> Option<String> {
+    let tag = fs::read_to_string(installed_tag_file()).ok()?;
+    let tag = tag.trim().to_string();
+    if tag.is_empty() { None } else { Some(tag) }
+}
+
+fn write_installed_tag(tag: &str) -> Result<(), String> {
+    let path = installed_tag_file();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    fs::write(&path, format!("{tag}\n"))
+        .map_err(|e| format!("cannot record the installed tag in {}: {e}", path.display()))
+}
+
+/// The channel `--update` should follow, which is not always the recorded one.
+///
+/// A channel record on its own is not evidence that this *binary* came from that
+/// channel: a leftover `exp` file (from a switch that was later undone by other
+/// means, or carried over from an older install layout) made a stable install
+/// follow experimental releases — which is exactly the report that prompted this.
+/// So `exp` is honoured only when the recorded tag says the binary really is an
+/// experimental build; anything else follows stable, and says so.
+fn effective_channel() -> String {
+    let (channel, overrode) = channel_for_update(&read_channel(), read_installed_tag().as_deref());
+    if overrode {
+        println!(
+            "  ℹ The channel record says `exp`, but this installation was not installed \
+             from an experimental tag."
+        );
+        println!(
+            "    Following stable. Use `indent --switch-to-exp` to move onto experimental \
+             builds deliberately."
+        );
+    }
+    channel
+}
+
+/// The channel to follow, and whether that overrode the recorded one.
+///
+/// Pure so the matrix can be tested without a filesystem or a network: the recorded
+/// channel, plus the tag the install came from, decide. `exp` needs both.
+fn channel_for_update(recorded: &str, installed_tag: Option<&str>) -> (String, bool) {
+    if recorded != CHANNEL_EXP {
+        return (CHANNEL_STABLE.to_string(), false);
+    }
+    match installed_tag {
+        Some(tag) if is_exp_tag(tag) => (CHANNEL_EXP.to_string(), false),
+        _ => (CHANNEL_STABLE.to_string(), true),
+    }
+}
+
 fn write_channel(channel: &str) -> Result<(), String> {
     let path = channel_file();
     if let Some(dir) = path.parent() {
@@ -20150,7 +20285,7 @@ fn switch_channel(channel: &str) -> Result<(), String> {
     let tag = resolve_release_tag(&client, query)?;
     let plain = tag.trim_start_matches('v').to_string();
 
-    if plain == INDENT_VERSION && read_channel() == channel {
+    if read_installed_tag().as_deref() == Some(tag.as_str()) && read_channel() == channel {
         println!("  ✓ Already on {channel} (Indent {plain}).");
         return Ok(());
     }
@@ -20175,6 +20310,9 @@ fn switch_channel(channel: &str) -> Result<(), String> {
              directory is writable."
         ));
     }
+    // The tag as well as the channel: `--update` needs it to recognise that this
+    // build is already the newest on the channel it is on.
+    let _ = write_installed_tag(&tag);
 
     println!("  ✓ Now running Indent {plain} ({channel})");
     println!("    {}", installed.display());
@@ -20199,8 +20337,9 @@ fn self_update() {
     // The source fallback has to land on the same channel, or `--update` on an
     // experimental install would build the default branch and quietly change
     // channels. The tag is resolved again here because the binary path may have
-    // failed before it got as far as resolving one.
-    let channel = read_channel();
+    // failed before it got as far as resolving one. `effective_channel` rather than
+    // the raw record, so this agrees with what the binary path would have followed.
+    let channel = effective_channel();
     let query = if channel == CHANNEL_EXP { CHANNEL_EXP } else { "latest" };
     let tag = resolve_release_tag(&reqwest::blocking::Client::new(), query).ok();
     if channel == CHANNEL_EXP && tag.is_none() {
@@ -20222,12 +20361,15 @@ fn self_update_from_binary() -> Result<(), String> {
     // *stable*, so `indent --update` on an experimental build moved the user back
     // onto stable without saying so — the opposite of what `--switch-to-exp`
     // promised and of what the flag docs claimed.
-    let channel = read_channel();
+    let channel = effective_channel();
     let query = if channel == CHANNEL_EXP { CHANNEL_EXP } else { "latest" };
     println!("  Checking for the latest {channel} release ...");
     let tag = resolve_release_tag(&client, query)?;
     let plain = tag.trim_start_matches('v').to_string();
-    if plain == INDENT_VERSION {
+    // The recorded tag, not the compiled version: an experimental build of 2.4.1 and
+    // the stable 2.4.1 release carry the same version string, so comparing
+    // `INDENT_VERSION` could not tell "already newest" from "different build".
+    if read_installed_tag().as_deref() == Some(tag.as_str()) {
         println!("  ✓ Already up to date (Indent {plain}, {channel}).");
         return Ok(());
     }
@@ -20237,6 +20379,9 @@ fn self_update_from_binary() -> Result<(), String> {
 
     let current = install_over_current(&tmp)?;
     let _ = std::fs::remove_file(&tmp);
+    // Record what is actually installed now, so the next `--update` can tell whether
+    // it is already on this tag.
+    let _ = write_installed_tag(&tag);
     println!("  ✓ Updated to Indent {plain} ({channel})!");
     println!("  (Backup saved to {}.bak)", current.display());
     Ok(())
@@ -22018,6 +22163,40 @@ mod tests {
         assert_eq!(parse_channel(None), "stable");
         assert_eq!(parse_channel(Some("")), "stable");
         assert_eq!(parse_channel(Some("nightly\n")), "stable");
+    }
+
+    /// Which channel `--update` follows, and when it overrides the record.
+    ///
+    /// The case that prompted this: a channel file left saying `exp` made a stable
+    /// install pull an experimental build. A record on its own is not evidence that
+    /// the installed binary came from that channel — the tag it was installed from
+    /// is — so `exp` now needs both.
+    #[test]
+    fn update_follows_exp_only_when_the_install_came_from_an_exp_tag() {
+        // Stable record: stable, whatever the tag says.
+        assert_eq!(channel_for_update("stable", None), ("stable".to_string(), false));
+        assert_eq!(
+            channel_for_update("stable", Some("v2.4.1-exp11")),
+            ("stable".to_string(), false)
+        );
+
+        // Exp record and an experimental tag: follow experimental.
+        assert_eq!(
+            channel_for_update("exp", Some("v2.4.1-exp11")),
+            ("exp".to_string(), false)
+        );
+        assert_eq!(
+            channel_for_update("exp", Some("v2.4.1-exp.2")),
+            ("exp".to_string(), false)
+        );
+
+        // Exp record but no tag, or a stable tag — the record is stale, and following
+        // it is what put a stable install onto experimental builds.
+        assert_eq!(channel_for_update("exp", None), ("stable".to_string(), true));
+        assert_eq!(
+            channel_for_update("exp", Some("v2.4.0")),
+            ("stable".to_string(), true)
+        );
     }
 
     #[test]
