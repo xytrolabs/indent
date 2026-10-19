@@ -1,5 +1,43 @@
 # Indent Changelog
 
+## 2.4.1-exp13 — 2026-10-17 (experimental — `--update` no longer downgrades an exp install)
+
+Thirteenth experimental build of 2.4.1. One bug, found by looking at a real install
+that was on exp11: a binary newer than the tag it had recorded was being treated as a
+*stable* install, so `--update` would have replaced it with stable 2.4.0 — throwing away
+the experimental fixes it was being tested for.
+
+### The record was stale, and stale was read as "stable"
+
+`channel_for_update` honoured an `exp` channel only when the recorded `installed-tag`
+was an experimental tag. That is right for the report it was written for (a stable
+install carrying a leftover `exp` file), but it also catches the opposite case: an
+experimental build that never wrote a tag, or whose tag is older than the binary —
+which is what a hand-downloaded exp build, or an install from before tags were
+recorded, looks like. On such an install
+
+```
+channel: exp
+installed-tag: v2.4.0      # recorded by an earlier stable install
+indent --version: 2.4.1    # ...but the binary is an exp build
+```
+
+`--update` decided "not from an experimental tag", followed stable, and would have
+downloaded 2.4.0 over the exp build.
+
+The running version is now an input to the decision. A stable tag *older* than the
+binary cannot describe that binary — nothing installs a newer build and records an
+older tag — so in that case the `exp` channel is kept, the tag is refreshed by the
+update that follows, and `--update` says so instead of silently following stable. A
+record that matches the running version still decides alone, so the original report
+(a stable 2.4.0 install with a leftover `exp` file) behaves exactly as before.
+
+### Gate
+
+`benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
+38/38, `scripts/ci/golden-outputs.sh` 8/8, installer safety, and
+`benchmarks/check_baselines.py` — no case slower than baseline by more than 15%.
+
 ## 2.4.1-exp12 — 2026-10-17 (experimental — `if ... then` parses)
 
 Twelfth experimental build of 2.4.1. It fixes a language-surface bug a user hit straight

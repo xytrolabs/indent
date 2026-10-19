@@ -20232,16 +20232,26 @@ fn write_installed_tag(tag: &str) -> Result<(), String> {
 /// So `exp` is honoured only when the recorded tag says the binary really is an
 /// experimental build; anything else follows stable, and says so.
 fn effective_channel() -> String {
-    let (channel, overrode) = channel_for_update(&read_channel(), read_installed_tag().as_deref());
+    let (channel, overrode) =
+        channel_for_update(&read_channel(), read_installed_tag().as_deref(), INDENT_VERSION);
     if overrode {
-        println!(
-            "  ℹ The channel record says `exp`, but this installation was not installed \
-             from an experimental tag."
-        );
-        println!(
-            "    Following stable. Use `indent --switch-to-exp` to move onto experimental \
-             builds deliberately."
-        );
+        if channel == CHANNEL_EXP {
+            println!(
+                "  ℹ The channel record says `exp` but the last recorded install was {} — \
+                 this binary is newer, so it came from an experimental build whose tag was \
+                 never recorded. Staying on experimental.",
+                read_installed_tag().unwrap_or_else(|| "unknown".to_string())
+            );
+        } else {
+            println!(
+                "  ℹ The channel record says `exp`, but this installation was not installed \
+                 from an experimental tag."
+            );
+            println!(
+                "    Following stable. Use `indent --switch-to-exp` to move onto experimental \
+                 builds deliberately."
+            );
+        }
     }
     channel
 }
@@ -20249,14 +20259,49 @@ fn effective_channel() -> String {
 /// The channel to follow, and whether that overrode the recorded one.
 ///
 /// Pure so the matrix can be tested without a filesystem or a network: the recorded
-/// channel, plus the tag the install came from, decide. `exp` needs both.
-fn channel_for_update(recorded: &str, installed_tag: Option<&str>) -> (String, bool) {
+/// channel, the tag the install came from, and the running version decide. `exp`
+/// needs the record *and* a tag that agrees with the binary.
+///
+/// "Agrees" includes `None` and a *stable* tag, which is why the running version is
+/// an input rather than a constant: a stale record that is simply older than the
+/// binary cannot describe it, and an `exp` install that was downloaded or copied by
+/// hand never updated the record at all. Left alone, `--update` there followed stable
+/// and silently replaced the experimental binary with an older stable one — losing
+/// exactly the fixes the user was testing. A record that matches the running version
+/// still decides alone, so a stable install carrying a leftover `exp` channel is
+/// unaffected.
+fn channel_for_update(
+    recorded: &str,
+    installed_tag: Option<&str>,
+    running_version: &str,
+) -> (String, bool) {
     if recorded != CHANNEL_EXP {
         return (CHANNEL_STABLE.to_string(), false);
     }
     match installed_tag {
         Some(tag) if is_exp_tag(tag) => (CHANNEL_EXP.to_string(), false),
+        // A stable tag older than the binary is a stale record, not evidence of a
+        // stable install: nothing installs a newer build and writes an older tag.
+        Some(tag) if version_is_newer(running_version, tag) => (CHANNEL_EXP.to_string(), true),
         _ => (CHANNEL_STABLE.to_string(), true),
+    }
+}
+
+/// Is `running` (a bare version like `2.4.1`) newer than the version in `tag`
+/// (`v2.4.0`, `v2.4.1-exp11`)?
+fn version_is_newer(running: &str, tag: &str) -> bool {
+    fn triple(s: &str) -> Option<(u64, u64, u64)> {
+        let core = s.trim().trim_start_matches('v');
+        let core = core.split(['-', '+']).next()?;
+        let mut parts = core.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next().unwrap_or("0").parse().ok()?;
+        let patch = parts.next().unwrap_or("0").parse().ok()?;
+        Some((major, minor, patch))
+    }
+    match (triple(running), triple(tag)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
     }
 }
 
@@ -22291,29 +22336,48 @@ mod tests {
     #[test]
     fn update_follows_exp_only_when_the_install_came_from_an_exp_tag() {
         // Stable record: stable, whatever the tag says.
-        assert_eq!(channel_for_update("stable", None), ("stable".to_string(), false));
         assert_eq!(
-            channel_for_update("stable", Some("v2.4.1-exp11")),
+            channel_for_update("stable", None, "2.4.1"),
+            ("stable".to_string(), false)
+        );
+        assert_eq!(
+            channel_for_update("stable", Some("v2.4.1-exp11"), "2.4.1"),
             ("stable".to_string(), false)
         );
 
         // Exp record and an experimental tag: follow experimental.
         assert_eq!(
-            channel_for_update("exp", Some("v2.4.1-exp11")),
+            channel_for_update("exp", Some("v2.4.1-exp11"), "2.4.1"),
             ("exp".to_string(), false)
         );
         assert_eq!(
-            channel_for_update("exp", Some("v2.4.1-exp.2")),
+            channel_for_update("exp", Some("v2.4.1-exp.2"), "2.4.1"),
             ("exp".to_string(), false)
         );
 
-        // Exp record but no tag, or a stable tag — the record is stale, and following
-        // it is what put a stable install onto experimental builds.
-        assert_eq!(channel_for_update("exp", None), ("stable".to_string(), true));
+        // Exp record, no tag, and a binary no newer than stable: the record is stale,
+        // and following it is what put a stable install onto experimental builds.
         assert_eq!(
-            channel_for_update("exp", Some("v2.4.0")),
+            channel_for_update("exp", None, "2.4.1"),
             ("stable".to_string(), true)
         );
+        assert_eq!(
+            channel_for_update("exp", Some("v2.4.1"), "2.4.1"),
+            ("stable".to_string(), true)
+        );
+
+        // Exp record with a *stable* tag that is older than the running binary: the
+        // record cannot describe this binary, and downgrading it to stable would
+        // throw away the experimental build the user is testing.
+        assert_eq!(
+            channel_for_update("exp", Some("v2.4.0"), "2.4.1"),
+            ("exp".to_string(), true)
+        );
+        assert!(version_is_newer("2.4.1", "v2.4.0"));
+        assert!(!version_is_newer("2.4.0", "v2.4.0"));
+        assert!(!version_is_newer("2.4.0", "v2.4.1"));
+        assert!(version_is_newer("2.10.0", "v2.9.9"));
+        assert!(!version_is_newer("2.4.1", "v2.4.1-exp11"));
     }
 
     #[test]
