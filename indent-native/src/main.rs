@@ -18917,8 +18917,9 @@ impl Parser {
 
     fn parse_if_chain(&mut self, first: SourceLine) -> Result<Stmt, String> {
         let mut branches: Vec<(Option<String>, Vec<Stmt>)> = vec![];
-        let cond = first.text[2..first.text.len() - 1].trim().to_string();
-        let body = self.parse_nested_block(first.indent)?;
+        // `if x then:` is the colon form of the same thing.
+        let (cond, inline) = Self::split_then(&first.text[2..first.text.len() - 1]);
+        let body = self.if_body(&first, inline)?;
         branches.push((Some(cond), body));
 
         while let Some(next) = self.peek() {
@@ -18927,8 +18928,8 @@ impl Parser {
             }
             if next.text.starts_with("or ") && next.text.ends_with(':') {
                 let line = self.consume()?;
-                let c = line.text[2..line.text.len() - 1].trim().to_string();
-                let b = self.parse_nested_block(line.indent)?;
+                let (c, inline) = Self::split_then(&line.text[2..line.text.len() - 1]);
+                let b = self.if_body(&line, inline)?;
                 branches.push((Some(c), b));
                 continue;
             }
@@ -18948,10 +18949,10 @@ impl Parser {
     }
 
     fn parse_if_chain_no_colon(&mut self, first: SourceLine) -> Result<Stmt, String> {
-        // Indent-2: if condition (no trailing colon)
+        // Indent-2: if condition (no trailing colon), optionally followed by `then`.
         let mut branches: Vec<(Option<String>, Vec<Stmt>)> = vec![];
-        let cond = first.text[2..].trim().to_string();
-        let body = self.parse_nested_block(first.indent)?;
+        let (cond, inline) = Self::split_then(&first.text[2..]);
+        let body = self.if_body(&first, inline)?;
         branches.push((Some(cond), body));
 
         while let Some(next) = self.peek() {
@@ -18960,24 +18961,24 @@ impl Parser {
             }
             if next.text.starts_with("or ") && !next.text.ends_with(':') {
                 let line = self.consume()?;
-                let c = line.text[2..].trim().to_string();
-                let b = self.parse_nested_block(line.indent)?;
+                let (c, inline) = Self::split_then(&line.text[2..]);
+                let b = self.if_body(&line, inline)?;
                 branches.push((Some(c), b));
                 continue;
             }
             // else if alias
             if next.text.starts_with("else if ") {
                 let line = self.consume()?;
-                let c = line.text[8..].trim().to_string();
-                let b = self.parse_nested_block(line.indent)?;
+                let (c, inline) = Self::split_then(&line.text[8..]);
+                let b = self.if_body(&line, inline)?;
                 branches.push((Some(c), b));
                 continue;
             }
             // Backward compat: or ... :
             if next.text.starts_with("or ") && next.text.ends_with(':') {
                 let line = self.consume()?;
-                let c = line.text[2..line.text.len() - 1].trim().to_string();
-                let b = self.parse_nested_block(line.indent)?;
+                let (c, inline) = Self::split_then(&line.text[2..line.text.len() - 1]);
+                let b = self.if_body(&line, inline)?;
                 branches.push((Some(c), b));
                 continue;
             }
@@ -18994,6 +18995,77 @@ impl Parser {
             line: first.line_no,
             branches,
         })
+    }
+
+    /// Split an `if` header's condition text from an optional `then` body.
+    ///
+    /// `then` is optional and may be followed by a single statement on the same
+    /// line (`if x > 3 then say "big"`), which is the form the interpreter's own
+    /// error help suggests. Both forms used to be a syntax error.
+    fn split_then(cond: &str) -> (String, Option<String>) {
+        let text = cond.trim();
+        // Only a ` then` outside string literals is the keyword, so
+        // `if s == "we did then it" ` keeps its condition intact.
+        let bytes = text.as_bytes();
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(" then") {
+            let idx = from + rel;
+            for &b in &bytes[from..idx] {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match b {
+                    b'\\' if in_string => escaped = true,
+                    b'"' => in_string = !in_string,
+                    _ => {}
+                }
+            }
+            from = idx;
+            if in_string {
+                // Skip the quote we stopped inside and keep looking.
+                from = idx + 5;
+                continue;
+            }
+            let after = &text[idx + 5..];
+            if after.is_empty() || after.starts_with(' ') {
+                let head = text[..idx].trim().to_string();
+                let body = after.trim();
+                let body = if body.is_empty() {
+                    None
+                } else {
+                    Some(body.to_string())
+                };
+                return (head, body);
+            }
+            from = idx + 5;
+        }
+        (text.to_string(), None)
+    }
+
+    /// Body of one `if` / `or` branch: either the inline statement after `then`
+    /// on the header line, or the indented block that follows it.
+    fn if_body(&mut self, header: &SourceLine, inline: Option<String>) -> Result<Vec<Stmt>, String> {
+        match inline {
+            Some(text) => {
+                // Rewrite the inline statement into a one-line indented block and let
+                // the ordinary block parser read it, so it parses exactly like a
+                // statement written on its own line.
+                let indent = header.indent + 4;
+                self.lines.insert(
+                    self.i,
+                    SourceLine {
+                        line_no: header.line_no,
+                        indent,
+                        text,
+                    },
+                );
+                self.parse_nested_block(header.indent)
+            }
+            None => self.parse_nested_block(header.indent),
+        }
     }
 
     fn parse_match_chain(&mut self, first: SourceLine) -> Result<Stmt, String> {

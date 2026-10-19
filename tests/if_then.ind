@@ -1,0 +1,122 @@
+#! if_then.ind — the optional `then` keyword on `if` and `or` headers.
+#!
+#! Indent's own error help has always told people to write things like
+#! `if divisor != 0 then ...`, but no parser accepted a `then`: both `if` forms
+#! (with and without a trailing colon) took everything after `if ` as the
+#! condition, so `if x > 3 then` failed with
+#! `Unexpected token in expression 'x > 3 then'`.  A `then` is now allowed before
+#! the indented block, and may be followed by a single statement on the same
+#! line.  The statement after an inline `then` is rewritten into a one-line block
+#! and parsed by the ordinary statement parser, so it is not a second, weaker
+#! grammar.
+#!
+#! Everything below runs in both engines; the shadow VM has no separate notion of
+#! an `if`, so any drift here is a parser bug, not a VM one.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+var x = 5
+var hits = 0
+
+#! ---- trailing `then`, body on the next lines ----
+if x > 3 then
+    hits += 1
+assert (hits == 1) "if ... then with an indented body"
+
+if x > 30 then
+    hits += 100
+assert (hits == 1) "if ... then with a false condition"
+
+#! ---- inline `then`, body on the same line ----
+if x > 3 then hits += 2
+assert (hits == 3) "if ... then <statement>"
+
+if x > 30 then hits += 100
+assert (hits == 3) "inline then with a false condition"
+
+#! ---- `or` / `else if` / `otherwise` branches ----
+var which = "none"
+if x > 10 then
+    which = "ten"
+or x > 3 then
+    which = "three"
+otherwise
+    which = "none"
+assert (which == "three") "or ... then"
+
+var alt = "none"
+if x > 10 then
+    alt = "ten"
+else if x > 3 then
+    alt = "elseif"
+otherwise
+    alt = "none"
+assert (alt == "elseif") "else if ... then"
+
+var elsehit = "none"
+if x > 10 then elsehit = "ten"
+otherwise
+    elsehit = "else"
+assert (elsehit == "else") "inline then keeps a following otherwise branch"
+
+var notelse = "none"
+if x > 3 then notelse = "ten"
+otherwise
+    notelse = "else"
+assert (notelse == "ten") "inline then takes the branch it guards"
+
+#! ---- the legacy colon form still takes a `then` ----
+var colon = 0
+if x > 3 then:
+    colon = 1
+assert (colon == 1) "if ... then: (colon form)"
+
+#! ---- a ` then ` inside a string literal is not the keyword ----
+var s = "we did then it"
+var strhit = 0
+if s == "we did then it" then strhit = 1
+assert (strhit == 1) "then inside a string condition"
+
+if s == "we did then it"
+    strhit += 1
+assert (strhit == 2) "then inside a string, indented body"
+
+#! ---- the no-then forms are untouched ----
+var plain = 0
+if x > 3
+    plain = 1
+assert (plain == 1) "if ... with an indented body, no then"
+
+if x > 3:
+    plain = 2
+assert (plain == 2) "if ...: (colon form, no then)"
+
+#! ---- the shape the error help suggests: a guard clause ----
+fun guarded divisor
+    if divisor != 0 then give 10 / divisor
+    give -1
+
+assert (guarded(2) == 5) "guard clause with inline then"
+assert (guarded(0) == -1) "guard clause falls through when the guard fails"
+
+#! ---- inline body may be a call, and may run inside a loop ----
+var looped = 0
+repeat 3
+    if x > 3 then looped += 1
+assert (looped == 3) "inline then inside a loop body"
+
+var seen = 0
+fun bump
+    seen += 1
+    give seen
+
+var called = 0
+repeat 2
+    if x > 3 then called = bump()
+assert (called == 2) "inline then calling a function"
+
+say "if-then ok"

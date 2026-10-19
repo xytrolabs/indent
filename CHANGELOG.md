@@ -1,5 +1,62 @@
 # Indent Changelog
 
+## 2.4.1-exp12 — 2026-10-17 (experimental — `if ... then` parses)
+
+Twelfth experimental build of 2.4.1. It fixes a language-surface bug a user hit straight
+away on exp11: **`if` could not be written with `then`**, even though the interpreter's
+own error help tells people to do exactly that.
+
+### The help text recommended syntax the parser rejected
+
+Every guard-clause error prints advice like
+
+```
+use: if divisor != 0 then ...
+```
+
+and no parser accepted a `then`. Both `if` forms — `if cond` and the legacy `if cond:` —
+took *everything* after `if ` as the condition, so `if x > 3 then` failed with
+
+```
+syntax_error: Unexpected token in expression 'x > 3 then'
+```
+
+and `if x > 3 then say "big"` failed the same way. The suggestion was unfollowable,
+which made `if` look broken to anyone who took it seriously.
+
+### What parses now
+
+- `if x > 3 then` — the `then` is optional and simply precedes the indented block.
+- `if x > 3 then say "big"` — a single statement may follow `then` on the same line.
+  It is rewritten into a one-line block and handed to the ordinary statement parser, so
+  it is not a second, weaker grammar: every statement form works there, including a
+  call, an assignment, `give` (guard clauses), `+=`, and a `repeat`/`while` body.
+- `or x > 3 then …`, `else if x > 3 then …`, and `if x > 3 then:` — the same keyword on
+  every branch header, in both the colon and the colon-less forms.
+- `then` inside a string literal is *not* the keyword, so
+  `if s == "we did then it" then …` keeps its condition intact. `split_then` tracks
+  quote and escape state while scanning.
+
+The no-`then` forms are untouched, both engines run the new test, and `then` stays a
+plain identifier everywhere else — it is only recognised as a header keyword.
+
+### Also in this build
+
+`tests/module_dispatch_builtins.ind` is green again. It was red before exp12 for two
+reasons that were both in the test, not the interpreter: it asked for a `Bot` export
+that `std/discord.ind` no longer has (renamed `QuickBot`), and it asserted
+`len(keys bot.commands) >= 4` for three registrations against a `QuickBot` that starts
+with an empty `commands` dict. It now checks that each of `two`, `one` and `named` is
+present by name, which is what the module actually promises. With that, the suite
+prints a summary again — **79 passed, 0 failed** on both engines.
+
+### Gate
+
+`benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
+38/38, `scripts/ci/golden-outputs.sh` 8/8, installer safety, and
+`benchmarks/check_baselines.py` (no case slower than baseline by more than 15%; string
+build −61.5% and object calls −16.6% versus baseline).
+
 ## 2.4.1-exp11 — 2026-10-17 (experimental — a module function runs in its module's scope)
 
 Eleventh experimental build of 2.4.1. This is the audit's module-scope item, and the

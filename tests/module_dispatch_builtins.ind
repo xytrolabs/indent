@@ -63,7 +63,14 @@ bot is CommandCtx bot "one" "One-arg handler" oneArgHandler
 bot is AddSlash bot "named" "Handler by name" "twoArgHandler" []
 
 var cmds dynamic = keys bot.commands
-var cmdsOk boolean = len(cmds) >= 4
+#! Assert each registration landed in the registry under its own name, rather than
+#! a magic count: QuickBot starts with an empty `commands` dict, so `two`, `one`
+#! and `named` are the only entries and a `>= 4` threshold could never hold.
+var found int = 0
+if has_key(bot.commands, "two") then found += 1
+if has_key(bot.commands, "one") then found += 1
+if has_key(bot.commands, "named") then found += 1
+var cmdsOk boolean = found == 3
 assert cmdsOk "commands registered on the bot"
 
 #! DM-style message: no guild_id key, channel_id present
