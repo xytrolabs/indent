@@ -90,9 +90,13 @@ program inside its budgets is untouched. It runs in `scripts/ci/then-gate.sh`.
 ### CI now runs the language suite
 
 `.github/workflows/ci.yml` ran `cargo test` and the golden fixtures, and never ran the
-79 behavioural tests in `tests/*.ind`. It now runs `benchmarks/run_suite.sh` (which
-fails if the summary line is missing, so an early `process_exit 0` cannot make the job
-pass) and `scripts/ci/verify-limits.sh`.
+79 behavioural tests in `tests/*.ind`. It now runs `benchmarks/run_suite.sh` —
+advisory, with `continue-on-error`, because the run is not CI-clean yet: the fixture
+server needs `aiohttp` (installed in CI now, so that one is fixed),
+`tests/datetime_pkg.ind` wants a tz database the runner image lacks, and
+`tests/module_dispatch_builtins.ind` passes locally and fails there. `expects` the
+step to become a gate once those two are fixed; the comment in the workflow says so.
+`scripts/ci/verify-limits.sh` does gate.
 
 ### Gate
 
