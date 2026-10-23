@@ -149,6 +149,22 @@ else
     bad "--max-steps=abc is rejected — rc=$rc out=$out"
 fi
 
+# ---- the failure is its own kind of error, with its own advice --------------
+# The display classifier used to be a second copy of the one behind `error_type()`,
+# and it read `--timeout-ms` as a network problem: the time budget came out as
+# `network_error` with a "check the URL" hint.
+for case in "--max-steps 1000:$TMP/spin.ind" "--timeout-ms 120:$TMP/spin.ind" "--max-depth 100:$TMP/deep.ind" "--max-loop-iters 40:$TMP/spin_unbounded.ind"; do
+    flags=${case%%:*}
+    file=${case#*:}
+    out=$("$BIN" $flags "$file" 2>&1)
+    if [[ "$out" == *"resource_error"* && "$out" == *"a budget stopped the program"* ]]; then
+        ok "reported as resource_error with budget advice ($flags)"
+    else
+        bad "reported as resource_error with budget advice ($flags)"
+        echo "        got: $(printf '%s' "$out" | head -3 | tr '\n' ' ')"
+    fi
+done
+
 echo
 echo "limits: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -2440,34 +2440,12 @@ fn format_error_with_source(source: &str, err: &str) -> String {
     let line_no = extract_line_number(err);
     let lines: Vec<&str> = source.lines().collect();
 
-    // Determine error code — ordered from most specific to least
-    let code = if err.contains("division by zero") {
-        "E007" // division by zero
-    } else if err.contains("index out of range") || err.contains("index out of bounds") {
-        "E008" // index out of range
-    } else if err.contains("key not found") {
-        "E009" // key not found
-    } else if err.contains("file not found") || err.contains("no such file") || err.contains("Cannot open") {
-        "E010" // file not found
-    } else if err.contains("JSON") || err.contains("json") || err.contains("Invalid JSON") {
-        "E011" // JSON parse error
-    } else if err.contains("connection") || err.contains("network") || err.contains("timeout") || err.contains("refused") {
-        "E012" // network error
-    } else if err.contains("expects") || err.contains("Cannot convert") || err.contains("Cannot add") || err.contains("Cannot subtract") || err.contains("Cannot multiply") {
-        "E001" // type mismatch
-    } else if err.contains("no function") || err.contains("has no function") || err.contains("is not callable") {
-        "E002" // undefined function
-    } else if err.contains("import") || err.contains("Cannot import") || err.contains("Cannot load") {
-        "E003" // import error
-    } else if err.contains("syntax") || err.contains("expected") || err.contains("unexpected") || err.contains("Unexpected indentation") {
-        "E004" // syntax error
-    } else if err.contains("unwrap") {
-        "E005" // unwrap on err
-    } else if err.contains("variable") || err.contains("undefined") || err.contains("not defined") {
-        "E006" // undefined variable
-    } else {
-        "E000" // generic error
-    };
+    // One classifier, shared with `error_type()`: this function used to carry its
+    // own copy of the same chain, and the copies drifted the moment a new kind was
+    // added — a budget error came out as `network_error` here (its advice text names
+    // `--timeout-ms`, which the network branch matched on "timeout") while
+    // `error_type()` already called it `resource_error`.
+    let code = classify_error_code(err);
 
     let name = error_code_to_name(code);
     // Display-only: collapse repeated "error[EXXX]: " prefixes (the runtime
@@ -2556,7 +2534,16 @@ fn format_error_with_source(source: &str, err: &str) -> String {
     if err.contains("JSON") || err.contains("json") {
         out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check that your JSON string is valid. Use a JSON validator or check for missing quotes/commas.\n", arrow_style_empty()));
     }
-    if err.contains("connection") || err.contains("refused") || err.contains("timeout") {
+    // A budget's advice names `--timeout-ms`, so the network branch below would
+    // otherwise claim it.
+    if err.contains("Step limit of")
+        || err.contains("Time limit of")
+        || err.contains("Call depth limit of")
+        || err.contains("Loop iteration limit of")
+    {
+        out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m a budget stopped the program. Raise it (--max-steps, --max-depth, --max-loop-iters, --timeout-ms), or pass 0 to that flag to remove it.\n", arrow_style_empty()));
+    }
+    if err.contains("connection") || err.contains("refused") || err.contains("timeout") && !err.contains("limit of") {
         out.push_str(&format!("  {} \x1b[1;36mhelp:\x1b[0m check the URL and your network connection. The server may be down or the address may be wrong.\n", arrow_style_empty()));
     }
 

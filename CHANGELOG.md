@@ -48,9 +48,12 @@ above returns at 1 000 and aborts at 2 000 on this machine's 8 MiB stack, so the
 default sits at half the failure point — a body with more parameters uses more stack
 per frame and would otherwise move the crash below the guard.
 
-Errors classify as `resource_error` (a new `E013`), not `runtime_error` and not — as
-the first cut had it — `network_error`, because the advice text names `--timeout-ms`
-and the network matcher looks for "timeout".
+Errors classify as `resource_error` (a new `E013`) and carry their own advice line.
+The display used to keep a second copy of the error classifier next to the one behind
+`error_type()`, and the copies drifted as soon as a kind was added: the time budget
+came out as `network_error` with "check the URL" advice, because its message names
+`--timeout-ms` and the network branch matches on "timeout". Both now call
+`classify_error_code`, so there is one classifier to keep correct.
 
 ### The cost, and what it took to make it zero
 
@@ -80,7 +83,7 @@ Result: the baseline checker is clean again in three consecutive interleaved rou
 against the exp13 binary, and a 3 000 000-iteration loop measures 99 ms with no budget
 configured and 98–99 ms with `--max-steps 1000000000 --timeout-ms 60000` set.
 
-`scripts/ci/verify-limits.sh` pins all of it — 15 checks covering every budget, both
+`scripts/ci/verify-limits.sh` pins all of it — 19 checks covering every budget, both
 engines, the compiled and walked loop shapes, `0` meaning "no limit", and that a
 program inside its budgets is untouched. It runs in `scripts/ci/then-gate.sh`.
 
@@ -94,7 +97,7 @@ pass) and `scripts/ci/verify-limits.sh`.
 ### Gate
 
 `benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
-39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 15/15,
+39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 19/19,
 and `benchmarks/check_baselines.py` clean.
 
 ## 2.4.1-exp13 — 2026-10-17 (experimental — `--update` no longer downgrades an exp install)
