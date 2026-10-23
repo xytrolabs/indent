@@ -83,9 +83,17 @@ Result: the baseline checker is clean again in three consecutive interleaved rou
 against the exp13 binary, and a 3 000 000-iteration loop measures 99 ms with no budget
 configured and 98–99 ms with `--max-steps 1000000000 --timeout-ms 60000` set.
 
-`scripts/ci/verify-limits.sh` pins all of it — 19 checks covering every budget, both
+`scripts/ci/verify-limits.sh` pins all of it — 20 checks covering every budget, both
 engines, the compiled and walked loop shapes, `0` meaning "no limit", and that a
 program inside its budgets is untouched. It runs in `scripts/ci/then-gate.sh`.
+
+### A deep error reports one line, not one per frame
+
+Every frame prefixes an error with its own line as it unwinds, which is useful once
+and noise when it repeats: the new depth guard made a 100-deep failure print
+`Line 4: Line 3: Line 3: …` a hundred times before the message. The *display* now
+collapses a run of leading `Line N: ` prefixes to the first one; the raw string
+that `catch` sees is untouched.
 
 ### CI now runs the language suite
 
@@ -101,7 +109,7 @@ step to become a gate once those two are fixed; the comment in the workflow says
 ### Gate
 
 `benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
-39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 19/19,
+39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 20/20,
 and `benchmarks/check_baselines.py` clean.
 
 ## 2.4.1-exp13 — 2026-10-17 (experimental — `--update` no longer downgrades an exp install)

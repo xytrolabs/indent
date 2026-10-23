@@ -165,6 +165,18 @@ for case in "--max-steps 1000:$TMP/spin.ind" "--timeout-ms 120:$TMP/spin.ind" "-
     fi
 done
 
+# ---- a deep failure reports one line, not one per frame --------------------
+# Every unwinding frame prefixes the error with its own line, so the depth budget
+# used to print "Line 4: Line 3: Line 3: …" a hundred times before the message.
+out=$("$BIN" --max-depth 100 "$TMP/deep.ind" 2>&1)
+prefixes=$(printf '%s' "$out" | head -2 | grep -o "Line [0-9]*:" | wc -l)
+if [[ $prefixes -eq 1 ]]; then
+    ok "a deep failure collapses its repeated line prefixes"
+else
+    bad "a deep failure collapses its repeated line prefixes — saw $prefixes"
+    echo "        got: $(printf '%s' "$out" | head -2 | cut -c1-160)"
+fi
+
 echo
 echo "limits: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

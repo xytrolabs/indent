@@ -2436,6 +2436,41 @@ fn extract_line_number(err: &str) -> Option<usize> {
     digits.parse::<usize>().ok()
 }
 
+/// Collapse a run of leading `Line N: ` prefixes down to the first one.
+///
+/// Every level of the interpreter prefixes an error with its line as the error
+/// unwinds (`map_err(|e| format!("Line {line}: {e}"))`), which is useful once and
+/// noise when it repeats. A failure sent up through 100 calls — a depth budget is
+/// exactly that — used to arrive as
+/// `Line 4: Line 3: Line 3: … (100 times) Call depth limit of 100 reached`.
+/// The outermost line is the one kept, because that is the line the user wrote.
+fn collapse_line_prefixes(err: &str) -> String {
+    let (first, rest) = split_line_prefix(err);
+    let Some(first) = first else {
+        return err.trim().to_string();
+    };
+    let mut body = rest;
+    while let (Some(_), r) = split_line_prefix(body) {
+        body = r;
+    }
+    format!("{first}{body}")
+}
+
+/// Split one leading `Line <digits>: ` off a message.
+fn split_line_prefix(s: &str) -> (Option<String>, &str) {
+    let t = s.trim_start();
+    let Some(rest) = t.strip_prefix("Line ") else {
+        return (None, s);
+    };
+    let Some((num, after)) = rest.split_once(": ") else {
+        return (None, s);
+    };
+    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+        return (None, s);
+    }
+    (Some(format!("Line {num}: ")), after)
+}
+
 fn format_error_with_source(source: &str, err: &str) -> String {
     let line_no = extract_line_number(err);
     let lines: Vec<&str> = source.lines().collect();
@@ -2451,7 +2486,7 @@ fn format_error_with_source(source: &str, err: &str) -> String {
     // Display-only: collapse repeated "error[EXXX]: " prefixes (the runtime
     // sometimes nests them). The raw `err` is left untouched so `error_type` /
     // `error_message` still parse it correctly.
-    let mut err_display = err.trim().to_string();
+    let mut err_display = collapse_line_prefixes(err.trim());
     loop {
         let t = err_display.trim_start();
         if let Some(rest) = t.strip_prefix("error[") {
