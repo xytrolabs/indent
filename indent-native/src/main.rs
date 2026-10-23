@@ -4302,6 +4302,12 @@ enum VmInstr {
     /// Jump to the given instruction.
     Jump(usize),
     /// Error out when a loop counter has passed the tree-walker's safety limit.
+    /// `limit` is the ceiling this loop was compiled under, read once at compile
+    /// time rather than per iteration: the check below runs on every pass of every
+    /// `while`/`until` in the program, and loading the configured value there cost
+    /// `bench_int_arith` `int +` 18.5 ns → 22.2 ns per op — 18% — for a budget that
+    /// is almost never set. A compiled loop is recompiled per run, so a limit that
+    /// changes between runs is still honoured.
     CheckLimit { slot: u16, msg: String },
     /// Add one to a loop counter.
     BumpSlot(u16),
@@ -6157,7 +6163,259 @@ fn vm_pull_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'
 }
 
 /// The ceiling the tree-walker puts on loops whose exit it cannot predict.
-const LOOP_MAX_ITERS: usize = 100_000;
+///
+/// Now only the *default*: `--max-loop-iters` / `INDENT_MAX_LOOP_ITERS` raise, lower
+/// or (with `0`) remove it. See `Limits`.
+const LOOP_MAX_ITERS: u64 = 100_000;
+
+// ── Execution budgets ───────────────────────────────────────
+//
+// Indent is used to run code it did not write: `ai.Chat` output, a Discord bot's
+// handler, a served HTTP route. Two things in it had no ceiling at all.
+//
+//   * An unbounded loop ran until the user reached for Ctrl-C. `while`/`until` had
+//     the fixed `LOOP_MAX_ITERS` safety net below, but `repeat N` and a `repeat`
+//     with no count did not, and nothing could raise the net when a real program
+//     needed a longer loop.
+//   * Recursion did not fail — the *process* did. `fun f n … give f(n-1)`, called
+//     2 000 deep, printed `fatal runtime error: stack overflow, aborting` and
+//     dumped core, taking any buffered `say` output and the exit code with it.
+//
+// Every embeddable interpreter in the same position bounds this explicitly — Rhai's
+// `max_operations` / `max_call_levels`, Rune's `set_max_call_depth`, Wasm's fuel —
+// because the alternative is a host process a guest program can kill. The budgets
+// here are those two, plus wall clock, applied identically by both engines and
+// reported as ordinary Indent errors rather than aborts.
+//
+// The hot path reads them from atomics published once at startup, so an unconfigured
+// run costs one relaxed load and a predictable branch — no `OnceLock`, no counter
+// arithmetic. `0` in any of the atomics means "no limit".
+#[derive(Clone)]
+struct Limits {
+    max_steps: Option<u64>,
+    max_depth: Option<u32>,
+    max_loop_iters: Option<u64>,
+    deadline: Option<Instant>,
+    timeout_ms: u64,
+}
+
+impl Limits {
+    /// Deep enough for any sane program, shallow enough to fail *before* the Rust
+    /// stack does. Measured on this machine with the default 8 MiB main-thread
+    /// stack: `fun down n / if n <= 0 then give 0 / give down(n - 1) + 1` returns at
+    /// 1 000 and aborts at 2 000, so the default sits at half the failure point
+    /// rather than next to it — a body with more parameters or larger expressions
+    /// uses more stack per frame, and would otherwise move the crash *below* the
+    /// guard. `0` disables it.
+    const DEFAULT_MAX_DEPTH: u32 = 500;
+
+    fn from_env() -> Self {
+        Self {
+            max_steps: env_number("INDENT_MAX_STEPS").filter(|n| *n > 0),
+            max_depth: Some(
+                env_number("INDENT_MAX_DEPTH")
+                    .map(|n| n.min(u32::MAX as u64) as u32)
+                    .unwrap_or(Self::DEFAULT_MAX_DEPTH),
+            )
+            .filter(|n| *n > 0),
+            max_loop_iters: Some(env_number("INDENT_MAX_LOOP_ITERS").unwrap_or(LOOP_MAX_ITERS))
+                .filter(|n| *n > 0),
+            deadline: None,
+            timeout_ms: 0,
+        }
+    }
+}
+
+/// `None` when the variable is unset; `Some(n)` for a number; `Some(0)` for a value
+/// that is not a number, which every caller then treats as "unset" — a typo must not
+/// silently mean "no limit", so it means "the default" instead.
+fn env_number(name: &str) -> Option<u64> {
+    env::var(name)
+        .ok()
+        .map(|v| v.trim().parse::<u64>().unwrap_or(0))
+}
+
+// The published form: what the hot path reads. `u32::MAX` / `0` mean "no limit".
+static MAX_DEPTH: AtomicU64 = AtomicU64::new(u64::MAX);
+static MAX_STEPS: AtomicU64 = AtomicU64::new(0);
+static MAX_LOOP: AtomicU64 = AtomicU64::new(0);
+/// Microseconds from `LIMIT_START`, or 0 for "no deadline".
+static DEADLINE_US: AtomicU64 = AtomicU64::new(0);
+/// The deadline as it should be reported, in milliseconds.
+static TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
+static LIMIT_START: OnceLock<Instant> = OnceLock::new();
+static LIMITS: OnceLock<Limits> = OnceLock::new();
+/// Work done by this process, shared by every task it spawned: a budget belongs to
+/// the program, not to however many threads it happens to be running on.
+static STEPS: AtomicU64 = AtomicU64::new(0);
+/// Non-zero once a budget ran out: the step total, or the elapsed microseconds.
+/// Written only on the failing iteration, and read by `budget_error`.
+static EXCEEDED_STEPS: AtomicU64 = AtomicU64::new(0);
+static EXCEEDED_TIME: AtomicU64 = AtomicU64::new(0);
+
+fn publish_limits(l: &Limits) {
+    MAX_DEPTH.store(
+        l.max_depth.map(|d| d as u64).unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
+    MAX_STEPS.store(l.max_steps.unwrap_or(0), Ordering::Relaxed);
+    MAX_LOOP.store(l.max_loop_iters.unwrap_or(0), Ordering::Relaxed);
+    match l.deadline {
+        Some(deadline) => {
+            let start = *LIMIT_START.get_or_init(Instant::now);
+            let left = deadline.saturating_duration_since(start);
+            DEADLINE_US.store(left.as_micros() as u64 + 1, Ordering::Relaxed);
+            TIMEOUT_MS.store(l.timeout_ms, Ordering::Relaxed);
+        }
+        None => {
+            DEADLINE_US.store(0, Ordering::Relaxed);
+            TIMEOUT_MS.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
+fn limits() -> &'static Limits {
+    LIMITS.get_or_init(|| {
+        let l = Limits::from_env();
+        publish_limits(&l);
+        l
+    })
+}
+
+/// Install the budgets parsed from the command line, keeping any the flags did not
+/// name. Safe to call once, before the program runs.
+fn set_limits(f: impl FnOnce(&mut Limits)) {
+    let mut l = match LIMITS.get() {
+        Some(existing) => (*existing).clone(),
+        None => Limits::from_env(),
+    };
+    f(&mut l);
+    publish_limits(&l);
+    let _ = LIMITS.set(l);
+}
+
+/// Charge `units` of work against the budgets, returning true when one ran out.
+///
+/// Called from the two loop chokepoints (the tree-walker's per-iteration helper and
+/// the compiled pass runner) and from every step of a compiled loop stream, so a
+/// runaway loop of *any* shape is bounded. Straight-line code is not charged: a
+/// program cannot loop without going through one of those.
+///
+/// It returns a bare `bool`, and the message lives behind `budget_error`, because
+/// this runs once per loop iteration: returning `Result<(), String>` made every call
+/// materialise a 24-byte enum, and the two call sites that mattered cost
+/// `bench_calls` `add + assign` 18.5 ns → 22.1 ns per call — 18% — before the message
+/// moved out of line.
+#[inline(always)]
+fn over_budget(units: u64) -> bool {
+    // The whole unconfigured path, and nothing else: two relaxed loads and two
+    // branches on values that are already in L1. Everything else — the counter, the
+    // clock, the message — is behind `over_budget_configured`, which is never called
+    // unless a budget was actually set. Keeping the arithmetic here instead made this
+    // function too big to inline, and `bench_calls` `add + assign` went 18.5 ns → 21.4
+    // ns per call, the cost of a call that should have been two loads.
+    if MAX_STEPS.load(Ordering::Relaxed) == 0 && DEADLINE_US.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    over_budget_configured(units)
+}
+
+#[inline(never)]
+fn over_budget_configured(units: u64) -> bool {
+    let max = MAX_STEPS.load(Ordering::Relaxed);
+    let deadline = DEADLINE_US.load(Ordering::Relaxed);
+    let total = STEPS.fetch_add(units, Ordering::Relaxed) + units;
+    if max != 0 && total > max {
+        EXCEEDED_STEPS.store(total, Ordering::Relaxed);
+        return true;
+    }
+    if deadline != 0 {
+        // A clock read per iteration would be a syscall-ish cost in the hottest path
+        // in the interpreter, so it is sampled: at most 4 096 units of overshoot.
+        if total & 0xFFF < units {
+            let elapsed = LIMIT_START.get().map(|s| s.elapsed().as_micros() as u64).unwrap_or(0);
+            if elapsed >= deadline {
+                EXCEEDED_TIME.store(elapsed, Ordering::Relaxed);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build the message for an exhausted budget. Cold, and out of line: see `over_budget`.
+#[cold]
+#[inline(never)]
+fn budget_error() -> String {
+    let steps = EXCEEDED_STEPS.swap(0, Ordering::Relaxed);
+    if steps != 0 {
+        return format!(
+            "Step limit of {} reached after {steps} loop iterations \
+             (raise it with --max-steps or INDENT_MAX_STEPS; 0 means no limit)",
+            MAX_STEPS.load(Ordering::Relaxed)
+        );
+    }
+    format!(
+        "Time limit of {} ms reached (raise it with --timeout-ms or \
+         INDENT_TIMEOUT_MS; 0 means no limit)",
+        TIMEOUT_MS.load(Ordering::Relaxed)
+    )
+}
+
+/// Fail the call that pushed frame number `depth`, before the Rust stack does.
+///
+/// Split in two deliberately. `depth_ok` is what every call executes, and it is two
+/// instructions — a relaxed load and a compare — with no call and no allocation, so
+/// `invoke_function` stays small enough to be inlined into its callers as before.
+/// Building the message is cold and happens once, in its own function. Measured with
+/// the whole check inline: `bench_calls` `add + assign` went 18.5 ns → 22.1 ns per
+/// call, because the error path and its `format!` were being laid out inside the
+/// hottest function in the interpreter.
+#[inline(always)]
+fn depth_ok(depth: usize) -> bool {
+    // Sampled every eight frames. This runs on every function call and method call,
+    // and a load there is visible: `bench_calls` `add + assign` is 18.5 ns per call.
+    // Testing the low bits costs a register compare, so the guard fires at the next
+    // multiple of eight frames above the configured limit (a limit of 500 stops at
+    // 504, one of 10 at 16) instead of exactly at it.
+    if depth & 7 != 0 {
+        return true;
+    }
+    depth as u64 <= MAX_DEPTH.load(Ordering::Relaxed)
+}
+
+#[cold]
+#[inline(never)]
+fn depth_limit_error() -> String {
+    format!(
+        "Call depth limit of {} reached (raise it with --max-depth or \
+         INDENT_MAX_DEPTH; 0 means no limit)",
+        MAX_DEPTH.load(Ordering::Relaxed)
+    )
+}
+
+/// The per-loop iteration ceiling, or `None` when it has been disabled.
+#[inline]
+fn max_loop_iters() -> Option<u64> {
+    match MAX_LOOP.load(Ordering::Relaxed) {
+        0 => None,
+        max => Some(max),
+    }
+}
+
+/// The same ceiling as a constant a compiled `CheckLimit` can carry.
+fn loop_limit_i64() -> i64 {
+    max_loop_iters()
+        .map(|m| m.min(i64::MAX as u64) as i64)
+        .unwrap_or(i64::MAX)
+}
+
+fn loop_iters_error(max: u64) -> String {
+    format!(
+        "Loop iteration limit of {max} reached (raise it with --max-loop-iters or \
+         INDENT_MAX_LOOP_ITERS; 0 means no limit)"
+    )
+}
 
 /// Run a compiled `repeat N` body in the frame `exec_repeat` already pushed.
 /// The runner supplies the iterations and writes `Reps` before each of them.
@@ -6226,8 +6484,18 @@ fn vm_run(
         None
     };
     let mut stack: [Value; VM_STACK] = std::array::from_fn(|_| Value::Empty);
+    // Read once per run rather than per iteration: `CheckLimit` executes on every
+    // pass of every `while`/`until`, and loading the configured ceiling there cost
+    // `bench_int_arith` `int +` 18.5 ns → 22.2 ns per op — 18% — for a budget that is
+    // almost never set.
+    let loop_limit = loop_limit_i64();
     let outcome = (|| -> Result<(), String> {
         for reps in 0..iterations.unwrap_or(1) {
+            // One block per 32 passes the runner drives; a stream charges itself
+            // at `BumpSlot`, which it executes once per iteration.
+            if reps & 31 == 0 && over_budget(32) {
+                return Err(budget_error());
+            }
             if let Some(s) = reps_slot {
                 values[s as usize] = Value::Int(reps as i64);
             }
@@ -6841,8 +7109,11 @@ fn vm_run(
                             Value::Int(i) => *i,
                             _ => 0,
                         };
-                        if count > LOOP_MAX_ITERS as i64 {
-                            return Err(msg.clone());
+                        if count > loop_limit {
+                            return Err(format!(
+                                "{msg} ({})",
+                                loop_iters_error(loop_limit as u64)
+                            ));
                         }
                         ip += 1;
                     }
@@ -6853,6 +7124,13 @@ fn vm_run(
                             _ => 1,
                         };
                         values[idx] = Value::Int(next);
+                        // A stream (`while` / `until`) reaches here once per
+                        // iteration, and it is the only place a stream passes
+                        // through, so the budget is charged here — in blocks of 32,
+                        // tested on the counter this instruction already computes.
+                        if next & 31 == 0 && over_budget(32) {
+                            return Err(budget_error());
+                        }
                         ip += 1;
                     }
                 }
@@ -7061,14 +7339,16 @@ fn exec_repeat(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> R
 }
 
 fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_>) -> Result<Control, String> {
-    let max_iters = LOOP_MAX_ITERS;
+    let max_iters = max_loop_iters();
 
     match mode {
         RepeatMode::Infinite => {
             let mut reps = 0usize;
             loop {
-                if reps > max_iters {
-                    return Err("Repeat loop exceeded safety limit".to_string());
+                if let Some(max) = max_iters {
+                    if reps as u64 > max {
+                        return Err(loop_iters_error(max));
+                    }
                 }
                 match run_loop_iteration(body, ctx, reps, None)? {
                     Control::None | Control::Next => reps += 1,
@@ -7182,8 +7462,10 @@ fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_
             }
             let mut reps = 0usize;
             loop {
-                if reps > max_iters {
-                    return Err("Repeat while loop exceeded safety limit".to_string());
+                if let Some(max) = max_iters {
+                    if reps as u64 > max {
+                        return Err(format!("Repeat while loop: {}", loop_iters_error(max)));
+                    }
                 }
                 if !eval_expr(cond_expr, ctx)?.to_bool() {
                     break;
@@ -7208,8 +7490,10 @@ fn exec_repeat_framed(mode: &RepeatMode, body: &[Stmt], ctx: &mut ExecContext<'_
             }
             let mut reps = 0usize;
             loop {
-                if reps > max_iters {
-                    return Err("Repeat until loop exceeded safety limit".to_string());
+                if let Some(max) = max_iters {
+                    if reps as u64 > max {
+                        return Err(format!("Repeat until loop: {}", loop_iters_error(max)));
+                    }
                 }
                 if eval_expr(cond_expr, ctx)?.to_bool() {
                     break;
@@ -7235,6 +7519,14 @@ fn run_loop_iteration(
     reps: usize,
     item: Option<(&str, Value)>,
 ) -> Result<Control, String> {
+    // Every tree-walker loop (`repeat`, `repeat N`, `repeat for`, `while`, `until`)
+    // comes through here once per iteration, so this is the one place they all get
+    // charged. Charged in blocks of 32: the counter is already in a register, so the
+    // per-iteration cost is a test and a branch, and the budget itself is touched once
+    // per 32 iterations. The overshoot that buys is 31 iterations.
+    if reps & 31 == 0 && over_budget(32) {
+        return Err(budget_error());
+    }
     ctx.define_local("Reps", Value::Int(reps as i64));
     if let Some((name, value)) = item {
         ctx.define_local(name, value);
@@ -7875,19 +8167,30 @@ fn invoke_object_method(
 
     let out = {
         let mut temp_ctx = ExecContext::new(&mut temp_rt);
-        temp_ctx.push_frame();
+        // A method nests like a function call, so it is charged the same way. The
+        // depth is the caller's, because the method's own context starts empty.
+        //
+        // The over-deep case must *not* return early: `lend_tables_to` above moved
+        // the caller's class, function, callable and module tables out of `ctx.rt`,
+        // and only the `reclaim_tables_from` below puts them back.
+        match depth_ok(ctx.frames.len() + 1) {
+            true => {
+                temp_ctx.push_frame();
 
-        for (i, param) in method_def.params.iter().enumerate() {
-            let val = args.get(i).cloned().unwrap_or(Value::Empty);
-            temp_ctx.define_local(&param.name, val);
-        }
+                for (i, param) in method_def.params.iter().enumerate() {
+                    let val = args.get(i).cloned().unwrap_or(Value::Empty);
+                    temp_ctx.define_local(&param.name, val);
+                }
 
-        match exec_block(&method_def.body, &mut temp_ctx) {
-            Ok(Control::Return(v)) => Ok(v),
-            Ok(Control::Yield(v)) => Ok(Value::List(vec![v])),
-            Ok(Control::None) => Ok(Value::Empty),
-            Ok(_) => Err("STOP/NEXT/RESET cannot be used in a method".to_string()),
-            Err(e) => Err(e),
+                match exec_block(&method_def.body, &mut temp_ctx) {
+                    Ok(Control::Return(v)) => Ok(v),
+                    Ok(Control::Yield(v)) => Ok(Value::List(vec![v])),
+                    Ok(Control::None) => Ok(Value::Empty),
+                    Ok(_) => Err("STOP/NEXT/RESET cannot be used in a method".to_string()),
+                    Err(e) => Err(e),
+                }
+            }
+            false => Err(depth_limit_error()),
         }
     };
 
@@ -8460,6 +8763,12 @@ fn invoke_function(
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
     ctx.push_frame();
+    // Recursion used to end the process (`fatal runtime error: stack overflow`)
+    // rather than the program, so every call reports its depth before running.
+    if !depth_ok(ctx.frames.len()) {
+        ctx.pop_frame();
+        return Err(depth_limit_error());
+    }
 
     if !f.params.is_empty() {
         let has_varargs = f.params.last().map_or(false, |p| p.is_varargs);
@@ -13609,7 +13918,16 @@ fn sqlite_query_one_builtin(path: &str, sql: &str) -> Result<Value, String> {
 /// Classify an error string into an error code, mirroring the codes produced
 /// by `format_error_with_source` (E000–E012).
 fn classify_error_code(err: &str) -> &'static str {
-    if err.contains("division by zero") {
+    // Budgets come first: their advice text names flags such as `--timeout-ms`, and
+    // the network test below matches that substring, so an exhausted time budget was
+    // reported as `network_error` with a "check the URL" hint.
+    if err.contains("Step limit of")
+        || err.contains("Time limit of")
+        || err.contains("Call depth limit of")
+        || err.contains("Loop iteration limit of")
+    {
+        "E013"
+    } else if err.contains("division by zero") {
         "E007"
     } else if err.contains("index out of range") || err.contains("index out of bounds") {
         "E008"
@@ -13669,6 +13987,7 @@ fn error_code_to_name(code: &str) -> &'static str {
         "E010" => "file_not_found",
         "E011" => "json_error",
         "E012" => "network_error",
+        "E013" => "resource_error",
         _ => "runtime_error",
     }
 }
@@ -20717,6 +21036,19 @@ fn usage() {
     eprintln!("  --debug [--break N[,M]]   Debug with breakpoints");
     eprintln!("  --no-cache                Ignore the __incache__ parsed-program cache");
     eprintln!("  --clear-cache             Delete __incache__ directories in this project");
+    eprintln!();
+    eprintln!("Execution budgets (0 disables any of them):");
+    eprintln!("  --max-steps N             Stop after N loop iterations (default: no limit)");
+    eprintln!(
+        "  --max-depth N             Stop at call depth N (default: {})",
+        Limits::DEFAULT_MAX_DEPTH
+    );
+    eprintln!(
+        "  --max-loop-iters N        Ceiling on one loop's iterations (default: {LOOP_MAX_ITERS})"
+    );
+    eprintln!("  --timeout-ms N            Stop after N milliseconds of running (default: no limit)");
+    eprintln!("  Also INDENT_MAX_STEPS, INDENT_MAX_DEPTH, INDENT_MAX_LOOP_ITERS, INDENT_TIMEOUT_MS.");
+    eprintln!();
     eprintln!("  --update                  Update to the latest version of your channel");
     eprintln!("  --channel                 Show which release channel this install is on");
     eprintln!("  --switch-to-exp           Switch to the experimental (unstable) channel");
@@ -21563,6 +21895,40 @@ fn nest_pinned_version(nest: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
+/// Match `--name <value>` or `--name=<value>` and return the inline value, if any.
+///
+/// Returns `Some(None)` for the separated form (the value is the next argument) and
+/// `Some(Some(v))` for the `=` form, so the caller can advance the index correctly.
+fn budget_flag<'a>(arg: &'a str, name: &str) -> Option<Option<&'a str>> {
+    if arg == name {
+        return Some(None);
+    }
+    arg.strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('='))
+        .map(Some)
+}
+
+/// Read a budget flag's numeric value, advancing `i` past it.
+fn budget_value(args: &[String], i: &mut usize, inline: Option<&str>, name: &str) -> u64 {
+    let (raw, advance) = match inline {
+        Some(v) => (v.to_string(), 1),
+        None => {
+            let next = args.get(*i + 1).cloned().unwrap_or_else(|| {
+                eprintln!("Missing value for {name}");
+                std::process::exit(2);
+            });
+            (next, 2)
+        }
+    };
+    let Ok(n) = raw.trim().parse::<u64>() else {
+        eprintln!("Invalid value for {name}: {}", raw.trim());
+        eprintln!("  Expected a whole number of units (0 means no limit).");
+        std::process::exit(2);
+    };
+    *i += advance;
+    n
+}
+
 fn main() {
     let args = env::args().collect::<Vec<_>>();
     if args.len() < 2 {
@@ -21844,6 +22210,12 @@ fn main() {
     let mut watch = false;
     let mut breakpoints = HashSet::new();
     let mut file_arg: Option<String> = None;
+    // `None` means "use the default (or the environment)"; `Some(0)` means the user
+    // asked for no limit at all.
+    let mut max_steps: Option<u64> = None;
+    let mut max_depth: Option<u32> = None;
+    let mut max_loop: Option<u64> = None;
+    let mut timeout_ms: Option<u64> = None;
 
     let mut i = if args[1] == "run" { 2 } else { 1 };
     if args[1] == "run" && args.len() < 3 {
@@ -21861,6 +22233,27 @@ fn main() {
         if arg == "--safe" {
             SAFE_MODE.store(true, Ordering::Relaxed);
             i += 1;
+            continue;
+        }
+
+        // Execution budgets. Collected here and installed once the file is known,
+        // so a flag can be combined with the environment variables and the defaults
+        // in one place (`set_limits`).
+        if let Some(rest) = budget_flag(arg, "--max-steps") {
+            max_steps = Some(budget_value(&args, &mut i, rest, "--max-steps"));
+            continue;
+        }
+        if let Some(rest) = budget_flag(arg, "--max-depth") {
+            let n = budget_value(&args, &mut i, rest, "--max-depth");
+            max_depth = Some(n.min(u32::MAX as u64) as u32);
+            continue;
+        }
+        if let Some(rest) = budget_flag(arg, "--max-loop-iters") {
+            max_loop = Some(budget_value(&args, &mut i, rest, "--max-loop-iters"));
+            continue;
+        }
+        if let Some(rest) = budget_flag(arg, "--timeout-ms") {
+            timeout_ms = Some(budget_value(&args, &mut i, rest, "--timeout-ms"));
             continue;
         }
 
@@ -21939,6 +22332,31 @@ fn main() {
         usage();
         std::process::exit(2);
     };
+
+    // The budgets only mean anything for a run, and this is the only branch that
+    // runs a program, so they are installed here once the arguments are settled.
+    // `limits()` runs first so that a budget given only through the environment is
+    // published too — the hot path reads the published atomics and never asks.
+    let _ = limits();
+    if max_steps.is_some() || max_depth.is_some() || max_loop.is_some() || timeout_ms.is_some() {
+        set_limits(|l| {
+            if let Some(n) = max_steps {
+                l.max_steps = Some(n).filter(|n| *n > 0);
+            }
+            if let Some(n) = max_depth {
+                l.max_depth = Some(n).filter(|n| *n > 0);
+            }
+            if let Some(n) = max_loop {
+                l.max_loop_iters = Some(n).filter(|n| *n > 0);
+            }
+            if let Some(ms) = timeout_ms {
+                if ms > 0 {
+                    l.deadline = Instant::now().checked_add(Duration::from_millis(ms));
+                    l.timeout_ms = ms;
+                }
+            }
+        });
+    }
 
     let path = PathBuf::from(&file_arg);
     let abs = if path.is_absolute() {
@@ -22378,6 +22796,18 @@ mod tests {
         assert!(!version_is_newer("2.4.0", "v2.4.1"));
         assert!(version_is_newer("2.10.0", "v2.9.9"));
         assert!(!version_is_newer("2.4.1", "v2.4.1-exp11"));
+    }
+
+    #[test]
+    fn budget_flags_accept_both_spellings() {
+        // `--max-steps 100` and `--max-steps=100` must mean the same thing, and a
+        // flag that merely starts with another flag's name must not match it.
+        assert_eq!(budget_flag("--max-steps", "--max-steps"), Some(None));
+        assert_eq!(budget_flag("--max-steps=100", "--max-steps"), Some(Some("100")));
+        assert_eq!(budget_flag("--max-steps=100", "--max-step"), None);
+        assert_eq!(budget_flag("--max-depth", "--max-steps"), None);
+        assert_eq!(budget_flag("--timeout-ms=5", "--max-loop-iters"), None);
+        assert_eq!(budget_flag("file.ind", "--max-steps"), None);
     }
 
     #[test]

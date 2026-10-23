@@ -1,5 +1,102 @@
 # Indent Changelog
 
+## 2.4.1-exp14 — 2026-10-23 (experimental — execution budgets)
+
+Fourteenth experimental build of 2.4.1. This is the item every embeddable language in
+the Rust ecosystem has and Indent did not: **a ceiling on what a program is allowed to
+do.** It comes from reading the field (Rhai's `max_operations` / `max_call_levels`,
+Rune's `set_max_call_depth`, Wasm's fuel, Deno's permission model) and noticing which
+of those guarantees Indent had no equivalent for.
+
+### Two things had no ceiling at all
+
+Indent is used to run code it did not write — `ai.Chat` output, a Discord handler, a
+served HTTP route — and in two cases that code could take the process with it:
+
+```
+$ indent spin.ind                     # var i = 0 / repeat 1000000000 / i += 1
+^C                                    # ...forever; nothing stopped it
+
+$ indent deep.ind                     # fun down n / give down(n - 1) + 1
+thread 'main' has overflowed its stack
+fatal runtime error: stack overflow, aborting
+timeout: the monitored command dumped core
+```
+
+`repeat N` and `repeat` with no count were unbounded. `while`/`until` had a fixed
+`LOOP_MAX_ITERS` net that could not be raised. And recursion did not fail *the
+program* — it failed *the process*, discarding buffered `say` output and the exit code
+along with it. Call depth is now an ordinary Indent error.
+
+### The budgets
+
+| flag | environment | default | charges |
+| --- | --- | --- | --- |
+| `--max-steps N` | `INDENT_MAX_STEPS` | none | loop iterations, in blocks of 32 |
+| `--max-depth N` | `INDENT_MAX_DEPTH` | **500** | frames pushed by calls and methods |
+| `--max-loop-iters N` | `INDENT_MAX_LOOP_ITERS` | 100 000 | one loop's iterations |
+| `--timeout-ms N` | `INDENT_TIMEOUT_MS` | none | wall clock |
+
+`0` disables any of them, and a value that is not a number is a usage error rather
+than a silent "no limit". They are enforced identically by the tree-walker and the
+compiled engine — the tree-walker charges in `run_loop_iteration`, which every one of
+its loops passes through, and the compiler charges the pass runner and `BumpSlot`,
+which is where a compiled `while`/`until` passes once per iteration.
+
+The default depth is 500 because that is where the guard is still *safe*: the example
+above returns at 1 000 and aborts at 2 000 on this machine's 8 MiB stack, so the
+default sits at half the failure point — a body with more parameters uses more stack
+per frame and would otherwise move the crash below the guard.
+
+Errors classify as `resource_error` (a new `E013`), not `runtime_error` and not — as
+the first cut had it — `network_error`, because the advice text names `--timeout-ms`
+and the network matcher looks for "timeout".
+
+### The cost, and what it took to make it zero
+
+The first working version charged every iteration through a function returning
+`Result<(), String>` and read the configured ceiling from an atomic inside the
+instruction loop. The baseline check caught it immediately and would not let go:
+
+```
+SLOWER   +21.2%  bench_calls.ind::add + assign (us/op)   0.018263 -> 0.022141
+SLOWER   +19.7%  bench_int_arith.ind::int + (ns/op)      18.5461 -> 22.1955
+```
+
+Bisecting one hypothesis at a time — the `Result`, the `OnceLock` lookup, the extra
+field on `CheckLimit` (which did not change `VmInstr`'s 64 bytes), the depth check
+itself — each removed a piece and none removed the regression. What finally did:
+
+- **charge in blocks of 32**, tested against the loop counter that is already in a
+  register (`reps & 31 == 0`), so the per-iteration cost is a test and a branch and
+  the budget is touched once per 32 iterations;
+- **sample the depth guard every 8 frames** (`depth & 7 != 0`), so a call pays a
+  register compare instead of a load. The guard therefore fires at the next multiple
+  of eight frames above the limit — 500 stops at 504;
+- **keep the unconfigured path to two loads and a branch** (`over_budget`), with the
+  counter, the clock and the message behind a `#[inline(never)]` helper.
+
+Result: the baseline checker is clean again in three consecutive interleaved rounds
+against the exp13 binary, and a 3 000 000-iteration loop measures 99 ms with no budget
+configured and 98–99 ms with `--max-steps 1000000000 --timeout-ms 60000` set.
+
+`scripts/ci/verify-limits.sh` pins all of it — 15 checks covering every budget, both
+engines, the compiled and walked loop shapes, `0` meaning "no limit", and that a
+program inside its budgets is untouched. It runs in `scripts/ci/then-gate.sh`.
+
+### CI now runs the language suite
+
+`.github/workflows/ci.yml` ran `cargo test` and the golden fixtures, and never ran the
+79 behavioural tests in `tests/*.ind`. It now runs `benchmarks/run_suite.sh` (which
+fails if the summary line is missing, so an early `process_exit 0` cannot make the job
+pass) and `scripts/ci/verify-limits.sh`.
+
+### Gate
+
+`benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
+39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 15/15,
+and `benchmarks/check_baselines.py` clean.
+
 ## 2.4.1-exp13 — 2026-10-17 (experimental — `--update` no longer downgrades an exp install)
 
 Thirteenth experimental build of 2.4.1. One bug, found by looking at a real install

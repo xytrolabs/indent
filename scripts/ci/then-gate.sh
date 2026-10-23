@@ -33,6 +33,11 @@ bash scripts/ci/verify-installer-safety.sh > /tmp/gate/installer.log 2>&1
 echo "rc=$?" | tee -a "$LOG"
 tail -3 /tmp/gate/installer.log | tee -a "$LOG"
 
+step "execution budgets"
+bash scripts/ci/verify-limits.sh > /tmp/gate/limits.log 2>&1
+echo "rc=$?" | tee -a "$LOG"
+tail -3 /tmp/gate/limits.log | tee -a "$LOG"
+
 step "baselines"
 python3 benchmarks/check_baselines.py > /tmp/gate/baselines.log 2>&1
 echo "rc=$?" | tee -a "$LOG"

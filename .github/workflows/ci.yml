@@ -41,6 +41,18 @@ jobs:
       - name: Golden outputs (VM and tree-walker)
         run: sh scripts/ci/golden-outputs.sh
 
+      # The `.ind` suite is the actual language regression net, and until now CI
+      # never ran it: `cargo test` covers the interpreter's Rust internals, the
+      # golden fixtures cover eight programs, and 79 behavioural tests in
+      # `tests/*.ind` were only ever run by hand. `run_suite.sh` starts the mock
+      # fixture server itself and fails if the summary line is missing, so a test
+      # that calls `process_exit 0` early cannot make the job pass.
+      - name: Indent test suite (both engines)
+        run: bash benchmarks/run_suite.sh
+
+      - name: Execution budgets (--max-steps / --max-depth / --timeout-ms)
+        run: bash scripts/ci/verify-limits.sh
+
       - name: Check formatting (advisory)
         working-directory: indent-native
         run: cargo fmt --check || echo "::warning::main.rs is not rustfmt-clean (non-blocking)"
