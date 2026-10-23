@@ -10,8 +10,9 @@
 # the contract now — no summary, no pass — and the message says what to start.
 #
 # To include the mock-backed tests:  python3 tools/mock_fixture_server.py 8799 &
-BIN="${1:-/run/media/raf/Z/Aether.ath/indent-native/target/release/indent}"
-cd /run/media/raf/Z/Aether.ath || exit 1
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
+BIN="${1:-$ROOT/indent-native/target/release/indent}"
+cd "$ROOT" || exit 1
 
 # Start the mock fixture the ai tests need, so the gate is self-contained. If one
 # is already listening the bind fails harmlessly and the running one is used; the
