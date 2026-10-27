@@ -2606,8 +2606,66 @@ fn arrow_style_empty() -> String {
 /// allocations per call.
 #[derive(Default, Clone)]
 struct Frame {
-    vars: Map<String, Value>,
+    /// Locals, in declaration order, with `used` live entries at the front.
+    ///
+    /// This was a `Map<String, Value>`. Every lookup hashed a name, and — the part
+    /// that dominated a call — every parameter binding on a *fresh* frame allocated
+    /// a `String`, because the map had nothing to reuse. A callee's frame is small
+    /// (a handful of parameters and locals), so a reverse scan comparing lengths and
+    /// bytes beats hashing outright, and the entries themselves survive `push_frame`:
+    /// the same function called again rewrites its own names in place instead of
+    /// allocating them.
+    vars: Vec<(String, Value)>,
+    /// Number of live entries in `vars`; the rest are the previous call's, kept for
+    /// their `String` capacity.
+    used: usize,
     args: Vec<Value>,
+}
+
+impl Frame {
+    /// Position of `name` among the live locals.
+    #[inline]
+    fn find(&self, name: &str) -> Option<usize> {
+        for i in (0..self.used).rev() {
+            let (n, _) = &self.vars[i];
+            // Length first: most misses are ruled out without touching bytes.
+            if n.len() == name.len() && n == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Bind `name`, reusing the slot's `String` where there is one to reuse.
+    #[inline]
+    fn bind(&mut self, name: &str, value: Value) {
+        bind_local(&mut self.vars, &mut self.used, name, value);
+    }
+}
+
+/// Bind `name` in a `(vars, used)` pair: overwrite in place, else reuse the next
+/// spare slot's `String`, else push. Shared by `Frame` and the coroutine runner,
+/// which keeps its locals in the same shape between statements.
+#[inline]
+fn bind_local(vars: &mut Vec<(String, Value)>, used: &mut usize, name: &str, value: Value) {
+    for i in (0..*used).rev() {
+        let (n, slot) = &mut vars[i];
+        if n.len() == name.len() && n.as_str() == name {
+            *slot = value;
+            return;
+        }
+    }
+    if *used < vars.len() {
+        let slot = &mut vars[*used];
+        if slot.0 != name {
+            slot.0.clear();
+            slot.0.push_str(name);
+        }
+        slot.1 = value;
+    } else {
+        vars.push((name.to_string(), value));
+    }
+    *used += 1;
 }
 
 /// `argument` → 0, `argument2` → 1, `argument3` → 2 … (the aliases the runtime
@@ -2715,6 +2773,16 @@ struct ExecContext<'a> {
     /// call evaluated its arguments into a fresh `Vec`, so every call in the program
     /// allocated and freed one. Nested calls need their own, hence a pool.
     call_args_pool: Vec<Vec<Value>>,
+    /// Counts writes that landed on a frame **other than the innermost**.
+    ///
+    /// A compiled loop keeps its variables in slots, published into its frame before
+    /// a call and read back after it. The read-back is only needed when the call
+    /// wrote one of them, and a function that only reads (`give a + b`) does not.
+    /// `set_var`, `swap_var` and `take_var` search from the innermost frame outwards,
+    /// so a write landing deeper than the innermost one is a write to a caller's
+    /// frame. A loop's own assignments land on its own (innermost) frame and are not
+    /// counted, so the hot path is untouched.
+    frame_writes: u64,
 }
 
 impl<'a> ExecContext<'a> {
@@ -2734,6 +2802,7 @@ impl<'a> ExecContext<'a> {
             module_scope: Vec::new(),
             vm_values_pool: Vec::new(),
             call_args_pool: Vec::new(),
+            frame_writes: 0,
         }
     }
 
@@ -2789,14 +2858,22 @@ impl<'a> ExecContext<'a> {
 
     fn push_frame(&mut self) {
         let mut frame = self.frame_pool.pop().unwrap_or_default();
-        frame.vars.clear();
+        // The entries stay: only the live count resets, so the previous call's
+        // names and their capacity are reused by the next one.
+        frame.used = 0;
         frame.args.clear();
         self.frames.push(frame);
     }
 
     fn pop_frame(&mut self) {
         if let Some(mut frame) = self.frames.pop() {
-            frame.vars.clear();
+            // Values are dropped, names kept for reuse. A frame that once belonged
+            // to a 200-local function would otherwise hold the whole vector for the
+            // life of the pool (64 frames), so an oversized one is given back.
+            for entry in frame.vars.iter_mut().take(frame.used) {
+                entry.1 = Value::Empty;
+            }
+            frame.used = 0;
             frame.args.clear();
             // `clear()` keeps the bucket array, so a frame that once belonged to
             // a 200-local function would hold its slots for the life of the pool
@@ -2820,12 +2897,7 @@ impl<'a> ExecContext<'a> {
 
     fn define_local(&mut self, name: &str, value: Value) {
         if let Some(frame) = self.frames.last_mut() {
-            match frame.vars.get_mut(name) {
-                Some(slot) => *slot = value,
-                None => {
-                    frame.vars.insert(name.to_string(), value);
-                }
-            }
+            frame.bind(name, value);
         } else {
             match self.rt.vars.get_mut(name) {
                 Some(slot) => *slot = value,
@@ -2840,12 +2912,24 @@ impl<'a> ExecContext<'a> {
         // Update in place when the variable already exists: rebuilding the key
         // String on every assignment (i.e. on every loop iteration) was pure
         // overhead — `i is i + 1` allocated a String every time.
-        for frame in self.frames.iter_mut().rev() {
-            if let Some(slot) = frame.vars.get_mut(name) {
-                *slot = value;
+        let last = self.frames.len().wrapping_sub(1);
+        for (idx, frame) in self.frames.iter_mut().enumerate().rev() {
+            if let Some(i) = frame.find(name) {
+                frame.vars[i].1 = value;
+                // A write that lands deeper than the innermost frame changed a
+                // *caller's* variable; a compiled loop re-reads its slots only when
+                // that happened (see `frame_writes`).
+                if idx != last {
+                    self.frame_writes += 1;
+                }
                 return;
             }
         }
+        // A global: also observable by a compiled loop through its slots, so the
+        // read-back must run after a call that wrote one. The bump is harmless for
+        // a loop's own global writes, because only writes inside the call window
+        // are compared.
+        self.frame_writes += 1;
         match self.rt.vars.get_mut(name) {
             Some(slot) => *slot = value,
             None => {
@@ -2857,7 +2941,7 @@ impl<'a> ExecContext<'a> {
     /// Does a variable exist without cloning its value?
     fn has_var(&self, name: &str) -> bool {
         for frame in self.frames.iter().rev() {
-            if frame.vars.contains_key(name) {
+            if frame.find(name).is_some() {
                 return true;
             }
         }
@@ -2873,8 +2957,8 @@ impl<'a> ExecContext<'a> {
                     return Some(v.clone());
                 }
             }
-            if let Some(v) = frame.vars.get(name) {
-                return Some(v.clone());
+            if let Some(i) = frame.find(name) {
+                return Some(frame.vars[i].1.clone());
             }
         }
         match self.rt.vars.get(name) {
@@ -2901,8 +2985,8 @@ impl<'a> ExecContext<'a> {
     /// O(n) clone `get_var` performs for containers.
     fn get_var_ref(&self, name: &str) -> Option<&Value> {
         for frame in self.frames.iter().rev() {
-            if let Some(v) = frame.vars.get(name) {
-                return Some(v);
+            if let Some(i) = frame.find(name) {
+                return Some(&frame.vars[i].1);
             }
         }
         self.rt.vars.get(name).or_else(|| self.module_var(name))
@@ -2911,9 +2995,16 @@ impl<'a> ExecContext<'a> {
     /// Remove and return a variable's value (allowing a move instead of a
     /// copy). Mirrors `set_var`'s scope search: innermost frame first.
     fn take_var(&mut self, name: &str) -> Option<Value> {
-        for frame in self.frames.iter_mut().rev() {
-            if let Some(v) = frame.vars.remove(name) {
-                return Some(v);
+        let last = self.frames.len().wrapping_sub(1);
+        for (idx, frame) in self.frames.iter_mut().enumerate().rev() {
+            if let Some(i) = frame.find(name) {
+                // Dropping the binding shifts the rest down, which keeps one entry
+                // per name; a later `set_var` then re-creates it, as the map did.
+                frame.used -= 1;
+                if idx != last {
+                    self.frame_writes += 1;
+                }
+                return Some(frame.vars.remove(i).1);
             }
         }
         self.rt.vars.remove(name).or_else(|| self.module_var(name).cloned())
@@ -2926,9 +3017,13 @@ impl<'a> ExecContext<'a> {
     /// body does around user code: a slot holding a list costs the same as one
     /// holding an int instead of a deep copy per call.
     fn swap_var(&mut self, name: &str) -> Option<Value> {
-        for frame in self.frames.iter_mut().rev() {
-            if let Some(slot) = frame.vars.get_mut(name) {
-                return Some(std::mem::replace(slot, Value::Empty));
+        let last = self.frames.len().wrapping_sub(1);
+        for (idx, frame) in self.frames.iter_mut().enumerate().rev() {
+            if let Some(i) = frame.find(name) {
+                if idx != last {
+                    self.frame_writes += 1;
+                }
+                return Some(std::mem::replace(&mut frame.vars[i].1, Value::Empty));
             }
         }
         match self.rt.vars.get_mut(name) {
@@ -6193,11 +6288,16 @@ fn vm_flush_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<
     // `set_var` resolves to the innermost frame holding that name, so writing the
     // outer level first leaves the inner counter — the one a callee should see —
     // in place.
+    //
+    // Copied, not moved. Moving the value out left the slot `Empty` and depended on
+    // the read-back below to refill it, which made the read-back mandatory; now a
+    // call that wrote nothing skips it and the slots stay valid either way. A move
+    // saved an Arc bump per container slot — the copy is a refcount increment.
     for (i, name) in prog.slots.iter().enumerate() {
         if name.is_empty() {
             continue;
         }
-        ctx.set_var(name, std::mem::replace(&mut values[i], Value::Empty));
+        ctx.set_var(name, values[i].clone());
     }
 }
 
@@ -6902,8 +7002,12 @@ fn vm_run(
                         if user_code {
                             vm_flush_slots(prog, &mut values, ctx);
                         }
+                        let writes_before = ctx.frame_writes;
                         let result = invoke_callable_values(callee, args, ctx);
-                        if user_code {
+                        // Read the loop's variables back only if the call wrote one of
+                        // them. `give a + b` writes nothing, and the read-back was half
+                        // of what a call inside a compiled loop cost.
+                        if user_code && ctx.frame_writes != writes_before {
                             vm_pull_slots(prog, &mut values, ctx);
                         }
                         let v = result?;
@@ -8538,7 +8642,7 @@ fn invoke_method_on_value(
             ctx.push_frame();
             if let Some(frame) = ctx.frames.last_mut() {
                 for (k, v) in map.iter() {
-                    frame.vars.insert(k.clone(), v.clone());
+                    frame.bind(k, v.clone());
                 }
             }
             let out = invoke_callable_value(&Value::Func(fn_name), args, ctx);
@@ -14602,7 +14706,9 @@ fn spawn_builtin_future(builtin_name: &str, args: Vec<Value>) -> Result<Value, S
 struct Coro {
     body: Arc<Vec<Stmt>>,
     ip: usize,
-    locals: Map<String, Value>,
+    locals: Vec<(String, Value)>,
+    /// Live entries in `locals`; the rest are spare slots kept for reuse.
+    locals_used: usize,
     result: Value,
     done: bool,
     awaiting: Option<i64>,
@@ -14613,7 +14719,8 @@ impl Coro {
         Self {
             body,
             ip: 0,
-            locals: Map::default(),
+            locals: Vec::new(),
+            locals_used: 0,
             result: Value::Empty,
             done: false,
             awaiting: None,
@@ -14653,7 +14760,12 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
             .ok_or_else(|| format!("coop: function '{}' not found", name))?;
         let mut c = Coro::new(f.body.clone());
         for (i, p) in f.params.iter().enumerate() {
-            c.locals.insert(p.name.clone(), args.get(i).cloned().unwrap_or(Value::Empty));
+            bind_local(
+                &mut c.locals,
+                &mut c.locals_used,
+                &p.name,
+                args.get(i).cloned().unwrap_or(Value::Empty),
+            );
         }
         coros.push(c);
     }
@@ -14673,7 +14785,7 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                 if matches!(task_done_builtin(id)?, Value::Bool(true)) {
                     let r = task_wait_builtin(id)?;
                     c.awaiting = None;
-                    c.locals.insert("__await_result__".to_string(), r);
+                    bind_local(&mut c.locals, &mut c.locals_used, "__await_result__", r);
                     any_progress = true;
                 } else {
                     continue; // still waiting on this future
@@ -14693,14 +14805,18 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                 match &stmt {
                     Stmt::Await { expr, .. } => {
                         // The awaited expression may reference coroutine locals.
-                        ctx.frames.push(Frame { vars: c.locals.clone(), args: vec![] });
+                        ctx.frames.push(Frame {
+                            vars: c.locals[..c.locals_used].to_vec(),
+                            used: c.locals_used,
+                            args: vec![],
+                        });
                         let fv = eval_expr(expr, ctx);
                         ctx.frames.pop();
                         let fv = fv?;
                         let id = future_to_id(&fv)?;
                         if matches!(task_done_builtin(id)?, Value::Bool(true)) {
                             let r = task_wait_builtin(id)?;
-                            c.locals.insert("__await_result__".to_string(), r);
+                            bind_local(&mut c.locals, &mut c.locals_used, "__await_result__", r);
                             any_progress = true;
                         } else {
                             c.awaiting = Some(id);
@@ -14709,7 +14825,11 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                     }
                     Stmt::Wait { expr, .. } => {
                         // wait <future> (int) awaits; wait <seconds> (float) delays.
-                        ctx.frames.push(Frame { vars: c.locals.clone(), args: vec![] });
+                        ctx.frames.push(Frame {
+                            vars: c.locals[..c.locals_used].to_vec(),
+                            used: c.locals_used,
+                            args: vec![],
+                        });
                         let v = eval_expr(expr, ctx);
                         ctx.frames.pop();
                         let v = v?;
@@ -14725,7 +14845,7 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                         };
                         if matches!(task_done_builtin(id)?, Value::Bool(true)) {
                             let r = task_wait_builtin(id)?;
-                            c.locals.insert("__await_result__".to_string(), r);
+                            bind_local(&mut c.locals, &mut c.locals_used, "__await_result__", r);
                             any_progress = true;
                         } else {
                             c.awaiting = Some(id);
@@ -14734,9 +14854,15 @@ fn coop_builtin(fn_list: &Value, ctx: &mut ExecContext<'_>) -> Result<Value, Str
                     }
                     _ => {
                         // Run the statement with this coroutine's locals on top.
-                        ctx.frames.push(Frame { vars: c.locals.clone(), args: vec![] });
+                        ctx.frames.push(Frame {
+                            vars: c.locals[..c.locals_used].to_vec(),
+                            used: c.locals_used,
+                            args: vec![],
+                        });
                         let control = exec_stmt(&stmt, ctx);
-                        c.locals = ctx.frames.pop().unwrap().vars;
+                        let frame = ctx.frames.pop().unwrap();
+                        c.locals = frame.vars;
+                        c.locals_used = frame.used;
                         let control = control?;
                         any_progress = true;
                         match control {

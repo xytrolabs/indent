@@ -1,5 +1,65 @@
 # Indent Changelog
 
+## 2.4.1-exp20 — 2026-10-27 (experimental — frames are vectors, and a call no longer re-reads what it did not change)
+
+Twentieth experimental build of 2.4.1. Two changes to the call path, and one correction to
+the record.
+
+### Correction: exp17's frame change never shipped
+
+`aa4cba7` (`v2.4.1-exp17`) is titled *"frames: locals in a reusable vector instead of a
+hash map"*, and the code it describes was measured — but the file it committed still had
+`Frame::vars: Map<String, Value>`. The working copy had been reverted between the edit and
+the commit (the file is edited outside this session too), so exp17, exp18 and exp19 were
+all built and released **without** it. It is in this build, verified in the tagged tree.
+
+### Frames hold locals in a vector
+
+`Frame.vars` is now a `Vec<(String, Value)>` with a live count. Lookups are a reverse scan
+that compares lengths before bytes — a frame holds a handful of entries — and, the part
+that matters for a call, the entries survive `push_frame`, so the same function called
+again rewrites its own parameter names in place instead of allocating a `String` per
+parameter per call. `bind_local` is shared with the coroutine runner, which keeps its
+locals in the same shape between statements.
+
+### A call reads its slots back only if the call wrote them
+
+A compiled loop publishes its variables into the frame before a call and reads them back
+afterwards, because Indent is dynamically scoped (a callee really does see the caller's
+locals). The read-back was unconditional, and it was half of what a call inside a compiled
+loop cost — measured at 71 ns of 168 ns for a call to a body that only reads.
+
+`ExecContext` now counts writes that land anywhere other than the innermost frame
+(`set_var`, `swap_var`, `take_var`, including the global and module fallbacks), and a call
+site reads the slots back only when that count moved while the call ran. A function that
+merely returns a value — `give a + b` — writes nothing, so nothing is read back.
+
+The publication now *copies* rather than moves (`vm_flush_slots`): moving left the slot
+`Empty` and made the read-back mandatory. A copy is a refcount bump per container slot.
+
+The first attempt counted only *frame* writes and broke a fixture-backed test: a callee
+that writes a **global** is just as visible to the loop as one that writes a frame, and the
+suite caught it immediately (`tests/ai_mock_parity.ind` skipped because its health probe
+read a stale slot).
+
+### Numbers
+
+| metric | before this turn | now |
+| --- | --- | --- |
+| `call_2arg` | 5.21x CPython | **4.51x** |
+| `call_1arg` | 4.43x | **3.30x** |
+| `call_0arg` | 3.22x | **3.04x** |
+
+A call to a 2-argument body: 195 ns (was 238 ns when the loop gate was intact and the frame
+change absent), and a call to a body with a 1 000-iteration loop: 61 µs (was 73 µs).
+
+### Gate
+
+`benchmarks/run_suite.sh` 79/79 with the mock fixture up (VM and `INDENT_VM=0`),
+`benchmarks/unit_tests.sh` 39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety,
+`verify-limits.sh` 20/20, and `benchmarks/check_baselines.py` — no case slower than
+baseline by more than 15%.
+
 ## 2.4.1-exp19 — 2026-10-27 (experimental — reuse buffers; and a measured verdict on "compile every body")
 
 Nineteenth experimental build of 2.4.1. Two reused buffers, and — more useful — a
