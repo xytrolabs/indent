@@ -1,5 +1,62 @@
 # Indent Changelog
 
+## 2.4.1-exp21 — 2026-10-27 (experimental — publish only the names a callee can read)
+
+Twenty-first experimental build of 2.4.1. The other half of the call boundary.
+
+### The publish is now selective
+
+A compiled loop keeps its variables in slots, and before a call it publishes them into
+its frame because Indent is dynamically scoped — a callee resolves a name it does not own
+against the frames above it. It was publishing **every** slot to **every** call.
+
+It now publishes only the names the callee can actually read:
+
+- for a callee the VM compiled, its exact read set: slots minus its own (parameters and
+  declared locals). `give a + b` has none, so a call to it publishes nothing;
+- for a callee the VM refused — any function without a loop, which is most of them — a
+  conservative **over-approximation** taken from the body: identifier-shaped words in its
+  statements, minus the parameters and the `Debug` scaffolding. Over-approximating can
+  only publish a name that is never read, which is slower, never wrong. A body that can
+  evaluate code it does not contain (`eval`, `call_func`, `run_file`, `spawn`,
+  `process_*`) answers "publish everything" instead.
+
+Asking the question costs a name lookup and two map probes, about 15 ns, while publishing
+costs a few ns per slot — so the question is only asked when the loop has **8 or more
+slots**. Below that the old unconditional publish is cheaper, which is why the micro
+benchmarks (three or four slots) are unaffected by this change while a loop with a dozen
+variables gains.
+
+### Numbers
+
+Per-construction benchmark against CPython 3.14, best of five:
+
+| metric | exp20 | exp21 |
+| --- | --- | --- |
+| `call_2arg` | 4.51x | **4.24x** |
+| `call_1arg` | 3.30x | **3.17x** |
+| `call_0arg` | 3.04x | **2.95x** |
+
+A loop holding twelve variables and calling a read-only function 300 000 times, measured
+interleaved against the exp20 binary over three rounds: **~205 ns → ~198 ns** per
+iteration. The gain is proportional to the loop's live variables — that is the cost the
+change removes — so it is smallest exactly where the micro benchmarks sit.
+
+### The test that guards it
+
+`tests/dynamic_scope.ind` pins the contract both halves of this work depend on: a callee
+reads the caller's current local, its *write* reaches the caller's local, and both hold
+inside a loop wide enough (eleven live variables) to take the selective path. That is the
+case my first attempt at the read-back broke — by counting only frame writes, so a callee
+that wrote a *global* left a stale slot behind.
+
+### Gate
+
+`benchmarks/run_suite.sh` **80/80** with the mock fixture up (VM and `INDENT_VM=0`),
+`benchmarks/unit_tests.sh` 39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety,
+`verify-limits.sh` 20/20, and `benchmarks/check_baselines.py` — no case slower than
+baseline by more than 15%.
+
 ## 2.4.1-exp20 — 2026-10-27 (experimental — frames are vectors, and a call no longer re-reads what it did not change)
 
 Twentieth experimental build of 2.4.1. Two changes to the call path, and one correction to

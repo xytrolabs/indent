@@ -1,0 +1,97 @@
+#! dynamic_scope.ind — a callee sees the caller's locals, and its writes come back.
+#!
+#! Indent is dynamically scoped: a function body resolves a name it does not own
+#! against the frames above it, so it reads the caller's *current* value and, if it
+#! assigns one, the caller sees the write afterwards.
+#!
+#! That is the contract a compiled loop has to keep, and it is the one that is easy to
+#! break: a compiled body keeps its variables in slots, not in its frame, so it publishes
+#! them into the frame before a call and reads them back afterwards. Both halves are now
+#! conditional — the publish only covers the names the callee can read, and the read-back
+#! only runs if the call actually wrote something — so this test drives all four cases:
+#! read-only callee, writing callee, and both of them inside a loop wide enough (more
+#! than eight live variables) to take the selective publish path.
+#!
+#! It runs in both engines; a divergence here is a bug in whichever one is wrong.
+
+fun assert cond label
+    if not cond
+        say "FAIL: " + label
+        process_exit 1
+    say "  ok: " + label
+
+#! ---- a callee reads the caller's local ----
+fun peek
+    give shared
+
+fun caller
+    var shared = 5
+    give peek()
+
+assert (caller() == 5) "callee reads the caller's local"
+
+#! ---- a callee writes the caller's local ----
+fun bump
+    shared is shared + 1
+    give shared
+
+fun caller2
+    var shared = 10
+    var seen dynamic = bump
+    give shared
+
+assert (caller2() == 11) "callee's write reaches the caller's local"
+
+#! ---- both, inside a wide loop: the selective publish path ----
+fun addTo it
+    total is total + it
+    give total
+
+fun wide n
+    var total int = 0
+    var pad1 int = 1
+    var pad2 int = 2
+    var pad3 int = 3
+    var pad4 int = 4
+    var pad5 int = 5
+    var pad6 int = 6
+    var pad7 int = 7
+    var pad8 int = 8
+    var pad9 int = 9
+    var i int = 0
+    repeat n
+        addTo i
+        i += 1
+    #! Every pad has to survive the loop unchanged; a lost read-back shows up here.
+    give total + pad1 + pad2 + pad3 + pad4 + pad5 + pad6 + pad7 + pad8 + pad9
+
+#! 1+2+3+…+9 = 45 plus the pads (1+…+9 = 45) = 90
+var wideResult int = wide 10
+assert (wideResult == 90) "a writing callee inside a wide loop"
+
+#! ---- a read-only callee inside the same wide loop ----
+fun twice it
+    give it + it
+
+fun wideRead n
+    var acc int = 0
+    var pad1 int = 1
+    var pad2 int = 2
+    var pad3 int = 3
+    var pad4 int = 4
+    var pad5 int = 5
+    var pad6 int = 6
+    var pad7 int = 7
+    var pad8 int = 8
+    var pad9 int = 9
+    var i int = 0
+    repeat n
+        acc += twice i
+        i += 1
+    give acc + pad1 + pad2 + pad3 + pad4 + pad5 + pad6 + pad7 + pad8 + pad9
+
+#! 2*(0+…+9) = 90, plus 45 = 135
+var wideReadResult int = wideRead 10
+assert (wideReadResult == 135) "a read-only callee inside a wide loop"
+
+say "dynamic scope across calls: ALL PASS"

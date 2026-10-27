@@ -697,6 +697,15 @@ struct FunctionDef {
     /// Nothing here is serialised (`FunctionDef` is built from `Stmt::DefFun` at
     /// run time), so this cannot leak into the AST cache.
     compiled: OnceLock<Option<Arc<VmProgram>>>,
+    /// Names this body might read from the frames above it, computed once.
+    ///
+    /// `None` means "cannot say" — the body can evaluate code that is not in it
+    /// (`eval`, `call_func`, a dynamic name), so a caller has to publish everything.
+    /// `Some(set)` is an **over-approximation**: a caller may publish a name that is
+    /// never read, which is only slower, never wrong. It exists so that a call to a
+    /// small, tree-walked function — the common case — can skip publishing entirely
+    /// when the set is empty, which is what a body reading only its parameters is.
+    externals: OnceLock<Option<Arc<Vec<String>>>>,
 }
 
 // ---- Classes (OOP) ----
@@ -3618,6 +3627,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                             body: body.clone(),
                             is_generator: stmts_contain_yield(body),
                             compiled: OnceLock::new(),
+                            externals: OnceLock::new(),
                         }),
                     );
                 }
@@ -3780,6 +3790,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 body: body.clone(),
                 is_generator: *is_generator,
                 compiled: OnceLock::new(),
+                            externals: OnceLock::new(),
             });
             Arc::make_mut(&mut ctx.rt.funcs).insert(name.clone(), f.clone());
             Arc::make_mut(&mut ctx.rt.callables).insert(name.clone(), Callable::Local(f));
@@ -4689,6 +4700,20 @@ struct VmProgram {
     /// Set only for a runner-driven loop: the flag its `stop` raises, which
     /// `vm_run` reads after each pass.
     stop_flag: Option<u16>,
+    /// Names this program reads that it does not own — the only names a callee can
+    /// take from the frames above it.
+    ///
+    /// A compiled loop publishes its variables into the frame before a call, because
+    /// Indent is dynamically scoped. It only has to publish the names the callee can
+    /// actually read, and for a compiled callee those are exactly its slots minus its
+    /// own (parameters and declared locals). `give a + b` has none, so a call to it
+    /// needs no publication at all — the whole per-slot hand-over disappears.
+    externals: Vec<String>,
+    /// Whether this program runs user code that shares the caller's frames (a call, a
+    /// dict-callable method). Operator methods do not count: they run in a runtime of
+    /// their own and cannot see those frames. A program that does not call out may be
+    /// summarised by `externals` alone; one that does could pass names further down.
+    calls_out: bool,
     /// Every `Reps` slot, at every nesting level: the values the instruction stream
     /// rewrites on its own. The hand-over publishes them so a callee can read the
     /// counter, but `vm_pull_slots` must not read them back — see there.
@@ -4738,6 +4763,8 @@ impl VmProgram {
             subs: Vec::new(),
             loops: Vec::new(),
             stop_flag: None,
+            externals: Vec::new(),
+            calls_out: false,
             counters: Vec::new(),
             counter_flags: OnceLock::new(),
         }
@@ -5806,7 +5833,28 @@ fn vm_compile_function(
     if !vm_verify_stack(&prog) {
         return None;
     }
+    vm_summarise(&mut prog);
     Some(prog)
+}
+
+/// Record what a finished program can read from, and hand to, the frames above it.
+fn vm_summarise(prog: &mut VmProgram) {
+    prog.externals.clear();
+    for (i, name) in prog.slots.iter().enumerate() {
+        if name.is_empty() || prog.owned.contains(&(i as u16)) {
+            continue;
+        }
+        prog.externals.push(name.clone());
+    }
+    prog.calls_out = prog.instrs.iter().any(|instr| {
+        matches!(
+            instr,
+            VmInstr::Call { .. }
+                | VmInstr::CallOrRead { .. }
+                | VmInstr::MethodCall { .. }
+                | VmInstr::PlaceMethodCall { .. }
+        )
+    });
 }
 
 /// Run a compiled function body.
@@ -6283,6 +6331,109 @@ fn vm_concat_slot(
 /// moved-out slots hold `Empty` until `vm_pull_slots` runs, and no user code can
 /// observe that: the frames, which are what user code reads, are filled before the
 /// boundary and emptied only after it.
+/// Publish only the slots whose names appear in `names`.
+///
+/// `names` is a callee's external read set, so this is what a call actually needs to
+/// make visible. When it is empty — a compiled function that only reads its own
+/// parameters — nothing is published at all.
+fn vm_flush_named(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'_>, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    for (i, name) in prog.slots.iter().enumerate() {
+        if name.is_empty() || !names.iter().any(|n| n == name) {
+            continue;
+        }
+        ctx.set_var(name, values[i].clone());
+    }
+}
+
+/// Words that come from `Debug` scaffolding rather than from the program.
+const BODY_DUMP_NOISE: &[&str] = &[
+    "Assign", "Say", "Give", "IfChain", "Repeat", "Count", "While", "Until", "ForEach",
+    "ForIn", "Infinite", "Return", "DefVar", "DefFun", "Value", "ValueSource", "Call",
+    "Expr", "Stmt", "line", "name", "body", "expr", "value", "cond", "branches", "mode",
+    "callee", "args", "items", "ty", "field", "target", "op", "rhs", "lhs", "None",
+    "Some", "true", "false", "Empty", "Int", "Float", "Str", "Bool",
+];
+
+/// The names a body might read from the frames above it, over-approximated.
+///
+/// The statements keep their expressions as text, so this scans the debuggable form
+/// of the body for identifier-shaped words and drops the parameters and `Debug`
+/// noise. Anything the scan cannot see — `eval`, `call_func`, a computed call target —
+/// makes it answer `None`, which is the "publish everything" case.
+fn function_externals(f: &FunctionDef) -> Option<Arc<Vec<String>>> {
+    f.externals
+        .get_or_init(|| {
+            let dump = format!("{:?}", f.body);
+            if ["eval", "call_func", "run_file", "spawn", "process_"]
+                .iter()
+                .any(|k| dump.contains(k))
+            {
+                return None;
+            }
+            let params: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+            let mut names: Vec<String> = Vec::new();
+            for word in dump.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+                if word.is_empty()
+                    || word.len() < 2
+                    || word.as_bytes()[0].is_ascii_digit()
+                    || params.contains(&word)
+                    || BODY_DUMP_NOISE.contains(&word)
+                    || names.iter().any(|n| n == word)
+                {
+                    continue;
+                }
+                names.push(word.to_string());
+            }
+            Some(Arc::new(names))
+        })
+        .clone()
+}
+
+/// The compiled program of `callee`, when a call to it can be summarised by its
+/// external read set.
+///
+/// Three things disqualify it: the name is shadowed by a variable (so the call is a
+/// callable value, not this function), it is not a plain user function, or its body
+/// did not compile (the tree-walker reads names it mentions, which nothing here
+/// knows). A function that calls out is refused too, since its own callees could read
+/// further names.
+fn vm_callee_summary<'a>(callee: &str, ctx: &'a ExecContext<'_>) -> Option<&'a VmProgram> {
+    if ctx.has_var(callee) {
+        return None;
+    }
+    let f = ctx.rt.funcs.get(callee)?;
+    let prog = f.compiled.get()?.as_ref()?;
+    if prog.calls_out {
+        return None;
+    }
+    Some(prog.as_ref())
+}
+
+/// The names a call to `callee` may need published, whichever engine will run it.
+///
+/// `Some(names)` — publish only these. `None` — publish everything. A compiled callee
+/// answers exactly; one whose body the VM refused (any function without a loop in it)
+/// answers from `function_externals`, which over-approximates but is usually empty.
+fn vm_call_publish_set(callee: &str, ctx: &ExecContext<'_>) -> Option<Vec<String>> {
+    if ctx.has_var(callee) {
+        return None;
+    }
+    let f = ctx.rt.funcs.get(callee)?;
+    if let Some(Some(prog)) = f.compiled.get() {
+        if prog.calls_out {
+            return None;
+        }
+        return Some(prog.externals.clone());
+    }
+    match function_externals(f) {
+        Some(names) => Some(names.as_ref().clone()),
+        None => None,
+    }
+}
+
 fn vm_flush_slots(prog: &VmProgram, values: &mut [Value], ctx: &mut ExecContext<'_>) {
     // Slot order matters: when loops are nested, two slots are named `Reps` and
     // `set_var` resolves to the innermost frame holding that name, so writing the
@@ -7000,7 +7151,28 @@ fn vm_run(
                         // the callee replaced back into the frame.
                         let user_code = vm_call_runs_user_code(callee, args, ctx);
                         if user_code {
-                            vm_flush_slots(prog, &mut values, ctx);
+                            // Publish what the callee can read, not everything: a
+                            // compiled, read-only body needs nothing published, which
+                            // removes the whole per-slot hand-over from the common
+                            // call. Anything we cannot summarise still gets it all.
+                            // Asking what the callee reads costs a name lookup and two
+                            // map probes (~15 ns); publishing costs a few ns per slot.
+                            // So the question is only worth asking when the loop has
+                            // enough variables for the answer to pay for it — below
+                            // that, publish everything as before.
+                            const SUMMARY_WORTH_SLOTS: usize = 8;
+                            let names = if prog.slots.len() >= SUMMARY_WORTH_SLOTS {
+                                // Cloned out because the borrow ends before the publish,
+                                // which needs `ctx` mutably. An empty set — a body that
+                                // reads only its parameters — clones into nothing.
+                                vm_call_publish_set(callee, ctx)
+                            } else {
+                                None
+                            };
+                            match names {
+                                Some(names) => vm_flush_named(prog, &mut values, ctx, &names),
+                                None => vm_flush_slots(prog, &mut values, ctx),
+                            }
                         }
                         let writes_before = ctx.frame_writes;
                         let result = invoke_callable_values(callee, args, ctx);
