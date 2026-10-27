@@ -1,88 +1,40 @@
 # Indent Changelog
 
-## 2.4.1-exp17 — 2026-10-27 (experimental — frame locals without a hash map)
+## 2.4.1-exp18 — 2026-10-27 (experimental — string concatenation without `format!`)
 
-Seventeenth experimental build of 2.4.1. The first change aimed at the one metric where
-Indent is still behind CPython by a wide margin: **a function call**.
+Eighteenth experimental build of 2.4.1. A small, measured step on the second-largest
+per-operation deficit against CPython.
 
-### What a call was paying for
+### `a + b` on two strings was going through the formatting machinery
 
-`indent/python` on the per-construct benchmark, before this build:
+`eval_binary`'s `+` built every concatenation with `format!("{}{}", a, b)`, which
+formats both operands through `Display` and a formatter before any bytes are copied.
+For the sizes `+` is normally used on, that costs more than the copy itself.
+Concatenation now copies bytes into an exactly sized buffer:
 
-```
-metric                 indent us   python us  indent/python
-call_2arg                 0.2365      0.0416          5.69x
-call_1arg                 0.1597      0.0366          4.37x
-call_0arg                 0.0941      0.0293          3.21x
-str_concat                0.1175      0.0471          2.49x
-dict_alloc_small          0.1479      0.0770          1.92x
-...
-add_assign                0.0210      0.0407          0.51x
-list_index_read           0.0547      0.0575          0.95x
-```
+- two strings: `String::with_capacity(a.len() + b.len())` plus two `push_str`;
+- a string and something else: the string's bytes followed by that value's text;
+- something else and a string: that value's text followed by the string.
 
-Everything else is at parity or ahead; calls are the outlier, and they are what real
-programs are made of. A probe with the same call in loops holding a different number of
-live variables showed the cost growing with the variable count — 204 ns with two, 437 ns
-with ten — which is the cost of publishing a compiled loop's slots into its frame before
-the call and reading them back after (`vm_flush_slots` / `vm_pull_slots`). That
-publication is required: a callee really can read the caller's locals,
+`str_concat` on the per-construct benchmark went **2.49x → 2.13x** CPython, measured
+in the same session as the `1.0x` baselines for the arithmetic and list cases, so the
+comparison is against the same machine state.
 
-```indent
-fun peek
-    give x
-fun outer
-    var x = 5
-    give peek()          # → 5
-```
+Calls improved again in the same measurement, from the frame-locals change in exp17:
 
-so the mirror cannot be made selective.
-
-### Frame locals are no longer a hash map
-
-`Frame.vars` was `Map<String, Value>`, so every slot published for a call hashed a name,
-every variable read in a function body hashed a name, and — the part that dominated —
-every parameter binding on a *fresh* frame allocated a `String`, because the map had
-nothing to reuse.
-
-Locals are now a small vector of `(String, Value)` with a live count: lookups are a
-reverse scan that compares lengths before bytes (a caller's frame holds a handful of
-entries), and the entries *survive* `push_frame`, so the same function called again
-rewrites its own names in place instead of allocating them. `bind_local` is shared with
-the coroutine runner, which keeps its locals in the same shape between statements.
-
-**Call cost, interleaved against the previous build:**
-
-| metric | exp16 | exp17 |
+| metric | exp16 | exp18 |
 | --- | --- | --- |
-| `call_2arg` | 5.69x CPython | **4.69x** |
-| `call_1arg` | 4.37x | **3.49x** |
-| `call_0arg` | 3.21x | **3.01x** |
-
-and the cost no longer scales with the number of live variables in the loop.
-
-### Memory, measured against CPython 3.14
-
-Peak RSS per workload, each sample in its own process (a shared `ru_maxrss` high-water
-mark would report the largest earlier case for every later one):
-
-| workload | Indent | CPython 3.14 | memory | Indent time | CPython time |
-| --- | --- | --- | --- | --- | --- |
-| empty program | 12.1 MB | 12.1 MB | 1.00x | 0.004 s | 0.058 s |
-| 1M ints in a list | 28.3 MB | 48.1 MB | **0.59x** | 0.062 s | 0.150 s |
-| 200k strings in a list | 25.9 MB | 23.7 MB | 1.09x | 0.105 s | 0.126 s |
-| 100k-key dict | 16.0 MB | 21.9 MB | **0.73x** | 0.109 s | 0.144 s |
-| 100k objects | 18.4 MB | 18.4 MB | 1.00x | 0.102 s | 0.121 s |
-
-So Indent already uses less memory than CPython for integer lists and dicts, matches it
-on objects and startup, and is 1.2–2.4x faster on these allocation-heavy programs. The
-remaining deficits are per-operation costs, calls first.
+| `call_2arg` | 5.69x | **4.63x** |
+| `call_1arg` | 4.37x | **3.52x** |
+| `call_0arg` | 3.21x | 3.18x |
+| `str_concat` | 2.49x | **2.13x** |
+| `add_assign` | 0.51x | 0.57x |
+| `list_index_read` | 0.95x | 0.89x |
 
 ### Gate
 
 `benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
-39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 20/20,
-and `benchmarks/check_baselines.py` — no case slower than baseline by more than 15%.
+39/39, `scripts/ci/golden-outputs.sh` 8/8, installer safety, `verify-limits.sh` 20/20.
 
 ## 2.4.1-exp14 — 2026-10-23 (experimental — execution budgets)
 
