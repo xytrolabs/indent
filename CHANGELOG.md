@@ -1,5 +1,56 @@
 # Indent Changelog
 
+## 2.4.1-exp19 — 2026-10-27 (experimental — reuse buffers; and a measured verdict on "compile every body")
+
+Nineteenth experimental build of 2.4.1. Two reused buffers, and — more useful — a
+measurement that says where the VM's takeover actually stops.
+
+### What was tried first: compile every function body
+
+`vm_compile_function` refused any body without a loop in it, so every getter, setter,
+predicate, `give a + b` and one-shot helper ran on the tree-walker. Removing that gate
+is the obvious reading of "let the bytecode VM handle most of the work", so it was
+done and measured:
+
+| | body compiled | body walked |
+| --- | --- | --- |
+| `call_2arg` (`give a + b`) | **7.66x** CPython | 4.63x |
+| `call_1arg` | 7.25x | 3.52x |
+| `call_0arg` | 5.37x | 3.18x |
+
+Compiling a two-statement body costs *more* than walking it: the per-call entry (slot
+setup, a 16-slot operand stack to initialise, the write-back of every dirty slot, the
+binding walk) is fixed overhead against two statement dispatches of work. Two
+follow-up changes did not close the gap — marking parameter slots as satisfied so the
+per-call binding walk skips them, and recycling the slot buffer — so the gate is back
+and the crossover is a loop, as the original code said.
+
+That is the honest shape of the current design: the compiled path wins when a body
+repeats work (a loop), and loses when the work is smaller than the entry. Making the VM
+primary is not a switch to flip; it needs the call itself to stop building a frame and a
+slot mirror, which is the register/slot-VM work in the plan, not a bigger cache.
+
+### What did land
+
+- `ExecContext` now keeps a **pool of slot buffers** for compiled programs, and a
+  **pool of positional-argument buffers** for calls. Both were allocated and freed per
+  entry before: `vm_run` built a `Vec` of its slots on every run, and every call in
+  expression position built a `Vec` for its arguments. Nested programs and nested calls
+  need their own buffer, so both are stacks, bounded at 64 and 32 entries.
+- Compiled function bodies mark their **parameter slots as satisfied** at compile time,
+  so the per-call `vm_names_bound` walk no longer re-checks names the frame binding has
+  just created. This only applies to bodies that compile (the ones with a loop), where
+  it removes an O(slots × scope) scan per call.
+
+Measured against the installed exp16 build on the loop benchmarks, these are within the
+noise floor of this machine (which was running at a load average of ~30 from unrelated
+processes while the numbers were taken), and none of them is slower.
+
+### Gate
+
+`benchmarks/run_suite.sh` 79/79 (VM and `INDENT_VM=0`), `benchmarks/unit_tests.sh`
+39/39, `scripts/ci/golden-outputs.sh` 8/8, `verify-limits.sh` 20/20, installer safety.
+
 ## 2.4.1-exp18 — 2026-10-27 (experimental — string concatenation without `format!`)
 
 Eighteenth experimental build of 2.4.1. A small, measured step on the second-largest

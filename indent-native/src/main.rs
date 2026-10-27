@@ -2703,12 +2703,26 @@ struct ExecContext<'a> {
     /// the caller's, while an existing global variable still shadows a module
     /// variable — but nothing is copied, inserted or restored.
     module_scope: Vec<Arc<ModuleInstance>>,
+    /// Recycled slot buffers for compiled programs.
+    ///
+    /// `vm_run` used to build its slot mirrors in a fresh `Vec` on every entry —
+    /// every loop trip and, once bodies compile, every call — so a 2-statement body
+    /// paid a malloc and a free for two values. The buffers nest (a compiled body can
+    /// call a function that runs its own program), so this is a stack of buffers
+    /// rather than one: take on entry, give back on exit.
+    vm_values_pool: Vec<Vec<Value>>,
+    /// Recycled positional-argument buffers, for the same reason one level up: every
+    /// call evaluated its arguments into a fresh `Vec`, so every call in the program
+    /// allocated and freed one. Nested calls need their own, hence a pool.
+    call_args_pool: Vec<Vec<Value>>,
 }
 
 impl<'a> ExecContext<'a> {
     /// Frames kept for reuse. Deep recursion is bounded so a pathological call
     /// depth does not retain an unbounded amount of memory.
     const FRAME_POOL_MAX: usize = 64;
+    /// Argument buffers kept for reuse; nested calls take one each.
+    const CALL_ARGS_POOL_MAX: usize = 32;
 
     fn new(rt: &'a mut Runtime) -> Self {
         Self {
@@ -2718,6 +2732,26 @@ impl<'a> ExecContext<'a> {
             collect_yields: false,
             yielded_values: vec![],
             module_scope: Vec::new(),
+            vm_values_pool: Vec::new(),
+            call_args_pool: Vec::new(),
+        }
+    }
+
+    /// A recycled argument buffer with room for `n` values.
+    #[inline]
+    fn take_args(&mut self, n: usize) -> Vec<Value> {
+        let mut v = self.call_args_pool.pop().unwrap_or_default();
+        v.clear();
+        v.reserve(n);
+        v
+    }
+
+    /// Return an argument buffer for the next call to reuse.
+    #[inline]
+    fn give_args(&mut self, mut v: Vec<Value>) {
+        v.clear();
+        if self.call_args_pool.len() < Self::CALL_ARGS_POOL_MAX {
+            self.call_args_pool.push(v);
         }
     }
 
@@ -5639,7 +5673,17 @@ fn vm_compile_sub(body: &[Stmt], allow_return: bool, rt: &Runtime) -> Option<VmP
 /// about a call is untouched: the frame, the parameters, the arity and default
 /// handling and the return-type coercion all stay in `invoke_function`, which only
 /// swaps how the body runs.
-fn vm_compile_function(body: &[Stmt], declared_return: bool, rt: &Runtime) -> Option<VmProgram> {
+fn vm_compile_function(
+    body: &[Stmt],
+    declared_return: bool,
+    params: &[FunctionParam],
+    rt: &Runtime,
+) -> Option<VmProgram> {
+    // A body with no loop in it stays on the tree-walker. Measured both ways on a
+    // 2-arg call: `give a + b` compiled is 7.7x CPython against 4.6x walked, because
+    // the per-call entry (slot setup, operand stack, write-back) costs more than two
+    // statement dispatches. Removing the per-call binding walk and pooling the slot
+    // buffer did not close that gap, so the gate stays and the crossover is a loop.
     if !stmts_contain_loop(body) {
         return None;
     }
@@ -5655,6 +5699,15 @@ fn vm_compile_function(body: &[Stmt], declared_return: bool, rt: &Runtime) -> Op
     prog.instrs.push(VmInstr::EndBody {
         declared: declared_return,
     });
+    // Parameters are bound by `invoke_function` before the body runs, so their slots
+    // are always satisfied and the per-call `vm_names_bound` walk can skip them.
+    // Without this a body's slot list was rescanned on every call — with a scope
+    // search per name — which is what made compiling a *small* body a loss.
+    for (i, name) in prog.slots.iter().enumerate() {
+        if params.iter().any(|p| p.name == *name) {
+            prog.owned.push(i as u16);
+        }
+    }
     if !vm_verify_stack(&prog) {
         return None;
     }
@@ -6474,12 +6527,16 @@ fn vm_run(
         ctx.pop_frame();
     }
     // Read the body's variables once. Slots are then just a `Vec` index, so the
-    // loop body never hashes a name again.
-    let mut values: Vec<Value> = prog
-        .slots
-        .iter()
-        .map(|name| ctx.get_var(name).unwrap_or(Value::Empty))
-        .collect();
+    // loop body never hashes a name again. The buffer is recycled from the stack of
+    // them, because a fresh one per entry was a malloc and a free for a handful of
+    // values — and nested programs need their own buffer, hence the stack.
+    let mut values: Vec<Value> = ctx.vm_values_pool.pop().unwrap_or_default();
+    values.clear();
+    values.reserve(prog.slots.len());
+    for name in &prog.slots {
+        let v = ctx.get_var(name).unwrap_or(Value::Empty);
+        values.push(v);
+    }
     // `Reps` belongs to the loop frame in the tree-walker (`define_local`), so
     // create it there too: otherwise the write-back below would treat it as a new
     // name and insert it into the globals. The `for` item is bound the same way.
@@ -7179,15 +7236,23 @@ fn vm_run(
         if name.is_empty() || prog.owned.contains(&(i as u16)) {
             continue;
         }
-        ctx.set_var(name, values[i].clone());
+        let v = std::mem::replace(&mut values[i], Value::Empty);
+        ctx.set_var(name, v);
     }
-    outcome?;
-    Ok(match prog.return_slot {
+    // The result is read before the buffer goes back, and the buffer goes back even
+    // when the run failed: this is a stack, not a single scratch slot.
+    let out = match prog.return_slot {
         Some((value, flag)) if values[flag as usize].to_bool() => {
             Some(values[value as usize].clone())
         }
         _ => None,
-    })
+    };
+    values.clear();
+    if ctx.vm_values_pool.len() < 64 {
+        ctx.vm_values_pool.push(values);
+    }
+    outcome?;
+    Ok(out)
 }
 
 /// `x += value` for everything the integer fast path does not answer: strings,
@@ -7839,7 +7904,9 @@ fn exec_call_inner(callee: &str, args: &[ArgItem], ctx: &mut ExecContext<'_>) ->
     }
     // Sized from the argument list: `vec![]` grows 1 -> 4 -> 8, so a 5-argument
     // call reallocated twice. `with_capacity(0)` still does not allocate, so the
-    // no-argument case is unchanged.
+    // no-argument case is unchanged. (Not pooled like `invoke_callable_expr`: this
+    // dispatch has a dozen early returns and threading a buffer back through all of
+    // them is noise for the paths that never reach the call.)
     let mut positional: Vec<Value> = Vec::with_capacity(args.len());
     let mut named: HashMap<String, Value> = HashMap::new();
 
@@ -8929,7 +8996,7 @@ fn resumed_body(
 ) -> Result<Control, String> {
     if vm_enabled() {
         let compiled = f.compiled.get_or_init(|| {
-            vm_compile_function(&f.body, f.return_type.is_some(), ctx.rt).map(Arc::new)
+            vm_compile_function(&f.body, f.return_type.is_some(), &f.params, ctx.rt).map(Arc::new)
         });
         if let Some(prog) = compiled {
             // Binding is per call: the body's names must exist *now*.
@@ -8946,11 +9013,15 @@ fn invoke_callable_expr(
     args: &[Expr],
     ctx: &mut ExecContext<'_>,
 ) -> Result<Value, String> {
-    let mut positional = Vec::with_capacity(args.len());
+    // Recycled buffer: this is one allocation per call in the program otherwise.
+    let mut positional = ctx.take_args(args.len());
     for arg in args {
-        positional.push(eval_ast(arg, ctx)?);
+        let v = eval_ast(arg, ctx)?;
+        positional.push(v);
     }
-    invoke_callable_values(callee, &positional, ctx)
+    let out = invoke_callable_values(callee, &positional, ctx);
+    ctx.give_args(positional);
+    out
 }
 
 /// Invoke `callee` with already-evaluated positional arguments.
