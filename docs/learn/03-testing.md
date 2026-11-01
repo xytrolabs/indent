@@ -5,7 +5,7 @@
 Indent has built-in assertions. Write test files in a `tests/` folder:
 
 ```indent
-#! tests/math_test.ind
+#! tests/math_test.idnt
 
 var result int = 2 + 2
 assert_eq result 4 "2 + 2 should equal 4"
@@ -54,10 +54,10 @@ say Random 1 100       #! random number between 1-100
 
 ## Creating Your Own Module
 
-Create a `.ind` file in `packages/` or your project folder:
+Create a `.idnt` file in `packages/` or your project folder:
 
 ```indent
-#! packages/greetings.ind
+#! packages/greetings.idnt
 
 fun Hello
     name
@@ -78,7 +78,7 @@ Hello "World"
 
 ```
 my-project/
-├── main.ind          #! entry point
+├── main.idnt          #! entry point
 ├── packages/         #! your modules
 ├── tests/            #! test files
 └── .env              #! environment variables (optional)
@@ -86,9 +86,9 @@ my-project/
 
 ## Practice
 
-1. Create a module `calculator.ind` with `add`, `subtract`, `multiply`, `divide` functions.
-2. Write tests for each function in `tests/calculator_test.ind`.
-3. Import `calculator` into `main.ind` and build a simple CLI calculator.
+1. Create a module `calculator.idnt` with `add`, `subtract`, `multiply`, `divide` functions.
+2. Write tests for each function in `tests/calculator_test.idnt`.
+3. Import `calculator` into `main.idnt` and build a simple CLI calculator.
 
 ---
 

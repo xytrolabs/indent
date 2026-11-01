@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run benchmarks/ab_lang_bench.ind and benchmarks/ab_lang_bench.py and compare.
+"""Run benchmarks/ab_lang_bench.idnt and benchmarks/ab_lang_bench.py and compare.
 
 Takes the best-of-N result per metric (min, since we want the fastest the
 interpreter can go without noise) and prints a table with the Python/Indent
@@ -14,7 +14,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-IND = os.path.join(HERE, "ab_lang_bench.ind")
+IND = os.path.join(HERE, "ab_lang_bench.idnt")
 PY = os.path.join(HERE, "ab_lang_bench.py")
 
 # Metrics where a smaller number is not better to report as a slowdown, so we

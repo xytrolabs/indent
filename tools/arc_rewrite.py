@@ -10,8 +10,8 @@ Applying this ALONE leaves the tree broken: with `Arc<Vec<Value>>` the ~137
 destructuring sites plus every mutation site need a decision (borrow and read it?
 `Arc::make_mut` to write? `Arc::try_unwrap` to take ownership?), and our first
 attempt produced **138 compile errors**. Do the whole migration in one sitting,
-with the full test suite plus `tests/append_semantics.ind` and
-`tests/index_write_semantics.ind` to prove copy semantics survive.
+with the full test suite plus `tests/append_semantics.idnt` and
+`tests/index_write_semantics.idnt` to prove copy semantics survive.
 
 Usage:
     python3 tools/arc_rewrite.py --dry-run     # report only (safe)

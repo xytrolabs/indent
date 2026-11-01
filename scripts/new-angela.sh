@@ -9,14 +9,14 @@ Usage:
   bash scripts/new-angela.sh [output-file] [token] [guild-id] [audit-channel-id] [--force]
 
 Defaults:
-  output-file       examples/angela_mod_puzzle.local.ind
+  output-file       examples/angela_mod_puzzle.local.idnt
   token             $INDENT_DISCORD_TOKEN or YOUR_BOT_TOKEN
   guild-id          $INDENT_DISCORD_GUILD_ID or YOUR_GUILD_ID
   audit-channel-id  $INDENT_DISCORD_AUDIT_CHANNEL_ID or YOUR_AUDIT_CHANNEL_ID
 
 Examples:
   bash scripts/new-angela.sh
-  bash scripts/new-angela.sh examples/my_angela.ind "YOUR_TOKEN" "123456789012345678"
+  bash scripts/new-angela.sh examples/my_angela.idnt "YOUR_TOKEN" "123456789012345678"
   INDENT_DISCORD_TOKEN="YOUR_TOKEN" INDENT_DISCORD_GUILD_ID="123" bash scripts/new-angela.sh
 EOF
 }
@@ -39,13 +39,13 @@ for arg in "$@"; do
 done
 set -- "${POSITIONAL[@]}"
 
-OUTPUT_FILE="${1:-examples/angela_mod_puzzle.local.ind}"
+OUTPUT_FILE="${1:-examples/angela_mod_puzzle.local.idnt}"
 TOKEN="${2:-${INDENT_DISCORD_TOKEN:-YOUR_BOT_TOKEN}}"
 GUILD_ID="${3:-${INDENT_DISCORD_GUILD_ID:-YOUR_GUILD_ID}}"
 AUDIT_CHANNEL_ID="${4:-${INDENT_DISCORD_AUDIT_CHANNEL_ID:-YOUR_AUDIT_CHANNEL_ID}}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE_FILE="$ROOT_DIR/examples/angela_mod_puzzle.ind"
+TEMPLATE_FILE="$ROOT_DIR/examples/angela_mod_puzzle.idnt"
 
 if [[ ! -f "$TEMPLATE_FILE" ]]; then
   echo "Template not found: $TEMPLATE_FILE" >&2

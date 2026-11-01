@@ -62,9 +62,9 @@ run_one() {
     fi
 }
 
-for fixture in "$GOLDEN"/*.ind; do
+for fixture in "$GOLDEN"/*.idnt; do
     [ -e "$fixture" ] || continue
-    name=$(basename "$fixture" .ind)
+    name=$(basename "$fixture" .idnt)
     expected="$GOLDEN/$name.expected"
 
     for engine in vm tree; do

@@ -4,7 +4,7 @@
     <comment>Indent source file</comment>
     <acronym>Indent</acronym>
     <expanded-acronym>Indent</expanded-acronym>
-    <glob pattern="*.ind"/>
+    <glob pattern="*.idnt"/>
   </mime-type>
   <mime-type type="text/x-indent-env">
     <comment>Indent environment file</comment>

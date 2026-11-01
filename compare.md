@@ -16,7 +16,7 @@ bash scripts/ci/then-gate.sh                 # the full gate
 
 ## 1. Per-operation cost
 
-`benchmarks/ab_lang_bench.ind` vs `ab_lang_bench.py`, best of five. "before" is the build
+`benchmarks/ab_lang_bench.idnt` vs `ab_lang_bench.py`, best of five. "before" is the build
 at the start of the 2.4.1-exp16..exp21 optimisation work; "now" is exp21.
 
 | operation | before | now | |
@@ -81,9 +81,9 @@ enforces:
 
 | case | change |
 | --- | --- |
-| `bench_string_ops.ind::build 110000 chars` | **−60%** (0.000534 → 0.000213 s) |
-| `bench_list_concat_build.ind::plus-eq 8000` | **−40%** |
-| `bench_method_calls.ind::object equals` | **−16.5%** (188.9 → 157.5 ns) |
+| `bench_string_ops.idnt::build 110000 chars` | **−60%** (0.000534 → 0.000213 s) |
+| `bench_list_concat_build.idnt::plus-eq 8000` | **−40%** |
+| `bench_method_calls.idnt::object equals` | **−16.5%** (188.9 → 157.5 ns) |
 
 ## 5. Layout guardrails
 

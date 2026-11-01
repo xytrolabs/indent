@@ -1,5 +1,106 @@
 # Indent Changelog
 
+## Unreleased
+
+### `.idnt` is the source extension
+
+Indent source files are now `.idnt`. The old `.ind` spelling is still read
+everywhere it was before — `import`/`get … from`, `launch`, `indent check`,
+`indent test`, `indent fmt`, `indent lint` — so existing projects keep running
+without a rename; when a directory holds both spellings, `.idnt` wins. `.ath`
+and `.glo` remain accepted for older packages.
+
+`indent new` scaffolds `main.idnt` and `tests/smoke.idnt`.
+
+### Update hints for the experimental channel
+
+`indent --update` on an experimental build says so when the stable channel has
+released the same version (`v2.4.1-exp21` next to `v2.4.1`), and names
+`--switch-to-stable` rather than switching on its own. A hint is only shown for
+the same version: `v2.4.2-exp1` beside a `v2.4.1` stable is a different release
+and stays silent.
+
+## 2.4.1 — 2026-10-27 (stable)
+
+The first stable release since 2.4.0, and the largest single step on speed, memory and
+robustness the language has had. It arrived as twenty-one experimental builds; this
+section is the summary, and each `2.4.1-expN` entry below keeps the detail and the
+measurements for the change it describes.
+
+### Speed
+
+A call is what programs are made of, and it was the one place Indent was far behind
+CPython 3.14. Twenty-one builds later, against CPython on the same machine:
+
+| operation | 2.4.0 | 2.4.1 |
+| --- | --- | --- |
+| `call_2arg` | 5.69x | **4.22x** |
+| `call_1arg` | 4.37x | **3.16x** |
+| `call_0arg` | 3.21x | **3.01x** |
+| `str_concat` | 2.49x | **2.45x** |
+| `add_assign` | 0.51x | **0.46x** |
+| `list_append` / `list_index_read` | 0.96x / 0.95x | 0.90x / 0.94x |
+| `if_compare` | 1.01x | **0.93x** |
+
+Half the measured operations are now at parity or ahead. The rest of the ground came
+from work that does not show in a per-op table:
+
+- **module calls −95%** (6 280 ns → 301 ns with 41 exports): a function called through
+  a module runs *in* the module's scope instead of in a copy of its symbol table.
+- **string building −60%** (0.53 ms → 0.21 ms for 110 000 characters), **list `+=` −40%**,
+  **object calls −16.5%**.
+- **spawn 138 µs → 25 µs** with 800 functions, because a task shares the program's
+  function, callable, class and module tables instead of copying all four.
+- **`Value` is 24 bytes** (from 32), and object fields are copy-on-write, so an alias is
+  a refcount bump rather than a copy of the field array.
+
+### Memory
+
+Peak RSS per process, against CPython 3.14: a million integers in a list
+**28.3 MB vs 48.1 MB (0.59x)**, a 100k-key dict **16.0 MB vs 21.9 MB (0.73x)**,
+100k objects 18.4 MB vs 18.4 MB, empty program 12.1 MB both. Strings are the one case
+where CPython wins (1.09x). `compare.md` has the tables and the method.
+
+### Robustness
+
+Two things had no ceiling: an unbounded loop ran until Ctrl-C, and recursion ended the
+*process* — `fatal runtime error: stack overflow, aborting`, with a core dump. Both are
+now ordinary Indent errors, enforced identically by the tree-walker and the compiled
+engine:
+
+| flag | environment | default |
+| --- | --- | --- |
+| `--max-steps N` | `INDENT_MAX_STEPS` | none |
+| `--max-depth N` | `INDENT_MAX_DEPTH` | 500 |
+| `--max-loop-iters N` | `INDENT_MAX_LOOP_ITERS` | 100 000 |
+| `--timeout-ms N` | `INDENT_TIMEOUT_MS` | none |
+
+`0` disables any of them, and a budget failure reports as `resource_error` with advice
+that names the flag.
+
+### Language and tooling
+
+- **`if ... then`** — accepted on `if`, `or` and `else if` headers in both grammars,
+  with an optional single statement after it. The interpreter's own error help had been
+  recommending this syntax while no parser accepted it.
+- **Classes exported from modules** are reachable, including a class and a table under
+  the same name (`std/discord`'s `Bot` pattern); a module function now keeps the state
+  it writes (`ai.Chat` returned empty because `ai.SetBase` was discarded).
+- **`--update`** records the tag it installed, so an experimental install is no longer
+  moved onto an older stable build, and an experimental build now says when the same
+  version has shipped stable.
+- **Errors** classify into one shared table (a second copy had drifted, so a time budget
+  reported as `network_error`), and a failure deep in a call chain prints one `Line N:`
+  prefix instead of one per frame.
+- **CI** installs the fixture server's dependency and now gates on the `.idnt` suite —
+  eighty behavioural tests in both engines — plus the budget checks. Release readiness
+  runs the same suite instead of `indent test tests`, which could pass on one test.
+
+### Upgrading
+
+`indent --update` on the stable channel. An experimental install stays where it is:
+`indent --switch-to-stable` moves it onto 2.4.1, which `--update` will point out.
+
 ## 2.4.1-exp21 — 2026-10-27 (experimental — publish only the names a callee can read)
 
 Twenty-first experimental build of 2.4.1. The other half of the call boundary.
@@ -44,7 +145,7 @@ change removes — so it is smallest exactly where the micro benchmarks sit.
 
 ### The test that guards it
 
-`tests/dynamic_scope.ind` pins the contract both halves of this work depend on: a callee
+`tests/dynamic_scope.idnt` pins the contract both halves of this work depend on: a callee
 reads the caller's current local, its *write* reaches the caller's local, and both hold
 inside a loop wide enough (eleven live variables) to take the selective path. That is the
 case my first attempt at the read-back broke — by counting only frame writes, so a callee
@@ -96,7 +197,7 @@ The publication now *copies* rather than moves (`vm_flush_slots`): moving left t
 
 The first attempt counted only *frame* writes and broke a fixture-backed test: a callee
 that writes a **global** is just as visible to the loop as one that writes a frame, and the
-suite caught it immediately (`tests/ai_mock_parity.ind` skipped because its health probe
+suite caught it immediately (`tests/ai_mock_parity.idnt` skipped because its health probe
 read a stale slot).
 
 ### Numbers
@@ -218,10 +319,10 @@ Indent is used to run code it did not write — `ai.Chat` output, a Discord hand
 served HTTP route — and in two cases that code could take the process with it:
 
 ```
-$ indent spin.ind                     # var i = 0 / repeat 1000000000 / i += 1
+$ indent spin.idnt                     # var i = 0 / repeat 1000000000 / i += 1
 ^C                                    # ...forever; nothing stopped it
 
-$ indent deep.ind                     # fun down n / give down(n - 1) + 1
+$ indent deep.idnt                     # fun down n / give down(n - 1) + 1
 thread 'main' has overflowed its stack
 fatal runtime error: stack overflow, aborting
 timeout: the monitored command dumped core
@@ -266,8 +367,8 @@ The first working version charged every iteration through a function returning
 instruction loop. The baseline check caught it immediately and would not let go:
 
 ```
-SLOWER   +21.2%  bench_calls.ind::add + assign (us/op)   0.018263 -> 0.022141
-SLOWER   +19.7%  bench_int_arith.ind::int + (ns/op)      18.5461 -> 22.1955
+SLOWER   +21.2%  bench_calls.idnt::add + assign (us/op)   0.018263 -> 0.022141
+SLOWER   +19.7%  bench_int_arith.idnt::int + (ns/op)      18.5461 -> 22.1955
 ```
 
 Bisecting one hypothesis at a time — the `Result`, the `OnceLock` lookup, the extra
@@ -302,11 +403,11 @@ that `catch` sees is untouched.
 ### CI now runs the language suite
 
 `.github/workflows/ci.yml` ran `cargo test` and the golden fixtures, and never ran the
-79 behavioural tests in `tests/*.ind`. It now runs `benchmarks/run_suite.sh` —
+79 behavioural tests in `tests/*.idnt`. It now runs `benchmarks/run_suite.sh` —
 advisory, with `continue-on-error`, because the run is not CI-clean yet: the fixture
 server needs `aiohttp` (installed in CI now, so that one is fixed),
-`tests/datetime_pkg.ind` wants a tz database the runner image lacks, and
-`tests/module_dispatch_builtins.ind` passes locally and fails there. `expects` the
+`tests/datetime_pkg.idnt` wants a tz database the runner image lacks, and
+`tests/module_dispatch_builtins.idnt` passes locally and fails there. `expects` the
 step to become a gate once those two are fixed; the comment in the workflow says so.
 `scripts/ci/verify-limits.sh` does gate.
 
@@ -396,9 +497,9 @@ plain identifier everywhere else — it is only recognised as a header keyword.
 
 ### Also in this build
 
-`tests/module_dispatch_builtins.ind` is green again. It was red before exp12 for two
+`tests/module_dispatch_builtins.idnt` is green again. It was red before exp12 for two
 reasons that were both in the test, not the interpreter: it asked for a `Bot` export
-that `std/discord.ind` no longer has (renamed `QuickBot`), and it asserted
+that `std/discord.idnt` no longer has (renamed `QuickBot`), and it asserted
 `len(keys bot.commands) >= 4` for three registrations against a `QuickBot` that starts
 with an empty `commands` dict. It now checks that each of `two`, `one` and `named` is
 present by name, which is what the module actually promises. With that, the suite
@@ -442,7 +543,7 @@ Precedence is unchanged, because that is what the injection was for:
 - a module's own functions and its own imports shadow the caller's, which is how a
   module calls its siblings;
 - an existing global variable still shadows a module variable, which is why
-  `tests/discord_helpers.ind`'s cache was reachable from a function and why it caught
+  `tests/discord_helpers.idnt`'s cache was reachable from a function and why it caught
   the one behaviour that had to be restored explicitly: a *write* to a module-level
   variable (`_MSG_CACHE[mid] is msg`) must land on the caller's copy, as it did when
   the symbol had been copied in. `take_var` and `swap_var` clone from the module scope
@@ -452,7 +553,7 @@ A spawned task no longer seeds its runtime with the module's entries either: it 
 the module function through the same scope stack, so the injection in
 `spawn_task_builtin` is gone rather than reimplemented.
 
-`benchmarks/bench_module_calls.ind` (with `benchmarks/modcalls_fixture.ind`) records
+`benchmarks/bench_module_calls.idnt` (with `benchmarks/modcalls_fixture.idnt`) records
 it: local call, module call, and a module call that reads module state.
 
 ### Verification
@@ -508,11 +609,11 @@ was given, which is what the clone gave it before: defining a function after a s
 still does not reach a task that is already running.
 
 After the change the same measurements are **26, 25, 25 and 25 µs** — the slope is
-gone. A 300-spawn loop in `benchmarks/bench_spawn_overhead.ind` (new, and not in the
+gone. A 300-spawn loop in `benchmarks/bench_spawn_overhead.idnt` (new, and not in the
 recorded baselines yet, so it is documentation rather than a gate) reports 29.9 µs per
 spawn+wait before and 25.3 µs after.
 
-`tests/registry_sharing.ind` pins the semantics that had to survive: a task uses a
+`tests/registry_sharing.idnt` pins the semantics that had to survive: a task uses a
 function that existed when it was spawned, a definition made after the spawn still
 reaches the spawner, a class defined after a spawn is constructible, a function defined
 *inside a method* survives the temporary runtime that methods borrow the tables for,
@@ -546,7 +647,7 @@ write — and only when a second handle actually exists. `Arc<Box<[Value]>>` rat
 `Arc<[Value]>` for the same reason `SharedStr` holds an `Arc<String>`: `try_unwrap`
 needs a `Sized` payload, and the paths that move the array out must not copy.
 
-Nothing observable changed. `tests/object_aliasing.ind` exists for exactly this
+Nothing observable changed. `tests/object_aliasing.idnt` exists for exactly this
 change — it pins that a field write through an alias leaves the original alone, that
 a method called on an alias does not write through, that objects read out of a list or
 out of another object's field are copies, and that writes through the variable itself
@@ -597,7 +698,7 @@ how a project stops trusting its own numbers.
 ### Two holes in the gate itself, closed
 
 - `benchmarks/run_suite.sh` treated the *absence* of a summary line as success. The
-  runner is in-process, so `tests/ai_mock_parity.ind` calling `process_exit 0` when its
+  runner is in-process, so `tests/ai_mock_parity.idnt` calling `process_exit 0` when its
   fixture is missing ends the run after one test out of seventy-five, with exit status
   0. The script now starts the fixture itself and fails when the summary never appears.
 - `benchmarks/check_baselines.py` had a 15% tolerance and printed "re-measure before
@@ -653,7 +754,7 @@ out for everything else.
 the value on the floor with `result?` — the slot kept whatever the hand-over had left
 in it, which is `Empty`. So in any compiled body, adding two objects with an `add`
 method produced `empty`, while the same statement on the tree-walker produced the
-sum. `tests/object_concat_self.ind` reproduces it: `(3,6)` on the tree-walker,
+sum. `tests/object_concat_self.idnt` reproduces it: `(3,6)` on the tree-walker,
 `Cannot access '.x' on empty value` on the VM before this build, `(3,6)` on both
 after.
 
@@ -667,7 +768,7 @@ so can run user code with stale frames.
 
 ### The suite can no longer pass while stopping early
 
-`tests/ai_mock_parity.ind` calls `process_exit 0` when its fixture server is missing.
+`tests/ai_mock_parity.idnt` calls `process_exit 0` when its fixture server is missing.
 The runner is in-process, so that ends the whole run — the summary line is never
 printed, one test out of seventy-five has executed, and the exit status is 0. A
 truncated run and a clean pass were indistinguishable. `benchmarks/run_suite.sh` now
@@ -677,9 +778,9 @@ no pass, and an error that names the missing fixture.
 ### Verification
 
 75 tests pass in both engines (73 before; the two new ones are
-`tests/compound_assign.ind`, which covers `+=`, `-=`, `*=`, `/=`, `%=` on ints,
+`tests/compound_assign.idnt`, which covers `+=`, `-=`, `*=`, `/=`, `%=` on ints,
 floats, strings, lists and dicts plus the error path's line number, and
-`tests/object_concat_self.ind`), golden outputs are byte-identical (8/8), and all 37
+`tests/object_concat_self.idnt`), golden outputs are byte-identical (8/8), and all 37
 unit tests pass.
 
 ---
@@ -837,7 +938,7 @@ checksums: **`bench_method_calls` 35 → 33 ms (−5.7%)**, **`bench_calls` 178 
 
 ### Object pass-by-value pinned before its fields go copy-on-write
 
-`tests/object_aliasing.ind` records the behaviour a future copy-on-write field change
+`tests/object_aliasing.idnt` records the behaviour a future copy-on-write field change
 must preserve: a field write through an alias, a field-writing method called on an
 alias, an object read out of a list, a field write through a parameter, writes through
 the variable itself (which must persist), an object held in another object's field, and
@@ -875,7 +976,7 @@ checksums: **`bench_calls` 181 → 167 ms (−7.7%)**, and the method-call probe
 `methods.get(method.to_ascii_lowercase())` — an exact hit against a *folded* name,
 which can never match a method declared `getValue`. It was not reachable from user
 syntax (`make(1).getValue 2` and `list[0].getValue 3` do not parse), so the defect
-never showed, but the inconsistency is gone, and `tests/method_case_dispatch.ind` pins
+never showed, but the inconsistency is gone, and `tests/method_case_dispatch.idnt` pins
 case-insensitive dispatch on every path that is reachable — including inside a
 compiled loop body. The place path also stopped building a folded copy it no longer
 needs, so it can take the exact map hit.
@@ -1197,7 +1298,7 @@ build (`benchmarks/`, best-of-N — run `sh benchmarks/verify.sh` yourself).
 | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
 | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-| `.ind` test suite (52 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
+| `.idnt` test suite (52 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
 | `size_of::<Value>()` | 128 B | **56 B** | 2.3× less memory traffic |
 
 `call_func_lenient` has no 2.2.2 figure because it did not exist yet.
@@ -1273,7 +1374,7 @@ borrows the container (`resolve_index_ref`) and clones only the element, which m
 them linear: **458×, 1080× and 354×**. Objects and the `argument`/`argument2`
 positional aliases deliberately keep the old path, so `get_item` dispatch and alias
 resolution are bit-for-bit unchanged — both are asserted in
-`tests/index_read_semantics.ind`, which passes identically on this build and on the
+`tests/index_read_semantics.idnt`, which passes identically on this build and on the
 pre-fix binary.
 
 ### 🧊 `Value` is 56 bytes, not 128
@@ -1460,13 +1561,13 @@ with its own verification rather than a rushed change.
   identifier follows.
 
 ### 🔄 Module system hardening
-- **Circular imports now fail cleanly.** `a.ind` importing `b.ind` which imports
-  `a.ind` (or a file importing itself) used to recurse until the process died
+- **Circular imports now fail cleanly.** `a.idnt` importing `b.idnt` which imports
+  `a.idnt` (or a file importing itself) used to recurse until the process died
   with `fatal runtime error: stack overflow`. It now raises a normal, catchable
-  `import_error`: *"Circular import detected: 'x.ind' imports itself (directly or
+  `import_error`: *"Circular import detected: 'x.idnt' imports itself (directly or
   through another module)."* The in-progress marker is always cleared, even on
   failure, so a later import can still succeed.
-- **`launch "sibling.ind"` resolves relative to the launching module's own
+- **`launch "sibling.idnt"` resolves relative to the launching module's own
   directory** (then through the normal module search path) instead of the process
   working directory — so packages work regardless of where they are invoked from.
 - **`get X from mod` also binds the module under its own name**, so `mod.Fn ...`
@@ -1522,7 +1623,7 @@ with its own verification rather than a rushed change.
   faster)**, with linear scaling (5k/10k/20k/40k = 0.002/0.004/0.009/0.016 s).
   Copy semantics are unchanged: a snapshot taken before the append still sees the
   old list, an appended expression may still read the target, and non-list
-  targets still raise — all covered by `tests/append_semantics.ind`.
+  targets still raise — all covered by `tests/append_semantics.idnt`.
 - Added `benchmarks/` (`bench_hot_paths`, `bench_append_scaling`,
   `bench_list_building`) with a README and reference numbers, so interpreter
   performance is measurable instead of anecdotal.
@@ -1558,8 +1659,8 @@ with its own verification rather than a rushed change.
 ### 🐛 Module functions can now use their own imports
 - Fixed a real dispatch bug: calling a function exported by one module from a
   *different* file failed if that function used a module **it** had imported with
-  a bare `get`. Example: `init.ind` does `get debug` and calls `debug.error(...)`;
-  running `init.Initialize()` from `neo.ind` (which never imports `debug`) died
+  a bare `get`. Example: `init.idnt` does `get debug` and calls `debug.error(...)`;
+  running `init.Initialize()` from `neo.idnt` (which never imports `debug`) died
   with `Unsupported method 'error' for receiver 'debug'`.
 
   A bare `get mod` binds the module in two places — the module table (used by
@@ -1644,12 +1745,12 @@ with its own verification rather than a rushed change.
 
 ## 2.2 (also) — 2026-09-04: web package, AIR Deliveries & installer
 
-### 📦 Web package — `web` (std/web.ind)
+### 📦 Web package — `web` (std/web.idnt)
 - New first-party `web` package layered on `http_serve`: `Html`/`Json`/`Text`/`Send`
   response builders, and `RunCode(code)` which runs an Indent string in a fresh
   `indent` process and returns `{ok, status, stdout, stderr}`. Powers a real
   browser "Run" button.
-- Docs: `docs/web-package.md`; demo: `examples/web_run.ind`.
+- Docs: `docs/web-package.md`; demo: `examples/web_run.idnt`.
 
 ### 📦 AIR "Deliveries" — share a whole project
 - `air delivery` subcommands: `init`/`build`/`install`/`publish`/`search`/`list`/`info`.
@@ -1669,7 +1770,7 @@ with its own verification rather than a rushed change.
   `{method, path, query, headers, body}` dict and passed to your `handler`
   function, whose return value (string or dict with `status`/`body`/
   `content_type`/`headers`) becomes the response. Routing is plain Indent.
-- Example: `examples/web_server.ind`.
+- Example: `examples/web_server.idnt`.
 
 ### ✍️ Assignment syntax — `is` canonical for declarations, `=` for reassignment
 - `var x is 42` now declares (previously `var x = 42`). `=` is also accepted
@@ -1677,7 +1778,7 @@ with its own verification rather than a rushed change.
 - `x = 43` now reassigns (previously `x is 43`). `is` reassignment still works.
 - Also: `var n int is 5`, `a[0] = 99`, `name = "Grace"`.
 - Fully **additive / non-breaking** — every existing program keeps working.
-- Test: `tests/assign_syntax_builtins.ind`.
+- Test: `tests/assign_syntax_builtins.idnt`.
 
 ## 2.0 — 2026-09-01 (Color subsystem — gradients, backgrounds, styles)
 
@@ -1697,7 +1798,7 @@ The `colored(text, color)` builtin grew into a complete color API:
 - Extended named palette: `GRAY/GREY`, `SILVER`, `MAROON`, `OLIVE`, `LIME`,
   `TEAL`, `NAVY`, `FUCHSIA`, `BROWN`, `GOLD`, `CORAL`, `SALMON`, `SKY`,
   `INDIGO`, `VIOLET`, `AMBER`, `EMERALD`, `SLATE`, `ZINC` added.
-- Test: `tests/colors_builtins.ind`.
+- Test: `tests/colors_builtins.idnt`.
 
 ### 🧰 Std-lib breadth (itertools / functools / collections)
 Added higher-order list builtins (all additive, no new syntax):
@@ -1708,7 +1809,7 @@ Added higher-order list builtins (all additive, no new syntax):
 - **functools-style**: `reduce(fn, list, initial?)`.
 - Higher-order builtins call native builtins by name (matching `map`/`filter`),
   e.g. `reduce "add_int" [1,2,3,4]` → `10`, `max_key ["a","bb"] "len"` → `"bb"`.
-- Test: `tests/stdlib_breadth_builtins.ind`.
+- Test: `tests/stdlib_breadth_builtins.idnt`.
 
 ### 🔢 Math extras
 - Constants: `math_pi`, `math_e`, `math_tau`.
@@ -1723,7 +1824,7 @@ Added higher-order list builtins (all additive, no new syntax):
 - `os_which(command)` (shutil.which), `os_run_ok(command)` (bool exit status).
 - More itertools: `zip_longest`, `pairwise`, `filterfalse`, `compress`, `starmap`.
 - `first(list, n)` / `last(list, n)`.
-- Test: `tests/final_builtins.ind`.
+- Test: `tests/final_builtins.idnt`.
 
 ### 🧩 Class special methods — natural names
 - Plain-English special methods instead of Python dunders: `to_string` (`say`),
@@ -1732,13 +1833,13 @@ Added higher-order list builtins (all additive, no new syntax):
   `contains` (`x in obj`).
 - `dataclass Name` — like `class` but auto-generates `to_string` + `equals`;
   user methods still allowed.
-- Test: `tests/class_special_methods.ind`.
+- Test: `tests/class_special_methods.idnt`.
 
 ### 🛠 `not <funcCall args>` now parses
 - `if not has_key d "k"`, `if not is_positive x`, etc. previously failed to
   parse (space-arg call wrapped in `not`). Fixed by preprocessing a leading
   `not ` before the space-separated-call rewrite. `x not in y` unaffected.
-- Test: `tests/not_call_builtins.ind`.
+- Test: `tests/not_call_builtins.idnt`.
 
 ### ⚙️ Generators / `yield`
 - A function containing `yield` is a **generator**: calling it returns a
@@ -1747,7 +1848,7 @@ Added higher-order list builtins (all additive, no new syntax):
 - Supports multiple `yield`s and `yield` inside loops. (Finite/eager for now;
   lazy/infinite generators are a documented follow-on.)
 - `is_generator` added to the type-check helpers.
-- Test: `tests/generators_builtins.ind`.
+- Test: `tests/generators_builtins.idnt`.
 
 
 ### 🗂 `builtins()` returns an organized dict
@@ -1757,13 +1858,13 @@ Added higher-order list builtins (all additive, no new syntax):
 ### ✅ Type-check helpers
 - `is_list`, `is_dict`, `is_string`, `is_number`, `is_int`, `is_float`, `is_bool`,
   `is_group` — quick boolean tests for a value's type.
-- Test: `tests/type_checks_builtins.ind`.
+- Test: `tests/type_checks_builtins.idnt`.
 
 ### 🐞 `debug` package
 - New std module `debug` with colored logging: `warn(msg)` (yellow), `error(msg)`
   (red), `success(msg)` (green), `info(msg)` (cyan) — built on the `colored`
   builtin. `get warn from debug`.
-- Test: `tests/debug_builtins.ind`.
+- Test: `tests/debug_builtins.idnt`.
 
 ### ✨ Nicer error output
 - Errors now render once with a colored header showing the human-readable type
@@ -1781,7 +1882,7 @@ Added higher-order list builtins (all additive, no new syntax):
   `say colored "hi" color` prints in color. Accepts hex (`#RGB`, `#RRGGBB`,
   `#RRGGBBAA`, with or without `#`) or a named color (`RED`, `green`, `blue`, …)
   or a color variable (`var c color = "#22c55e"`).
-- Test: `tests/colored_builtins.ind`.
+- Test: `tests/colored_builtins.idnt`.
 
 ### 🔍 Builtin discovery
 - **`builtins()`** — returns the names of every available builtin (like Python's
@@ -1789,7 +1890,7 @@ Added higher-order list builtins (all additive, no new syntax):
 - **`get <builtin>`** (with optional `as alias`) — bind a builtin as a value so
   it can be passed around / called via a variable, consistent with
   `get X from module`. Backed by a new `Callable::Builtin` variant.
-- Tests: `tests/builtins_discovery.ind`, `tests/get_builtin.ind`.
+- Tests: `tests/builtins_discovery.idnt`, `tests/get_builtin.idnt`.
 
 ## 1.6.0 — 2026-08-30 (Async I/O + parity builtins)
 
@@ -1799,30 +1900,30 @@ Added higher-order list builtins (all additive, no new syntax):
   return a **future id**; await with `wait`, `gather`, or `future_done`/`result`.
   Fire many requests concurrently without blocking the program.
 - Backed by a generic `spawn_builtin_future` helper (runs any builtin on a thread).
-- Test: `tests/async_io_builtins.ind`.
+- Test: `tests/async_io_builtins.idnt`.
 
 ### 🧮 Collections
 - **`set_union(a, b)` / `set_intersection(a, b)` / `set_difference(a, b)`** —
   complete the group/set type. `collections` wrappers: `SetUnion`/`SetIntersection`/
   `SetDifference`/`SetAdd`/`SetRemove`/`SetContains`.
-- Test: `tests/set_ops_builtins.ind`.
+- Test: `tests/set_ops_builtins.idnt`.
 
 ### 🗂 Config
 - **`yaml_loads(text)` / `yaml_dumps(value)`** — native YAML config parsing
   (config parity alongside TOML/JSON).
-- Test: `tests/yaml_builtins.ind`.
+- Test: `tests/yaml_builtins.idnt`.
 
 ### 📁 Path (pathlib parity)
 - **`path_ext` / `path_stem` / `path_abs` / `path_expand` / `path_norm`** —
   extension, stem, absolute, `~` expansion, `.`/`..` normalization. `path`
   wrappers: `Ext`/`Stem`/`Abs`/`Expand`/`Norm`.
-- Test: `tests/path_helpers_builtins.ind`.
+- Test: `tests/path_helpers_builtins.idnt`.
 
 ### 🔤 String methods
 - **`str_zfill` / `str_ljust` / `str_rjust` / `str_center` / `str_splitlines` /
   `str_removeprefix` / `str_removesuffix` / `str_partition`** — Python `str`
   method parity as additive builtins.
-- Test: `tests/string_helpers_builtins.ind`.
+- Test: `tests/string_helpers_builtins.idnt`.
 
 ## 1.5.2 — 2026-08-30 (Async parity: async def / gather / async with)
 
@@ -1834,8 +1935,8 @@ Added higher-order list builtins (all additive, no new syntax):
 - **`async with <future> as name:`** — await a future, bind its result, run body.
 - **`sleep(secs)`** — async sleep; returns a future (`asyncio.sleep`).
 - **`future_wait_for(id, secs)`** — `asyncio.wait_for`.
-- Tests: `tests/async_def_builtins.ind`, `tests/async_helpers_builtins.ind`,
-  `tests/async_with_builtins.ind`.
+- Tests: `tests/async_def_builtins.idnt`, `tests/async_helpers_builtins.idnt`,
+  `tests/async_with_builtins.idnt`.
 
 ## 1.5.1 — 2026-08-30 (Async / await)
 
@@ -1845,7 +1946,7 @@ Added higher-order list builtins (all additive, no new syntax):
 - `future_done(id)` / `future_result(id)` / `future_cancel(id)` status helpers.
 - `await` exposes its result as `__await_result__`.
 - Built on the thread-safe runtime (real OS threads, no GIL) — real concurrency.
-- Test: `tests/async_await_builtins.ind`.
+- Test: `tests/async_await_builtins.idnt`.
 
 ## 1.5.0 — 2026-08-29 (Parity + Async runtime)
 
@@ -1855,7 +1956,7 @@ Added higher-order list builtins (all additive, no new syntax):
   `parallel(fn, list_of_arglists)` (gather), `task_wait_timeout(id, secs)`
   (wait_for). `spawn` accepts a function value or a name string.
 - Runtime made thread-safe: module storage refactored `Rc` → `Arc`/`Mutex`.
-- Tests: `tests/async_tasks_builtins.ind`, `tests/async_ergo_builtins.ind`.
+- Tests: `tests/async_tasks_builtins.idnt`, `tests/async_ergo_builtins.idnt`.
 
 ### 🗂️ Stdlib parity builtins (native)
 - **SQLite**: `sqlite_exec` / `sqlite_query` / `sqlite_query_one` (bundled).
@@ -1872,22 +1973,22 @@ Added higher-order list builtins (all additive, no new syntax):
 - `with ... as ...:` context-manager alias for `open ... as`.
 
 ### ✅ Tests
-- 12 regression tests pass (`tests/*_builtins.ind`); smoke tests green.
+- 12 regression tests pass (`tests/*_builtins.idnt`); smoke tests green.
 
 ## 1.5.0 — 2026-08-09
 
 ### 🎮 InGame — PyGame-style games written entirely in Indent
 New native 2D game framework that **mirrors PyGame's API**: all game logic lives in Indent, a native window just draws frames and reports input.
-- `std/ingame.ind` — PyGame-mirroring API: `Init()` (init), `SetMode(w,h,title)` (display.set_mode), `DrawRect`/`DrawCircle`/`DrawLine`/`DrawPolygon`/`DrawText` (draw.*), `Flip(clear)` (display.flip), `GetEvents()` (event.get), `GetKeys()` (key.get_pressed), `GetMouse()` (mouse.get_pos), `Tick(fps)` (time.Clock.tick), `Quit()` (quit). Compat aliases kept: `Clear`/`Rect`/`Circle`/`Line`/`Polygon`/`Text`/`Present`/`Events`/`Keys`/`Mouse`
+- `std/ingame.idnt` — PyGame-mirroring API: `Init()` (init), `SetMode(w,h,title)` (display.set_mode), `DrawRect`/`DrawCircle`/`DrawLine`/`DrawPolygon`/`DrawText` (draw.*), `Flip(clear)` (display.flip), `GetEvents()` (event.get), `GetKeys()` (key.get_pressed), `GetMouse()` (mouse.get_pos), `Tick(fps)` (time.Clock.tick), `Quit()` (quit). Compat aliases kept: `Clear`/`Rect`/`Circle`/`Line`/`Polygon`/`Text`/`Present`/`Events`/`Keys`/`Mouse`
 - Events normalized — every event has a `"type"`: `quit` / `keydown` / `keyup` / `mousemove` / `mousedown` / `mouseup` (key events carry `"key"` + `"down"`)
 - `indent-native/indent-ingame.c` — native WebKitGTK canvas window; reads JSON frames from `frame.json` (rect/circle/line/polygon/text shapes), emits keyboard **and mouse** events to `events.txt`, tracks held keys in `keys.txt` and cursor in `mouse.txt`
 - Framework spawns the window in the background via `os_system("... &")`; Indent's game loop runs independently
-- `examples/snake_game.ind` — **100% Indent logic** (bot AI, wall/self collision, growth, scoring, rendering). `INDENT_SNAKE_BOT=1` auto-plays (verified: score 80, snake grows 3→11 segments). Arrow keys play manually.
-- `examples/breakout_game.ind` — **NEW**: paddle physics, ball bounce, brick collision, scoring, HUD all in Indent. `INDENT_BREAKOUT_BOT=1` auto-plays (verified: 300 frames, score 50).
+- `examples/snake_game.idnt` — **100% Indent logic** (bot AI, wall/self collision, growth, scoring, rendering). `INDENT_SNAKE_BOT=1` auto-plays (verified: score 80, snake grows 3→11 segments). Arrow keys play manually.
+- `examples/breakout_game.idnt` — **NEW**: paddle physics, ball bounce, brick collision, scoring, HUD all in Indent. `INDENT_BREAKOUT_BOT=1` auto-plays (verified: 300 frames, score 50).
 - `air install ingame` — updated in the registry to the PyGame-style API (48 packages)
 
 ### 🎮 InGame 2.0 — agame merged in + game-dev APIs (RPG/Minecraft-style)
-`std/ingame.ind` v2.0 unifies the game packages and adds the APIs needed to build RPGs, tile worlds, and action games entirely in Indent:
+`std/ingame.idnt` v2.0 unifies the game packages and adds the APIs needed to build RPGs, tile worlds, and action games entirely in Indent:
 - **agame merged into ingame** — `Clamp`/`Lerp`/`Distance`/`Wrap`, `NewEntity`/`Move`/`Collides`, `TileToWorld`/`WorldToTile` now live in ingame. `agame` kept as a compat shim (old `get X from agame` still works).
 - **Camera**: `SetCamera`/`GetCamera`/`ScreenX`/`ScreenY` — camera-follow world scrolling
 - **Tilemaps**: `MakeTilemap`/`SetTile`/`GetTile`/`IsSolidAt`/`DrawTilemap` (camera-culled, string-keyed legend with color or emoji tiles)
@@ -1896,8 +1997,8 @@ New native 2D game framework that **mirrors PyGame's API**: all game logic lives
 - **Physics**: `StepPhysics(entity, g)` and `MoveInMap(entity, dx, dy, map, tileSize, legend)` — per-axis AABB tile collision with `hitX`/`hitY` flags
 - **Input**: `IsKeyDown(key)`
 - `indent-native/indent-ingame.c` renderer extended: ellipse, arc, sprite, rotated rect
-- `examples/rpg_demo.ind` — tilemap RPG (procedural world, camera-follow, collision, emoji sprites); `INDENT_RPG_BOT=1` auto-walks
-- `tests/rpg_ingame_logic.ind` — headless regression (world gen, collision, bot movement) PASSES
+- `examples/rpg_demo.idnt` — tilemap RPG (procedural world, camera-follow, collision, emoji sprites); `INDENT_RPG_BOT=1` auto-walks
+- `tests/rpg_ingame_logic.idnt` — headless regression (world gen, collision, bot movement) PASSES
 - Registry updated: `ingame` 2.0 + `agame` shim (xytrolabs/air 714949f)
 - Docs: `ingame-package.md` rewritten (full v2.0 API), `agame-package.md` merge notice, site synced
 
@@ -1924,11 +2025,11 @@ The `ai` package now uses the **native OpenAI API format** (`POST /v1/chat/compl
 - default `AI.SetBase("http://localhost:11434/v1")` → **local Ollama** (no key)
 - `AI.Chat`/`AI.Ask`/`AI.Embed`/`AI.EmbedMany`/`AI.Models`/`AI.Similarity`/`AI.Search` unchanged
 - New `AI.SetApiKey(key)` sends `Authorization: Bearer <key>` (verified via mock server)
-- `examples/ai_openai_api.ind` — shows the package API **and** the raw low-level way to call any REST API with `http_post_json`/`http_get`
+- `examples/ai_openai_api.idnt` — shows the package API **and** the raw low-level way to call any REST API with `http_post_json`/`http_get`
 - Registry updated (xytrolabs/air d73c455)
 
 ### 🤖 `ai` package — Python `openai`-style SDK for Indent
-New registry package `std/ai.ind` — a clean client for a local Ollama server that mirrors the OpenAI Python SDK surface, all in pure Indent:
+New registry package `std/ai.idnt` — a clean client for a local Ollama server that mirrors the OpenAI Python SDK surface, all in pure Indent:
 - `AI.Chat(model, messages)` — chat completions (→ `client.chat.completions.create`)
 - `AI.Ask(model, prompt)` — single-prompt completion (→ `client.completions.create`)
 - `AI.Embed(model, text)` / `AI.EmbedMany(model, texts)` — embeddings (→ `client.embeddings.create`)
@@ -1937,7 +2038,7 @@ New registry package `std/ai.ind` — a clean client for a local Ollama server t
 - `AI.SetBase` / `AI.SetDefaultModel` / `AI.SetDefaultEmbedModel` — client config
 - Two import styles: `get ai as AI` (dot-call namespace) or `get Chat from ai` (per-function)
 - `air install ai` — added to the registry (50 packages). Verified live: chat, generate, single/batch embeddings, model listing, cosine similarity, and semantic ranking.
-- `examples/ai_pkg.ind` — demo of the full API
+- `examples/ai_pkg.idnt` — demo of the full API
 
 ### 🐛 Bug fix: `and` / `or` now short-circuit
 `and`/`or` previously evaluated **both** operands eagerly, so guards like `e["type"] == "key" and e["down"] == true` errored on dicts lacking `down`. Now Python-style short-circuit: RHS is only evaluated when needed. Found via the InGame input loop. All 13 tests pass.
@@ -1949,7 +2050,7 @@ New registry package `std/ai.ind` — a clean client for a local Ollama server t
 ### 🎮 Playable GUI game: Snake
 Added a fully playable **Snake** game that renders in a native WebKitGTK window via `gui_show_html`:
 - `examples/snake_game.html` — canvas + JS game (movement, food, growth, wall/self collision, score, high score, pause, restart)
-- `examples/snake_game.ind` — Indent wrapper that loads the game, asks **Ollama AI** for a one-line tip, injects it, and opens the window
+- `examples/snake_game.idnt` — Indent wrapper that loads the game, asks **Ollama AI** for a one-line tip, injects it, and opens the window
 - **Automated tests** (both pass):
   - `node tests/snake_logic_test.js` — 5 headless tests of game logic (movement, eat+score, wall collision, self collision, bot plays 200 frames → 120 pts)
   - `bash tests/gui_snake_test.sh` — opens the real window, verifies it renders, closes it, confirms the script completes cleanly

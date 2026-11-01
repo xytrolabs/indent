@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register .ind and .glo files with the Linux desktop
+# Register .idnt and .glo files with the Linux desktop
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +30,7 @@ mkdir -p "${HOME}/.local/share/applications"
 # MIME type
 cp "${SHARE}/mime/packages/indent.xml" "${HOME}/.local/share/mime/packages/"
 update-mime-database "${HOME}/.local/share/mime" 2>/dev/null || true
-echo "  ✓ MIME types registered (.ind, .glo)"
+echo "  ✓ MIME types registered (.idnt, .glo)"
 
 # Icon
 cp "${SHARE}/icons/hicolor/scalable/mimetypes/text-x-indent.svg" \
@@ -53,7 +53,7 @@ THEMEEOF
 fi
 
 gtk-update-icon-cache -f "${HOME}/.local/share/icons/hicolor" 2>/dev/null || true
-echo "  ✓ Icons installed (.ind + .glo)"
+echo "  ✓ Icons installed (.idnt + .glo)"
 
 # Desktop entry
 cp "${SHARE}/applications/indent.desktop" "${HOME}/.local/share/applications/"
@@ -72,5 +72,5 @@ fi
 
 echo ""
 echo "✓ Indent file manager integration installed!"
-echo "  .ind files should now show the Indent λ icon"
+echo "  .idnt files should now show the Indent λ icon"
 echo "  Log out and back in if changes aren't visible"

@@ -12,7 +12,7 @@
 Open **PowerShell** (the terminal, not a browser) and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex
+irm https://indent.xytro.site/install.ps1 | iex
 ```
 
 That single command:
@@ -20,10 +20,10 @@ That single command:
 1. Detects your CPU architecture (`AMD64` → 64-bit x86, `ARM64` → 64-bit ARM).
 2. Downloads the matching `indent.exe` from the latest GitHub release.
 3. Installs companion tools (`air`, `indentpkg`) alongside it.
-4. Downloads or copies the standard library (`*.ind` std modules).
+4. Downloads or copies the standard library (`*.idnt` std modules).
 5. Creates `indent.cmd` / `indent-debug.cmd` launchers in `%USERPROFILE%\.local\bin`.
 6. Adds `%USERPROFILE%\.local\bin` to your **user** PATH (asks first).
-7. Configures VS Code to recognise `.ind` files and use the Indent icon theme.
+7. Configures VS Code to recognise `.idnt` files and use the Indent icon theme.
 
 ### Install from a local build
 
@@ -91,15 +91,15 @@ Open a **new** PowerShell window (so the updated PATH takes effect) and run:
 
 ```powershell
 indent --version
-# → indent 1.4.1 (or newer)
+# → indent 2.4.0 (stable)
 
-indent run hello.ind
+indent run hello.idnt
 ```
 
 A quick end-to-end check that the standard library resolves:
 
 ```indent
-#! std_check.ind
+#! std_check.idnt
 get math
 say "2^10 = " + string(math.Pow(2, 10))
 get Upper from strings
@@ -107,7 +107,7 @@ say Upper("windows ready")
 ```
 
 ```powershell
-indent run std_check.ind
+indent run std_check.idnt
 # → 2^10 = 1024.0
 # → WINDOWS READY
 ```
@@ -183,7 +183,7 @@ open a fresh PowerShell.
 
 ### Execution policy blocks the installer
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm ... | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://indent.xytro.site/install.ps1 | iex"
 ```
 
 ### `group` / `set` confusion

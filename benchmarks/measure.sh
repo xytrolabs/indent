@@ -13,8 +13,8 @@ ms_per_run() {
     echo "$label: $(( (E-S)/1000000 ))ms total over $n runs = $(( (E-S)/n/1000000 ))ms/run" >> "$OUT"
 }
 
-ms_per_run "startup: hello-world file" 50 "$IND" benchmarks/bench_startup_empty.ind
-ms_per_run "startup: import std json" 30 "$IND" benchmarks/bench_startup_imports.ind
-ms_per_run "script: 100k calls" 5 "$IND" benchmarks/bench_hot_paths.ind
+ms_per_run "startup: hello-world file" 50 "$IND" benchmarks/bench_startup_empty.idnt
+ms_per_run "startup: import std json" 30 "$IND" benchmarks/bench_startup_imports.idnt
+ms_per_run "script: 100k calls" 5 "$IND" benchmarks/bench_hot_paths.idnt
 
 echo "--- done ---" >> "$OUT"

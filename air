@@ -31,7 +31,7 @@ Examples:
   air deps                        # Scan current directory, install all deps
   air install colors               Install latest from registry
   air install math@2.5.0           Install specific version
-  air install mypkg ./mypkg.ind    Install from local file
+  air install mypkg ./mypkg.idnt    Install from local file
   air uninstall colors             Remove package
   air update                       Update all installed packages
   air update math                  Update specific package
@@ -152,7 +152,7 @@ cmd_install() {
     echo "📦 Installing ${name} from ${source}..."
   fi
 
-  local target="${AIR_PACKAGES}/${name}.ind"
+  local target="${AIR_PACKAGES}/${name}.idnt"
   
   # Download or copy
   if [[ "$source" =~ ^https?:// ]]; then
@@ -201,7 +201,7 @@ cmd_uninstall() {
   fi
 
   local name="$1"
-  local target="${AIR_PACKAGES}/${name}.ind"
+  local target="${AIR_PACKAGES}/${name}.idnt"
 
   if [[ -f "$target" ]]; then
     rm -f "$target"
@@ -380,7 +380,7 @@ EOF
 }
 
 # ── Dependency Detection ────────────────────────────────────────────
-# Scans .ind files for 'get X from Y' imports and resolves Y to registry packages
+# Scans .idnt files for 'get X from Y' imports and resolves Y to registry packages
 scan_deps() {
   local dir="${1:-.}"
   local index_data
@@ -392,7 +392,7 @@ scan_deps() {
   local found=0
   local -A seen_pkgs  # bash associative array to avoid duplicates
   
-  # Find all .ind files and scan for imports
+  # Find all .idnt files and scan for imports
   while IFS= read -r -d '' file; do
     while IFS= read -r line; do
       # Match: get X from Y  or  get X, Y from Z  or  import X from Y
@@ -431,7 +431,7 @@ scan_deps() {
         fi
       fi
     done < "$file"
-  done < <(find "$dir" -maxdepth 5 -name "*.ind" -print0 2>/dev/null)
+  done < <(find "$dir" -maxdepth 5 -name "*.idnt" -print0 2>/dev/null)
 
   echo ""
   if [[ $found -eq 0 ]]; then
@@ -452,7 +452,7 @@ cmd_deps() {
 auto_install_deps() {
   local pkg_name="$1"
   local pkg_dir="${AIR_PACKAGES}"
-  local pkg_file="${pkg_dir}/${pkg_name}.ind"
+  local pkg_file="${pkg_dir}/${pkg_name}.idnt"
   
   if [[ ! -f "$pkg_file" ]]; then
     return
@@ -494,7 +494,7 @@ auto_install_deps() {
 #  A "Delivery" packages an entire Indent project into ONE distributable
 #  <name>-<version>.dlv archive (a .tar.gz). Inside it holds:
 #    air-delivery.toml       the manifest (name/version/description)
-#    modules/<import>.ind    module files -> each becomes an importable
+#    modules/<import>.idnt    module files -> each becomes an importable
 #                            package once installed (get X from <import>)
 #    entry/<file>            optional runnable entry point (kept local)
 #    [dependencies]          registry packages pulled in automatically
@@ -543,11 +543,11 @@ description = "An Indent project delivered as one unit"
 # [entry] main = runnable entry point (optional; kept local, not imported)
 [entry]
 
-# [modules] <importName> = <path-to-.ind-file>
+# [modules] <importName> = <path-to-.idnt-file>
 # Each becomes importable once the Delivery is installed:
 #   get <Function> from <importName>
 [modules]
-# mylib = "src/mylib.ind"
+# mylib = "src/mylib.idnt"
 
 # [dependencies] <registryPackage> = "version"
 [dependencies]
@@ -603,7 +603,7 @@ cmd_delivery_build() {
     key="${kv%%=*}"; path="${kv#*=}"
     key="$(echo "$key" | xargs)"; path="$(echo "$path" | xargs)"
     [[ -z "$path" ]] && continue
-    cp "$dir/$path" "$stage/modules/$key.ind"
+    cp "$dir/$path" "$stage/modules/$key.idnt"
   done < <(manifest_section "$mf" modules)
 
   if [[ -n "$entry_path" ]]; then
@@ -626,7 +626,7 @@ cmd_delivery_build() {
     key="$(echo "$key" | xargs)"; path="$(echo "$path" | xargs)"
     [[ -z "$path" ]] && continue
     modpath="$(echo "$path" | sed 's#^\./##; s#.*/##')"
-    echo "     • ${key}.ind  ←  $path"
+    echo "     • ${key}.idnt  ←  $path"
   done < <(manifest_section "$mf" modules)
   rm -rf "$stage"
 }
@@ -718,16 +718,16 @@ cmd_delivery_install() {
   local installed="${AIR_HOME}/installed.txt"
   touch "$installed"
   local modfile cnt=0
-  for modfile in "$root"/modules/*.ind; do
+  for modfile in "$root"/modules/*.idnt; do
     [[ -e "$modfile" ]] || continue
     local modname
-    modname="$(basename "$modfile" .ind)"
-    cp "$modfile" "$AIR_PACKAGES/$modname.ind"
-    local modsha; modsha="$(sha256sum "$AIR_PACKAGES/$modname.ind" | awk '{print $1}')"
+    modname="$(basename "$modfile" .idnt)"
+    cp "$modfile" "$AIR_PACKAGES/$modname.idnt"
+    local modsha; modsha="$(sha256sum "$AIR_PACKAGES/$modname.idnt" | awk '{print $1}')"
     grep -v "^${modname}|" "$installed" > "${installed}.tmp" 2>/dev/null || true
     mv "${installed}.tmp" "$installed" 2>/dev/null || true
     echo "${modname}|delivery:${name}@${ver}|${modsha}|$(date -Iseconds)" >> "$installed"
-    echo "   • module ${modname} → ${AIR_PACKAGES}/${modname}.ind"
+    echo "   • module ${modname} → ${AIR_PACKAGES}/${modname}.idnt"
     cnt=$((cnt + 1))
   done
   if [[ $cnt -eq 0 ]]; then echo "   (no importable modules in this Delivery)"; fi

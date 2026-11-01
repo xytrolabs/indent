@@ -1,7 +1,7 @@
 # Deliveries — share a whole project as one bundle
 
 > **Concept.** In Indent the natural units are:
-> - **module** — one importable `.ind` file (`get X from web`);
+> - **module** — one importable `.idnt` file (`get X from web`);
 > - **package** — what the AIR registry indexes (`air install web`);
 > - **Delivery** — a *group of packages / modules*: a whole project you can
 >   build, upload, and pull back down **as a single unit**.
@@ -21,11 +21,11 @@ version = "0.1.0"
 description = "An Indent project delivered as one unit"
 
 [entry]
-main = "app.ind"        # optional runnable entry (kept local, not imported)
+main = "app.idnt"        # optional runnable entry (kept local, not imported)
 
-[modules]               # <importName> = <path-to-.ind-file>
-mylib   = "src/mylib.ind"
-helpers = "src/helpers.ind"
+[modules]               # <importName> = <path-to-.idnt-file>
+mylib   = "src/mylib.idnt"
+helpers = "src/helpers.idnt"
 
 [dependencies]
 colors = "*"
@@ -62,7 +62,7 @@ Validates that every module/entry file exists, then produces a single
 ```
 <name>-<version>/
   air-delivery.toml
-  modules/<import>.ind      # each becomes an importable package
+  modules/<import>.idnt      # each becomes an importable package
   entry/<file>              # optional runnable entry
 ```
 
@@ -77,7 +77,7 @@ air delivery install ./path/to/project         # build + install a folder
 ```
 
 Installing a Delivery:
-1. copies each `modules/*.ind` into `air-packages/` so they become
+1. copies each `modules/*.idnt` into `air-packages/` so they become
    importable (`get Fn from <import>`);
 2. keeps the `[entry]` program under `~/.local/share/indent/deliveries/`;
 3. installs every `[dependencies]` package that isn't already present;

@@ -873,7 +873,7 @@ impl std::ops::Deref for SharedList {
 /// Writes go through `Arc::make_mut`, so the first write after a second handle
 /// exists pays one copy and repeated writes do not. That is exactly the behaviour
 /// the old eager clone produced: a field written through an alias never reaches the
-/// original. `tests/object_aliasing.ind` pins all seven shapes that has to hold for.
+/// original. `tests/object_aliasing.idnt` pins all seven shapes that has to hold for.
 ///
 /// `Arc<Box<[Value]>>` rather than `Arc<[Value]>` because `Arc::try_unwrap` needs a
 /// `Sized` payload — `Arc<[Value]>` cannot be taken apart in O(1), so the paths that
@@ -985,9 +985,9 @@ impl IntoIterator for SharedList {
 ///
 /// `Value::Str` held an owned `String`, so *reading* a string variable copied its
 /// whole buffer: 201 KB per read, and 5.6 copies' worth to pass one string to a
-/// function (`benchmarks/bench_string_reads.ind`). It also meant the same bytes
+/// function (`benchmarks/bench_string_reads.idnt`). It also meant the same bytes
 /// were resident once per holder — 200 copies of one 200 KB string cost ~40 MB of
-/// RSS (`benchmarks/string_memory.ind`), which is most of that process.
+/// RSS (`benchmarks/string_memory.idnt`), which is most of that process.
 ///
 /// The payload is `Arc<String>` rather than `Arc<str>`, which costs one extra
 /// pointer hop per read and buys two things that matter more here. First,
@@ -2232,7 +2232,7 @@ impl Runtime {
 // The cache is always optional: any failure to read, validate or write it simply
 // falls back to parsing, and `INDENT_NO_AST_CACHE=1` disables it entirely. Cache
 // files are never treated as source (every file enumerator only accepts
-// `.ind`/`.ath`).
+// `.idnt`/`.ath`).
 
 /// Bumped whenever the grammar, `Stmt`/`Expr` layout or the parse pipeline
 /// changes, so old cache files are ignored instead of misread. (Python calls
@@ -3253,7 +3253,7 @@ fn try_inplace_string_concat(
 ///
 /// `eval_binary`'s `(List, List)` arm is `x.extend(y)` on a *clone* of the left
 /// operand, so growing a list one element at a time (`xs is xs + [x]`, which
-/// `benchmarks/bench_append_scaling.ind` measures as `build2`) copied everything
+/// `benchmarks/bench_append_scaling.idnt` measures as `build2`) copied everything
 /// accumulated so far on every step: O(n²) to build an n-element list. Merging a
 /// dict in a loop had the identical shape.
 ///
@@ -3341,7 +3341,7 @@ fn append_items_into(list: &mut Vec<Value>, item: Value, callee: &str) -> Result
 /// The member form does not reach the plain-variable path above because its
 /// matchers reject names containing '.', so every step deep-copied the root
 /// container *and* the list inside it — twice on the read and once more on the
-/// write. Measured `benchmarks/bench_member_append.ind`: 6967 → 50778 ns/step as
+/// write. Measured `benchmarks/bench_member_append.idnt`: 6967 → 50778 ns/step as
 /// n went 500 → 4000, which is the same quadratic shape as `xs is xs + [x]`.
 ///
 /// The root is *moved* out and put back rather than cloned, and the member is
@@ -3966,6 +3966,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                     path = sibling;
                 } else {
                     let as_module = raw
+                        .trim_end_matches(".idnt")
                         .trim_end_matches(".ind")
                         .trim_end_matches(".glo")
                         .replace('/', ".");
@@ -8053,17 +8054,25 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
 }
 
 /// Check a single directory for a module file:
-/// name.ind, name.ath (legacy), name.glo (env/global), name/__init__.ind.
+/// name.idnt, name.ind (legacy), name.ath (legacy), name.glo (env/global),
+/// name/__init__.idnt.
 fn module_in_dir(dir: &Path, module_rel: &str) -> Option<PathBuf> {
-    for ext in [".ind", ".ath", ".glo"] {
+    // `.idnt` first so a project that has both spellings picks the new one, then the
+    // legacy extensions: `.ind` is what every package and user project written
+    // before the rename uses, and a hard break would make them unimportable.
+    for ext in [".idnt", ".ind", ".ath", ".glo"] {
         let candidate = dir.join(format!("{module_rel}{ext}"));
         if candidate.exists() {
             return Some(candidate);
         }
     }
-    let init_candidate = dir.join(module_rel).join("__init__.ind");
+    let init_candidate = dir.join(module_rel).join("__init__.idnt");
     if init_candidate.exists() {
         return Some(init_candidate);
+    }
+    let legacy_init = dir.join(module_rel).join("__init__.ind");
+    if legacy_init.exists() {
+        return Some(legacy_init);
     }
     None
 }
@@ -9018,7 +9027,7 @@ fn module_member_class(callee: &str, ctx: &ExecContext<'_>) -> Option<ClassDef> 
 ///
 /// `module_member_class` answers `geom.Point(3, 4)` — a class reached through a
 /// module name. This answers the bare `Point(3, 4)` that a module function writes
-/// when the class belongs to its *own* module, e.g. `std/discord.ind` doing
+/// when the class belongs to its *own* module, e.g. `std/discord.idnt` doing
 /// `class Bot` … `fun NewBot: give Bot token`. A class is not a value, so it can
 /// never be exported into the runtime's symbol table; the scope stack is where
 /// sibling functions are already resolved, so classes are resolved there too.
@@ -9078,7 +9087,7 @@ fn resolve_callable(callee: &str, ctx: &ExecContext<'_>) -> Result<Callable, Str
 
     // Fallback: a plain name that no local/imported symbol provides may still be
     // exported by an imported module. This is what makes namespace objects
-    // work — e.g. `get AI from ai` where `ai.ind` exposes
+    // work — e.g. `get AI from ai` where `ai.idnt` exposes
     // `var AI dynamic = {"SetBase": SetBase, ...}` and the caller writes
     // `AI.SetBase url`. Module order is sorted so resolution is deterministic.
     let mut module_names: Vec<&String> = ctx.rt.modules.keys().collect();
@@ -21223,6 +21232,31 @@ fn self_update() {
     self_update_from_source(tag.as_deref());
 }
 
+/// The line to print when an experimental install's version has shipped stable.
+///
+/// `installed` and `stable` are release tags (`v2.4.1-exp21`, `v2.4.1`). A hint only
+/// makes sense for an experimental build whose *version* the stable channel publishes:
+/// `v2.4.1-exp21` next to `v2.4.1` yes, `v2.4.2-exp1` next to `v2.4.1` no.
+fn stable_upgrade_hint(installed: &str, stable: &str) -> Option<String> {
+    if !is_exp_tag(installed) {
+        return None;
+    }
+    let version = |tag: &str| {
+        tag.trim_start_matches('v')
+            .split(['-', '+'])
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    if version(installed) != version(stable) {
+        return None;
+    }
+    Some(format!(
+        "  ℹ Stable {stable} has been released. `indent --switch-to-stable` moves this \
+         installation onto it."
+    ))
+}
+
 /// Download the latest release's prebuilt binary and swap it in.
 fn self_update_from_binary() -> Result<(), String> {
     let target = indent_target_triple().ok_or_else(|| {
@@ -21243,6 +21277,17 @@ fn self_update_from_binary() -> Result<(), String> {
     // `INDENT_VERSION` could not tell "already newest" from "different build".
     if read_installed_tag().as_deref() == Some(tag.as_str()) {
         println!("  ✓ Already up to date (Indent {plain}, {channel}).");
+        // "Already up to date" is true for the channel and misleading for the user:
+        // someone on `v2.4.1-exp21` who runs `--update` is told they are current
+        // while stable 2.4.1 exists beside it. The channels are separate by design,
+        // so say what the other one has instead of switching silently.
+        if channel == CHANNEL_EXP {
+            if let Ok(stable_tag) = resolve_release_tag(&client, "latest") {
+                if let Some(hint) = stable_upgrade_hint(&tag, &stable_tag) {
+                    println!("{hint}");
+                }
+            }
+        }
         return Ok(());
     }
     println!("  Downloading Indent {tag} ({target}) ...");
@@ -21400,16 +21445,16 @@ fn self_update_from_source(tag: Option<&str>) {
 fn usage() {
     eprintln!("Indent {} — a language for learning and building", INDENT_VERSION);
     eprintln!();
-    eprintln!("Usage:  indent [--debug] [--break N[,M...]] [--no-cache] <file.ind>");
+    eprintln!("Usage:  indent [--debug] [--break N[,M...]] [--no-cache] <file.idnt>");
     eprintln!("        indent <command> [options] [args]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  run <file.ind>            Run a program (also: indent <file.ind>)");
+    eprintln!("  run <file.idnt>            Run a program (also: indent <file.idnt>)");
     eprintln!("  repl                      Interactive REPL");
-    eprintln!("  check <file-or-dir>       Parse/check syntax (.ind files)");
+    eprintln!("  check <file-or-dir>        Parse/check syntax (.idnt files)");
     eprintln!("  test [path]               Run tests");
-    eprintln!("  lint <file.ind>           Lint a file");
-    eprintln!("  fmt [--check] <file.ind>  Auto-format a file");
+    eprintln!("  lint <file.idnt>           Lint a file");
+    eprintln!("  fmt [--check] <file.idnt>  Auto-format a file");
     eprintln!("  new <name-or-path>        Scaffold a new project");
     eprintln!("  nest ...                  Project-local environments (venv-like)");
     eprintln!();
@@ -21422,8 +21467,8 @@ fn usage() {
     eprintln!("  indent nest path             Print this nest's path");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --watch <file.ind>        Hot reload: re-run on every save");
-    eprintln!("  --safe <file.ind>         Run in a default-deny sandbox (no file/OS/net/Python)");
+    eprintln!("  --watch <file.idnt>        Hot reload: re-run on every save");
+    eprintln!("  --safe <file.idnt>         Run in a default-deny sandbox (no file/OS/net/Python)");
     eprintln!("  --debug [--break N[,M]]   Debug with breakpoints");
     eprintln!("  --no-cache                Ignore the __incache__ parsed-program cache");
     eprintln!("  --clear-cache             Delete __incache__ directories in this project");
@@ -21472,7 +21517,7 @@ fn run_check(path: &Path) -> Result<(), String> {
     files.sort();
 
     if files.is_empty() {
-        return Err(format!("No .ind files found under {}", path.display()));
+        return Err(format!("No .idnt files found under {}", path.display()));
     }
 
     let mut passed = 0usize;
@@ -21533,7 +21578,7 @@ fn run_new_project(target: &Path) -> Result<(), String> {
 
     let readme = format!(
         "# {project_name}\n\n"
-    ) + "## Run\n\n```bash\nindent main.ind\n```\n\n## Test\n\n```bash\nindent test tests\n```\n";
+    ) + "## Run\n\n```bash\nindent main.idnt\n```\n\n## Test\n\n```bash\nindent test tests\n```\n";
 
         let tasks_json = r#"{
     "version": "2.0.0",
@@ -21580,10 +21625,10 @@ fn run_new_project(target: &Path) -> Result<(), String> {
 }
 "#;
 
-    fs::write(target.join("main.ind"), main_src)
-        .map_err(|e| format!("Failed to write main.ind: {e}"))?;
-    fs::write(target.join("tests").join("smoke.ind"), test_src)
-        .map_err(|e| format!("Failed to write tests/smoke.ind: {e}"))?;
+    fs::write(target.join("main.idnt"), main_src)
+        .map_err(|e| format!("Failed to write main.idnt: {e}"))?;
+    fs::write(target.join("tests").join("smoke.idnt"), test_src)
+        .map_err(|e| format!("Failed to write tests/smoke.idnt: {e}"))?;
     fs::write(target.join("README.md"), readme)
         .map_err(|e| format!("Failed to write README.md: {e}"))?;
     fs::write(target.join(".vscode").join("tasks.json"), tasks_json)
@@ -21594,7 +21639,7 @@ fn run_new_project(target: &Path) -> Result<(), String> {
     println!("Created Indent project at {}", target.display());
     println!("Next steps:");
     println!("  cd {}", target.display());
-    println!("  indent main.ind");
+    println!("  indent main.idnt");
     println!("  indent test tests");
     println!("  F5 in VS Code for run/debug");
 
@@ -21603,7 +21648,9 @@ fn run_new_project(target: &Path) -> Result<(), String> {
 
 fn collect_ath_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let is_lang_file = |p: &Path| {
-        matches!(p.extension().and_then(|e| e.to_str()), Some("ath") | Some("ind"))
+        // `idnt` is the extension; `ind` and `ath` are still accepted so existing
+        // projects keep working with `indent check` / `indent test`.
+        matches!(p.extension().and_then(|e| e.to_str()), Some("idnt") | Some("ind") | Some("ath"))
     };
     if path.is_file() {
         if is_lang_file(path) {
@@ -21632,7 +21679,7 @@ fn run_test_suite(path: &Path) -> Result<(), String> {
     files.sort();
 
     if files.is_empty() {
-        println!("No .ind test files found under {}", path.display());
+        println!("No .idnt test files found under {}", path.display());
         return Ok(());
     }
 
@@ -22454,7 +22501,7 @@ fn main() {
                             let mut names: Vec<String> = entries
                                 .filter_map(|e| e.ok())
                                 .map(|e| e.file_name().to_string_lossy().to_string())
-                                .filter(|n| n.ends_with(".ind"))
+                                .filter(|n| n.ends_with(".idnt"))
                                 .collect();
                             names.sort();
                             if names.is_empty() {
@@ -22760,8 +22807,8 @@ fn main() {
         // Run with the script's directory as the working directory so that
         // relative paths in the script (file ops, os_list_dir, subprocesses)
         // resolve relative to the script — the same behavior as running
-        // `cd <script-dir> && indent <script>.ind`. This makes
-        // `indent run /abs/path/<script>.ind` work from any terminal directory.
+        // `cd <script-dir> && indent <script>.idnt`. This makes
+        // `indent run /abs/path/<script>.idnt` work from any terminal directory.
         let _ = env::set_current_dir(base_dir);
         load_project_environment(base_dir);
     }
@@ -22855,7 +22902,7 @@ mod tests {
         let _guard = cache_test_lock();
         let dir = unique_dir("indent_test_ast_cache");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let src = dir.join("mod_a.ind");
+        let src = dir.join("mod_a.idnt");
         let source = "fun Double\n    give 2\n";
         fs::write(&src, source).expect("write source");
 
@@ -22881,7 +22928,7 @@ mod tests {
         let _guard = cache_test_lock();
         let dir = unique_dir("indent_test_ast_cache_invalidate");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let src = dir.join("mod_b.ind");
+        let src = dir.join("mod_b.idnt");
         let source = "fun One\n    give 1\n";
         fs::write(&src, source).expect("write source");
         let program = parse_source(source).expect("parse");
@@ -22904,7 +22951,7 @@ mod tests {
         let _guard = cache_test_lock();
         let dir = unique_dir("indent_test_ast_cache_corrupt");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let src = dir.join("mod_c.ind");
+        let src = dir.join("mod_c.idnt");
         let source = "fun Three\n    give 3\n";
         fs::write(&src, source).expect("write source");
         let program = parse_source(source).expect("parse");
@@ -22940,7 +22987,7 @@ mod tests {
         let _guard = cache_test_lock();
         let dir = unique_dir("indent_test_ast_cache_build");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let src = dir.join("mod_e.ind");
+        let src = dir.join("mod_e.idnt");
         let source = "fun Five\n    give 5\n";
         fs::write(&src, source).expect("write source");
         let program = parse_source(source).expect("parse");
@@ -22968,7 +23015,7 @@ mod tests {
         // A cache must never be used when the source file itself is gone.
         let dir = unique_dir("indent_test_ast_cache_missing");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let src = dir.join("mod_d.ind");
+        let src = dir.join("mod_d.idnt");
         let source = "fun Four\n    give 4\n";
         fs::write(&src, source).expect("write source");
         let program = parse_source(source).expect("parse");
@@ -22987,7 +23034,7 @@ mod tests {
         let _guard = cache_test_lock();
         let dir = unique_dir("indent_test_ast_cache_disabled");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let src = dir.join("mod_e.ind");
+        let src = dir.join("mod_e.idnt");
         let source = "fun Five\n    give 5\n";
         fs::write(&src, source).expect("write source");
         let program = parse_source(source).expect("parse");
@@ -23008,9 +23055,9 @@ mod tests {
         // incorrectly would fail here rather than silently "pass".
         let dir = unique_dir("indent_test_ast_cache_exec");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let helper = dir.join("helper_mod.ind");
+        let helper = dir.join("helper_mod.idnt");
         fs::write(&helper, "fun Triple\n    give 3\n").expect("write helper");
-        let main = dir.join("main.ind");
+        let main = dir.join("main.idnt");
         fs::write(
             &main,
             "get Triple from helper_mod\nvar t dynamic = Triple()\n",
@@ -23198,7 +23245,18 @@ mod tests {
         assert_eq!(budget_flag("--max-steps=100", "--max-step"), None);
         assert_eq!(budget_flag("--max-depth", "--max-steps"), None);
         assert_eq!(budget_flag("--timeout-ms=5", "--max-loop-iters"), None);
-        assert_eq!(budget_flag("file.ind", "--max-steps"), None);
+        assert_eq!(budget_flag("file.idnt", "--max-steps"), None);
+    }
+
+    #[test]
+    fn an_experimental_build_points_at_the_stable_release_of_the_same_version() {
+        // The case that matters: on exp21 of 2.4.1, with 2.4.1 published stable.
+        assert!(stable_upgrade_hint("v2.4.1-exp21", "v2.4.1").is_some());
+        assert!(stable_upgrade_hint("v2.4.1-exp.1", "v2.4.1").is_some());
+        // Not the same version: no hint, the stable channel is genuinely behind.
+        assert!(stable_upgrade_hint("v2.4.2-exp1", "v2.4.1").is_none());
+        // Already stable: nothing to say.
+        assert!(stable_upgrade_hint("v2.4.1", "v2.4.1").is_none());
     }
 
     #[test]
@@ -23244,7 +23302,7 @@ mod tests {
     fn executes_repeat_and_assignment() {
         let dir = unique_dir("indent_test_repeat");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 var total int = 0
 
@@ -23288,12 +23346,12 @@ var converted string = string(UInput)
         fs::create_dir_all(&pkg_dir).expect("create pkg dir");
 
         fs::write(
-            pkg_dir.join("mathmod.ind"),
+            pkg_dir.join("mathmod.idnt"),
             "fun Double\n    give argument * 2\n",
         )
         .expect("write module");
         fs::write(
-            main_dir.join("main.ind"),
+            main_dir.join("main.idnt"),
             "get Double from mathmod as Twice\nvar r int = Twice 7\nsay r\n",
         )
         .expect("write main");
@@ -23302,7 +23360,7 @@ var converted string = string(UInput)
             std::env::set_var("INDENT_PATH", pkg_dir.to_string_lossy().to_string());
         }
         let mut rt = Runtime::new(main_dir.clone());
-        let result = rt.run_file(&main_dir.join("main.ind"));
+        let result = rt.run_file(&main_dir.join("main.idnt"));
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
     }
 
@@ -23321,20 +23379,20 @@ var converted string = string(UInput)
         let dir = unique_dir("indent_test_transitive_import");
         fs::create_dir_all(&dir).expect("create temp dir");
 
-        fs::write(dir.join("helper.ind"), "fun Hello\n    give 42\n").expect("write helper");
+        fs::write(dir.join("helper.idnt"), "fun Hello\n    give 42\n").expect("write helper");
         fs::write(
-            dir.join("lib.ind"),
+            dir.join("lib.idnt"),
             "get helper\n\nfun Go\n    var v int = helper.Hello()\n    give v\n",
         )
         .expect("write lib");
         fs::write(
-            dir.join("main.ind"),
+            dir.join("main.idnt"),
             "get lib\n\nvar got int = lib.Go()\n",
         )
         .expect("write main");
 
         let mut rt = Runtime::new(dir.clone());
-        let result = rt.run_file(&dir.join("main.ind"));
+        let result = rt.run_file(&dir.join("main.idnt"));
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
         assert!(matches!(rt.vars.get("got"), Some(Value::Int(42))));
     }
@@ -23345,17 +23403,17 @@ var converted string = string(UInput)
         let dir = unique_dir("indent_test_module_typo");
         fs::create_dir_all(&dir).expect("create temp dir");
 
-        fs::write(dir.join("helper.ind"), "fun Hello\n    give 42\n").expect("write helper");
+        fs::write(dir.join("helper.idnt"), "fun Hello\n    give 42\n").expect("write helper");
         fs::write(
-            dir.join("lib.ind"),
+            dir.join("lib.idnt"),
             "get helper\n\nfun Go\n    helper.Nonexistent()\n",
         )
         .expect("write lib");
-        fs::write(dir.join("main.ind"), "get lib\n\nlib.Go()\n").expect("write main");
+        fs::write(dir.join("main.idnt"), "get lib\n\nlib.Go()\n").expect("write main");
 
         let mut rt = Runtime::new(dir.clone());
         let err = rt
-            .run_file(&dir.join("main.ind"))
+            .run_file(&dir.join("main.idnt"))
             .expect_err("expected a dispatch error");
         assert!(
             err.contains("has no function"),
@@ -23372,20 +23430,20 @@ var converted string = string(UInput)
         fs::create_dir_all(&dir).expect("create temp dir");
 
         fs::write(
-            dir.join("ping_mod.ind"),
+            dir.join("ping_mod.idnt"),
             "get Pong from pong_mod\n\nfun Ping\n    give Pong()\n",
         )
         .expect("write ping_mod");
         fs::write(
-            dir.join("pong_mod.ind"),
+            dir.join("pong_mod.idnt"),
             "get Ping from ping_mod\n\nfun Pong\n    give Ping()\n",
         )
         .expect("write pong_mod");
-        fs::write(dir.join("main.ind"), "get Ping from ping_mod\n").expect("write main");
+        fs::write(dir.join("main.idnt"), "get Ping from ping_mod\n").expect("write main");
 
         let mut rt = Runtime::new(dir.clone());
         let err = rt
-            .run_file(&dir.join("main.ind"))
+            .run_file(&dir.join("main.idnt"))
             .expect_err("expected an import error");
         assert!(
             err.contains("Circular import"),
@@ -23399,15 +23457,15 @@ var converted string = string(UInput)
         fs::create_dir_all(&dir).expect("create temp dir");
 
         fs::write(
-            dir.join("loop.ind"),
+            dir.join("loop.idnt"),
             "get Hello from loop\n\nfun Hello\n    give 1\n",
         )
         .expect("write loop");
-        fs::write(dir.join("main.ind"), "get Hello from loop\n").expect("write main");
+        fs::write(dir.join("main.idnt"), "get Hello from loop\n").expect("write main");
 
         let mut rt = Runtime::new(dir.clone());
         let err = rt
-            .run_file(&dir.join("main.ind"))
+            .run_file(&dir.join("main.idnt"))
             .expect_err("expected an import error");
         assert!(
             err.contains("Circular import"),
@@ -23424,20 +23482,20 @@ var converted string = string(UInput)
         fs::create_dir_all(&pkg).expect("create pkg dir");
 
         fs::write(
-            pkg.join("part_two.ind"),
+            pkg.join("part_two.idnt"),
             "fun Extra\n    give 41\n",
         )
         .expect("write part_two");
         fs::write(
-            pkg.join("entry.ind"),
-            "launch \"part_two.ind\"\n\nfun Total\n    give Extra() + 1\n",
+            pkg.join("entry.idnt"),
+            "launch \"part_two.idnt\"\n\nfun Total\n    give Extra() + 1\n",
         )
         .expect("write entry");
-        fs::write(dir.join("main.ind"), "get Total from pkg.entry\nsay Total()\n")
+        fs::write(dir.join("main.idnt"), "get Total from pkg.entry\nsay Total()\n")
             .expect("write main");
 
         let mut rt = Runtime::new(dir.clone());
-        let result = rt.run_file(&dir.join("main.ind"));
+        let result = rt.run_file(&dir.join("main.idnt"));
         assert!(result.is_ok(), "runtime failed: {:?}", result.err());
     }
 
@@ -23445,7 +23503,7 @@ var converted string = string(UInput)
     fn supports_dict_literals_and_indexing() {
         let dir = unique_dir("indent_test_dict");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 var bag dynamic = {"name": "Indent", "v": 1}
 var nums dynamic = [10, 20, 30]
@@ -23467,7 +23525,7 @@ var firstChar string = title[0]
     fn supports_named_function_parameters() {
         let dir = unique_dir("indent_test_params");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 fun Add a b
     say a + b
@@ -23497,7 +23555,7 @@ Add;
     fn supports_call_expressions_and_typed_signatures() {
         let dir = unique_dir("indent_test_call_expr");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 fun Add a b as int
     give a + b
@@ -23516,7 +23574,7 @@ var sum int = Add 5 7
     fn rejects_wrong_typed_function_arguments() {
         let dir = unique_dir("indent_test_typed_fail");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 def.fun: Add(a:int, b:int) -> int
     Give: a + b
@@ -23538,12 +23596,12 @@ def.var: sum
         let std_dir = root.join("std");
         fs::create_dir_all(&std_dir).expect("create std dir");
         fs::write(
-            std_dir.join("math.ind"),
+            std_dir.join("math.idnt"),
             "fun Add a b\n    give a + b\n",
         )
         .expect("write module");
 
-        let main_file = root.join("main.ind");
+        let main_file = root.join("main.idnt");
         fs::write(
             &main_file,
             "get Add from std.math as Plus\nvar r int = Plus 1 2\nsay r\n",
@@ -23559,7 +23617,7 @@ def.var: sum
     fn supports_color_type_and_built_in_palette_variables() {
         let dir = unique_dir("indent_test_color_type");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r##"
 var accent color = RED
 var accentHex color = "#22c55e"
@@ -23579,7 +23637,7 @@ var accentBare color = "#3b82f6"
     fn supports_do_catch_otherwise_lastly_and_flag() {
         let dir = unique_dir("indent_test_do_catch");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 var state string = "start"
 
@@ -23604,7 +23662,7 @@ Lastly:
     fn supports_do_otherwise_when_no_error() {
         let dir = unique_dir("indent_test_do_otherwise");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 var status string = "init"
 
@@ -23627,7 +23685,7 @@ Lastly:
     fn supports_say_semicolon_call_style() {
         let dir = unique_dir("indent_test_say_semicolon");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         let src = r#"
 fun Pair a b as string
     give a + ":" + b
@@ -23646,7 +23704,7 @@ say p
     fn and_or_short_circuit() {
         let dir = unique_dir("indent_test_short_circuit");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         // RHS must NOT be evaluated when LHS already decides the result.
         // Here the second operand would error (key lookup on a dict that
         // lacks the key), so if `and` short-circuits it must not crash.
@@ -23671,7 +23729,7 @@ say safe
     fn sort_preserves_nested_pair_values() {
         let dir = unique_dir("indent_test_sort_pairs");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         // sort must compare nested list values element-wise (Python-style)
         // and keep the pairs intact instead of flattening to strings.
         let src = r#"
@@ -23704,7 +23762,7 @@ otherwise
     fn filtered_comprehension_and_sets() {
         let dir = unique_dir("indent_test_compr_set");
         fs::create_dir_all(&dir).expect("create temp dir");
-        let main_file = dir.join("main.ind");
+        let main_file = dir.join("main.idnt");
         // Filtered list comprehension must parse (previously mis-parsed as a
         // ternary because `if` was consumed by parse_or). `group` is the
         // builtin for unique ordered collections; `type_of` reports "group".

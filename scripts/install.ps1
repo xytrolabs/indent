@@ -293,8 +293,8 @@ if ($Local) {
                 Write-Host "✓ Downloaded indent" -ForegroundColor Green
                 foreach ($tool in @("air")) {
                     # A release archive ships `air.ps1`, a bare `air` (the shell
-                    # version) and `air.ind` (the package source). Matching "air.*"
-                    # and guessing the extension could copy the plain-text `air.ind`
+                    # version) and `air.idnt` (the package source). Matching "air.*"
+                    # and guessing the extension could copy the plain-text `air.idnt`
                     # into place as air.exe, so only accept a real executable form
                     # and keep its own name.
                     $toolFile = $null
@@ -372,12 +372,12 @@ if ($stdInstalled) {
     try {
         $listing = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/contents/std?ref=main" `
             -TimeoutSec 60 -Headers @{ "Accept" = "application/vnd.github+json" } -UserAgent "indent-installer"
-        $stdFiles = @($listing | Where-Object { $_.name -like "*.ind" } | ForEach-Object { $_.name })
+        $stdFiles = @($listing | Where-Object { $_.name -like "*.idnt" } | ForEach-Object { $_.name })
     } catch {
         Write-Host "  (could not list std/ - falling back to a short list)" -ForegroundColor Yellow
     }
     if ($stdFiles.Count -eq 0) {
-        $stdFiles = @("io.ind", "math.ind", "strings.ind", "testing.ind")
+        $stdFiles = @("io.idnt", "math.idnt", "strings.idnt", "testing.idnt")
     }
     $downloaded = 0
     foreach ($file in $stdFiles) {
@@ -533,12 +533,12 @@ if ($userPath -notlike "*$LauncherDir*") {
 
 Write-Host ""
 Write-Host "  Try it:   indent --version"
-Write-Host "  Format:   indent fmt myfile.ind"
+Write-Host "  Format:   indent fmt myfile.idnt"
 Write-Host "  Help:     indent --help"
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Gray
 Write-Host ""
 
-# Configure VS Code settings so .ind files are recognized in any folder.
+# Configure VS Code settings so .idnt files are recognized in any folder.
 $vscodeSettingsPaths = @(
     (Join-Path $env:APPDATA "Code\User\settings.json"),
     (Join-Path $env:APPDATA "VSCodium\User\settings.json")
@@ -563,7 +563,7 @@ foreach ($settingsPath in $vscodeSettingsPaths) {
         $settings | Add-Member -NotePropertyName "files.associations" -NotePropertyValue ([PSCustomObject]@{})
     }
 
-    $settings."files.associations" | Add-Member -NotePropertyName "*.ind" -NotePropertyValue "indent" -Force
+    $settings."files.associations" | Add-Member -NotePropertyName "*.idnt" -NotePropertyValue "indent" -Force
 
     if (-not ($settings.PSObject.Properties.Name -contains "workbench.iconTheme")) {
         $settings | Add-Member -NotePropertyName "workbench.iconTheme" -NotePropertyValue "indent-seti-icons"
@@ -572,4 +572,4 @@ foreach ($settingsPath in $vscodeSettingsPaths) {
     $settings | ConvertTo-Json -Depth 30 | Set-Content -Path $settingsPath
 }
 
-Write-Host "Configured VS Code settings for .ind recognition and Indent icon theme defaults."
+Write-Host "Configured VS Code settings for .idnt recognition and Indent icon theme defaults."

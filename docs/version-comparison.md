@@ -5,6 +5,12 @@ same program on four official builds. The point is to have the release claims
 (2.3.0 "the performance release", 2.4.0 "lighter on memory") checkable rather than
 remembered.
 
+> **Update for the 2.4.1 release.** The tables below were measured against
+> `2.4.1-exp1`. Everything after that on the exp channel — exp2 through exp21 — is
+> summarised at the end of this file, and `compare.md` in the repository root carries
+> the current full per-operation table against CPython plus the memory measurements.
+> The 2.4.1 release binary is built from the exp21 tree.
+
 **Machine:** 13th Gen Intel Core i5-13400F, 16 threads, 48 GB RAM, kernel
 7.2.9-2-cachyos. Linux x86-64.
 
@@ -37,7 +43,7 @@ remembered.
   workloads were fixed during this exercise because of it: `loops` tripped the
   interpreter's own `LOOP_MAX_ITERS` (100 000) guard on every version, and `imports`
   used `import std json`, which is not the language's import form.
-- Workloads and the harness are committed: `benchmarks/version-compare/*.ind` and
+- Workloads and the harness are committed: `benchmarks/version-compare/*.idnt` and
   `benchmarks/version-compare/run.py`. Reproduce with
   `python3 benchmarks/version-compare/run.py`.
 
@@ -111,6 +117,52 @@ is worth having on the record before further changes land on the exp channel.
 but far from the ~0 of a refcount bump's cost. The remaining time is the *call
 overhead* of the 20 000 `measure(big)` calls, not the string: the buffer itself is no
 longer copied at all.
+
+## What changed after exp1 (exp2 → exp21)
+
+The exp1 column above is the starting point for the rest of the 2.4.1 work. Everything
+below is measured on the same machine against the build named, and each entry names the
+comparison it was measured against — none of these is a cross-release table.
+
+**Calls, the one wide gap.** A two-argument call went from 238 ns to 190 ns
+(`bench_calls.idnt`, best of seven, interleaved against the previous binary), and against
+CPython 3.14 the ratio went 5.69x → 4.22x. What moved it:
+
+| change | effect |
+| --- | --- |
+| frame locals as a reusable vector, not a `Map<String, Value>` | no `String` per parameter per call |
+| slot read-back skipped when the call wrote nothing | the read-back was 71 ns of 168 ns for a read-only body |
+| publish only the names a callee can read, not every slot | ~205 ns → ~198 ns on a 12-variable loop |
+
+**Strings.** `a + b` copies bytes instead of going through `format!`
+(`str_concat` 2.49x → 2.45x), and `x += y` grows the buffer in place: building a
+110 000-character string is **60% faster** than the recorded baseline
+(0.53 ms → 0.21 ms), and a list built with `+=` 4000 times is **40% faster**.
+
+**Modules.** A function called through a module's namespace ran in a *copy* of the
+module's symbol table, one map insert per exported name per call: 6 280 ns per call with
+41 exports, against 301 ns for the same function defined locally — a **95% reduction**,
+now within 3% of a local call.
+
+**Objects.** Field reads are copy-on-write (an alias costs a refcount bump), which took
+`bench_method_calls.idnt::object equals` from 188.9 ns to 157.5 ns (**−16.5%**), and made
+`Value` 24 bytes.
+
+**Memory.** Peak RSS per process, against CPython 3.14: 1M integers in a list
+**28.3 MB vs 48.1 MB (0.59x)**, a 100k-key dict **16.0 MB vs 21.9 MB (0.73x)**,
+100k objects 18.4 MB vs 18.4 MB, startup 12.1 MB both. Strings are the one loss at
+1.09x, because `Value::Str` is an `Arc<String>` with two headers and capacity slack.
+
+**Robustness, which is what the release is really about.** An unbounded loop used to run
+until Ctrl-C and deep recursion ended the *process* with `fatal runtime error: stack
+overflow`. Both are now ordinary errors: `--max-steps`, `--max-depth` (default 500),
+`--max-loop-iters` and `--timeout-ms`, enforced identically by both engines, with
+`0` meaning no limit. `scripts/ci/verify-limits.sh` pins twenty checks across both.
+
+**Language fixes** found by using the thing: `if ... then` (both forms, including a
+statement on the same line), classes exported from modules, a module function keeping
+the state it writes, and `--update` no longer moving an experimental install onto an
+older stable build.
 
 ## Caveats
 

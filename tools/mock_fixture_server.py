@@ -8,7 +8,7 @@ Serves, on one port:
     timeouts, gzip, big bodies, 204, and non-UTF-8 text.
   * A WebSocket echo endpoint (`/ws`) for `ws_connect`/`ws_send_text`/`ws_recv_text`.
   * An OpenAI-compatible mock (`/v1/chat/completions`, `/v1/embeddings`,
-    `/v1/models`) so `std/ai.ind` can be tested end-to-end without a provider,
+    `/v1/models`) so `std/ai.idnt` can be tested end-to-end without a provider,
     including every error class the package claims to classify, retry-after
     handling, flakiness (fail N times then succeed) and a slow model for timeouts.
 

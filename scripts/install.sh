@@ -507,7 +507,7 @@ fi
 
 echo ""
 echo "  Try it:   $(bold 'indent --version')"
-echo "  Format:   $(bold 'indent fmt myfile.ind')"
+echo "  Format:   $(bold 'indent fmt myfile.idnt')"
 echo "  Help:     $(bold 'indent --help')"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -543,7 +543,7 @@ else
   echo "VS Code CLI not found; skipping extension auto-install."
 fi
 
-# Configure VS Code user settings so .ind files are recognized in any folder.
+# Configure VS Code user settings so .idnt files are recognized in any folder.
 if command -v jq >/dev/null 2>&1; then
   VSCODE_SETTINGS_PATHS=(
     "$HOME/.config/Code/User/settings.json"
@@ -559,17 +559,17 @@ if command -v jq >/dev/null 2>&1; then
 
     TMP_SETTINGS="$(mktemp)"
     jq '
-      .["files.associations"] = ((.["files.associations"] // {}) + {"*.ind": "indent"}) |
+      .["files.associations"] = ((.["files.associations"] // {}) + {"*.idnt": "indent"}) |
       .["workbench.iconTheme"] = (.["workbench.iconTheme"] // "indent-seti-icons")
     ' "$SETTINGS_FILE" > "$TMP_SETTINGS" && mv "$TMP_SETTINGS" "$SETTINGS_FILE"
   done
 
-  echo "Configured VS Code settings for .ind recognition and Indent icon theme defaults."
+  echo "Configured VS Code settings for .idnt recognition and Indent icon theme defaults."
 else
-  echo "Optional: install 'jq' to auto-configure VS Code .ind settings during install."
+  echo "Optional: install 'jq' to auto-configure VS Code .idnt settings during install."
 fi
 
-# ---- File manager integration (Indent file icon + MIME for .ind / .glo) ----
+# ---- File manager integration (Indent file icon + MIME for .idnt / .glo) ----
 if [[ "$OS" == "linux" ]]; then
   FM_SHARE=""
   FM_SCRIPT=""

@@ -5,24 +5,24 @@ IND=/run/media/raf/Z/Aether.ath/indent-native/target/release/indent
 OLD=/home/raf/.local/share/indent/bin/indent
 D=/tmp/cache_write_test
 rm -rf "$D"; mkdir -p "$D"
-printf 'get Empty from json\nsay "ok"\n' > "$D/main.ind"
+printf 'get Empty from json\nsay "ok"\n' > "$D/main.idnt"
 
 stamp() { # print mtime.ns + size of every .inc under $D
     find "$D" -name '*.inc' -printf '%T@ %s %p\n' 2>/dev/null | sort
 }
 
 echo "--- run 1 (new binary) ---"
-"$IND" "$D/main.ind" > /dev/null 2>&1
+"$IND" "$D/main.idnt" > /dev/null 2>&1
 stamp
 echo "--- run 2 (new binary), 1s later ---"
 sleep 1
-"$IND" "$D/main.ind" > /dev/null 2>&1
+"$IND" "$D/main.idnt" > /dev/null 2>&1
 stamp
 echo "--- run 3 (older build, no cache) ---"
 sleep 1
-"$OLD" "$D/main.ind" > /dev/null 2>&1
+"$OLD" "$D/main.idnt" > /dev/null 2>&1
 stamp
 echo "--- run 4 (new binary again) ---"
 sleep 1
-"$IND" "$D/main.ind" > /dev/null 2>&1
+"$IND" "$D/main.idnt" > /dev/null 2>&1
 stamp

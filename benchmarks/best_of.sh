@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run a benchmark N times and report the BEST time per case — the minimum is the
 # most stable estimator for CPU-bound micro-benchmarks (the machine is noisy).
-# Usage: sh benchmarks/best_of.sh <file.ind> [runs] [binary]
+# Usage: sh benchmarks/best_of.sh <file.idnt> [runs] [binary]
 IND="${3:-/run/media/raf/Z/Aether.ath/indent-native/target/release/indent}"
 FILE="$1"
 RUNS="${2:-3}"

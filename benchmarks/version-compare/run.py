@@ -159,7 +159,7 @@ def main():
     print("\n=== checksums (identical work, or the timing is meaningless) ===", flush=True)
     usable = []
     for w in WORKLOADS:
-        program = os.path.join(WORK, f"{w}.ind")
+        program = os.path.join(WORK, f"{w}.idnt")
         seen = {}
         for label, path in bins:
             code, text, _, _ = measure(path, program, 1)
@@ -176,7 +176,7 @@ def main():
     print("\n=== measuring ===", flush=True)
     results = {}
     for w in usable:
-        program = os.path.join(WORK, f"{w}.ind")
+        program = os.path.join(WORK, f"{w}.idnt")
         results[w] = {}
         for label, path in bins:
             code, text, wall, kb = measure(path, program, RUNS)

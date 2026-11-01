@@ -1,4 +1,4 @@
-# ai.ind — AI Assistant Package (like Python's `openai` SDK)
+# ai.idnt — AI Assistant Package (like Python's `openai` SDK)
 
 An **OpenAI-native** client for Indent. Talks to *any* OpenAI-compatible API —
 works with **real OpenAI** *and* a **local Ollama** server (which exposes the
@@ -251,6 +251,6 @@ otherwise
     say reply
 ```
 
-- See also: `examples/ai_openai_api.ind`, `examples/ai_pkg.ind`, and the
+- See also: `examples/ai_openai_api.idnt`, `examples/ai_pkg.idnt`, and the
   low-level `http_get` / `http_post_json` / `http_put_json` / `http_patch_json`
   / `http_delete` builtins for calling any REST API directly.

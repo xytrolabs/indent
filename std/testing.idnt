@@ -1,0 +1,18 @@
+#! testing.idnt
+#! Testing helpers for Indent
+
+fun Assert condition message
+    assert condition message
+    give empty
+
+fun AssertEq left right message
+    assert_eq left right message
+    give empty
+
+fun AssertTrue condition
+    assert condition "expected true"
+    give empty
+
+fun AssertFalse condition
+    assert not condition "expected false"
+    give empty

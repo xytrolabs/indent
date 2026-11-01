@@ -41,7 +41,7 @@ SKIP_PREFIXES = ("checks", "us/op over", "bench:", "DONE", "#")
 
 # `<label>: <value> us/op` and `<label>: <value> s`
 RE_UNIT = re.compile(r"^(?P<label>[^:]+?):\s+(?P<value>[0-9.]+)\s*(?P<unit>us/op|ns/op|ms/op|s)\b")
-# `<label>  <value> ns/op` — no colon, the style `bench_do_catch.ind` uses
+# `<label>  <value> ns/op` — no colon, the style `bench_do_catch.idnt` uses
 RE_BARE = re.compile(r"^(?P<label>.+?)\s\s+(?P<value>[0-9.]+)\s*(?P<unit>ns/op|us/op)\s*$")
 # `<label>: <value>s total, <value> ns/step, len N` — record both costs
 RE_TOTAL_STEP = re.compile(
@@ -124,7 +124,7 @@ def main():
     files = sorted(
         os.path.join(ROOT, "benchmarks", f)
         for f in os.listdir(os.path.join(ROOT, "benchmarks"))
-        if f.startswith("bench_") and f.endswith(".ind")
+        if f.startswith("bench_") and f.endswith(".idnt")
     )
     if not files:
         print("no benchmarks found", file=sys.stderr)

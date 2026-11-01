@@ -9,10 +9,10 @@
 # Run each candidate several times: the high-water mark is stable, but the first
 # run of a freshly written file also pays the AST cache write.
 #
-#   sh benchmarks/rss.sh benchmarks/bench_string_reads.ind [/path/to/indent] [reps]
+#   sh benchmarks/rss.sh benchmarks/bench_string_reads.idnt [/path/to/indent] [reps]
 set -u
 
-FILE="${1:?usage: rss.sh <file.ind> [binary] [reps]}"
+FILE="${1:?usage: rss.sh <file.idnt> [binary] [reps]}"
 BIN="${2:-indent-native/target/release/indent}"
 REPS="${3:-5}"
 

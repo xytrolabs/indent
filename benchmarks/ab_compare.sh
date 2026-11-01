@@ -15,12 +15,12 @@ timeit() {
 }
 
 echo "=== real programs, single run ===" >> "$OUT"
-timeit "game_simulation (2.2.2)" "$OLD" examples/game_simulation.ind
-timeit "game_simulation (new)  " "$NEW" examples/game_simulation.ind
-timeit "python_interop (2.2.2)" "$OLD" examples/python_interop.ind
-timeit "python_interop (new)  " "$NEW" examples/python_interop.ind
-timeit "ai_pkg example (2.2.2)" "$OLD" examples/ai_semantic_search.ind
-timeit "ai_pkg example (new)  " "$NEW" examples/ai_semantic_search.ind
+timeit "game_simulation (2.2.2)" "$OLD" examples/game_simulation.idnt
+timeit "game_simulation (new)  " "$NEW" examples/game_simulation.idnt
+timeit "python_interop (2.2.2)" "$OLD" examples/python_interop.idnt
+timeit "python_interop (new)  " "$NEW" examples/python_interop.idnt
+timeit "ai_pkg example (2.2.2)" "$OLD" examples/ai_semantic_search.idnt
+timeit "ai_pkg example (new)  " "$NEW" examples/ai_semantic_search.idnt
 
 echo "" >> "$OUT"
 echo "=== full test suite (51 files) ===" >> "$OUT"
@@ -31,15 +31,15 @@ echo "" >> "$OUT"
 echo "=== std-import startup (30 runs) ===" >> "$OUT"
 for pair in "$OLD:2.2.2" "$NEW:new  "; do
     bin="${pair%%:*}"; tag="${pair##*:}"
-    S=$(date +%s%N); seq 30 | xargs -I@ "$bin" benchmarks/bench_startup_imports.ind > /dev/null 2>&1; E=$(date +%s%N)
+    S=$(date +%s%N); seq 30 | xargs -I@ "$bin" benchmarks/bench_startup_imports.idnt > /dev/null 2>&1; E=$(date +%s%N)
     printf '%-34s %8s us/run\n' "5 std imports ($tag)" "$(( (E-S)/30/1000 ))" >> "$OUT"
-    S=$(date +%s%N); seq 30 | xargs -I@ "$bin" /tmp/imp_discord.ind > /dev/null 2>&1; E=$(date +%s%N)
+    S=$(date +%s%N); seq 30 | xargs -I@ "$bin" /tmp/imp_discord.idnt > /dev/null 2>&1; E=$(date +%s%N)
     printf '%-34s %8s us/run\n' "discord import ($tag)" "$(( (E-S)/30/1000 ))" >> "$OUT"
 done
 
 echo "" >> "$OUT"
 echo "=== function calls into a large body (20k calls) ===" >> "$OUT"
-timeit "deep calls (2.2.2)" "$OLD" benchmarks/bench_deep_calls.ind
-timeit "deep calls (new)  " "$NEW" benchmarks/bench_deep_calls.ind
+timeit "deep calls (2.2.2)" "$OLD" benchmarks/bench_deep_calls.idnt
+timeit "deep calls (new)  " "$NEW" benchmarks/bench_deep_calls.idnt
 
 cat "$OUT"

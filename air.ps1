@@ -28,7 +28,7 @@ Usage:
 
 Examples:
   air install colors               Install latest from registry
-  air install mypkg ./mypkg.ind    Install from local file
+  air install mypkg ./mypkg.idnt    Install from local file
   air uninstall colors             Remove package
   air update                       Update all installed packages
   air search json                  Find json-related packages
@@ -86,7 +86,7 @@ function Install-Package {
         }
     }
 
-    $target = "$AIR_PACKAGES\$Name.ind"
+    $target = "$AIR_PACKAGES\$Name.idnt"
     Write-Host "📦 Installing $Name..."
 
     if ($Source -match "^https?://") {
@@ -105,7 +105,7 @@ function Install-Package {
 
 function Uninstall-Package {
     param($Name)
-    $target = "$AIR_PACKAGES\$Name.ind"
+    $target = "$AIR_PACKAGES\$Name.idnt"
     if (Test-Path $target) {
         Remove-Item $target -Force
         Write-Host "🗑 Removed $target"

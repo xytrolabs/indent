@@ -285,11 +285,11 @@ get RandInt from random as R #! With alias
 
 ## Running other files (v1.6.2)
 ```indent
-launch "helper.ind"          #! Canonical: run another .ind file in this runtime.
+launch "helper.idnt"          #! Canonical: run another .idnt file in this runtime.
                              #! Its functions + module-level vars become available.
-run_file "helper.ind"        #! Deprecated alias of launch.
+run_file "helper.idnt"        #! Deprecated alias of launch.
 ```
-> Use `os_run "indent file.ind"` to run a file as a **separate process**.
+> Use `os_run "indent file.idnt"` to run a file as a **separate process**.
 
 ## File Handling
 ```indent
@@ -376,7 +376,7 @@ base64_decode("aGVsbG8=")   #! → "hello"
 hash_sha256("hello")        #! SHA256 hex string
 
 #! File & Path (v1.2)
-glob("*.ind")               #! List files matching pattern
+glob("*.idnt")               #! List files matching pattern
 path_join("/home", "user") #! → "/home/user"
 path_basename("/a/b.txt")  #! → "b.txt"
 path_dirname("/a/b.txt")   #! → "/a"
@@ -428,13 +428,13 @@ Example: a missing dict key gives `error_type(err)` → `key_error` and
 
 ## Commands
 ```bash
-indent run file.ind          # Run a program
-indent fmt file.ind          # Format code
-indent check file.ind        # Check syntax
-indent lint file.ind         # Lint code
+indent run file.idnt          # Run a program
+indent fmt file.idnt          # Format code
+indent check file.idnt        # Check syntax
+indent lint file.idnt         # Lint code
 indent repl                  # Interactive REPL
 indent test tests/           # Run tests (expects a directory)
-indent --debug file.ind      # Debug mode
+indent --debug file.idnt      # Debug mode
 indent --update              # Update to latest version (stays on your channel)
 indent --version             # Show version and release channel
 indent --channel             # Which channel this install follows
@@ -442,8 +442,8 @@ indent --switch-to-exp       # Switch to the experimental (unstable) channel
 indent --switch-to-stable    # Switch back to the stable channel
 
 # v2.2 tooling
-indent --watch file.ind      # Hot reload: re-run on every save
-indent --safe file.ind       # Run in a default-deny sandbox (no file/OS/net/Python)
+indent --watch file.idnt      # Hot reload: re-run on every save
+indent --safe file.idnt       # Run in a default-deny sandbox (no file/OS/net/Python)
 indent nest init             # Create a project-local .nest/ environment (venv-like)
 indent nest install [ver]    # Pin an Indent release (e.g. '2.1.0' or 'latest') into this nest
 indent nest use [ver]        # Alias of install
@@ -453,7 +453,7 @@ indent nest path             # Print the active nest's path
 air delivery                 # Bundle & share a whole project (in a project folder)
 
 # v2.3 performance
-indent --no-cache file.ind    # Skip the __incache__ parsed-program cache for this run
+indent --no-cache file.idnt    # Skip the __incache__ parsed-program cache for this run
 indent --clear-cache          # Delete __incache__ directories under the current directory
                               # (also: INDENT_NO_AST_CACHE=1 to disable writing entirely)
 ```

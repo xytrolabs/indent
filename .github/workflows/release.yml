@@ -204,14 +204,14 @@ jobs:
           test -x "$STAGE_DIR/${{ matrix.bin_name }}"
           "$STAGE_DIR/${{ matrix.bin_name }}" --version
           # `check` takes a directory; `run` executes a file. This used to call
-          # `check tests/smoke.ind` against a file that never existed.
-          "$STAGE_DIR/${{ matrix.bin_name }}" run tests/smoke.ind
+          # `check tests/smoke.idnt` against a file that never existed.
+          "$STAGE_DIR/${{ matrix.bin_name }}" run tests/smoke.idnt
           # "Batteries included": every archive must ship the runtime, AIR, and
           # the FULL standard library. Releases used to ship a bare `indent`
           # binary, which silently broke installs, so fail loudly instead.
           test -f "$STAGE_DIR/air"
           test -d "$STAGE_DIR/std"
-          STD_COUNT="$(find "$STAGE_DIR/std" -name '*.ind' | wc -l)"
+          STD_COUNT="$(find "$STAGE_DIR/std" -name '*.idnt' | wc -l)"
           if [[ "$STD_COUNT" -lt 10 ]]; then
             echo "Archive ships only ${STD_COUNT} stdlib files; expected the full std/" >&2
             exit 1
@@ -266,7 +266,7 @@ jobs:
           }
 
           & $exe.FullName --version
-          & $exe.FullName run tests/smoke.ind
+          & $exe.FullName run tests/smoke.idnt
 
           $airPs1 = Get-ChildItem -Path $tmp -Recurse -Filter "air.ps1" | Select-Object -First 1
           if (-not $airPs1) {
@@ -279,7 +279,7 @@ jobs:
           if (-not $stdDir) {
             throw "Standard library (std/) missing from $name.zip"
           }
-          $stdCount = (Get-ChildItem -Path $stdDir.FullName -Filter "*.ind").Count
+          $stdCount = (Get-ChildItem -Path $stdDir.FullName -Filter "*.idnt").Count
           if ($stdCount -lt 10) {
             throw "$name.zip ships only $stdCount stdlib files; expected the full std/"
           }
@@ -338,7 +338,7 @@ jobs:
           command -v air
 
           indent --version
-          indent run tests/smoke.ind
+          indent run tests/smoke.idnt
 
           sudo apt-get remove -y indent
 
@@ -373,7 +373,7 @@ jobs:
               command -v indent
               command -v air
               indent --version
-              indent run tests/smoke.ind
+              indent run tests/smoke.idnt
             '
 
   publish:

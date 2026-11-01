@@ -1,9 +1,9 @@
 #!/bin/sh
-# Run the Indent .ind test suite with a given binary (avoids shell autocorrect
+# Run the Indent .idnt test suite with a given binary (avoids shell autocorrect
 # of the `test` subcommand).
 #
 # The runner is in-process, so a test file that calls `process_exit` ends the
-# whole run — and `tests/ai_mock_parity.ind` does exactly that when its fixture
+# whole run — and `tests/ai_mock_parity.idnt` does exactly that when its fixture
 # server is not up. The output then stops at the SKIP line, the summary line is
 # never printed, and the exit status is still 0: a run that executed one test out
 # of seventy-five was indistinguishable from a clean pass. So the summary line is
@@ -37,7 +37,7 @@ if ! printf '%s\n' "$OUT" | grep -q '^Test summary:'; then
     echo "" >&2
     echo "run_suite: the suite stopped before its summary line." >&2
     echo "  A test that calls process_exit ends the whole in-process run —" >&2
-    echo "  tests/ai_mock_parity.ind does this when its fixture is missing." >&2
+    echo "  tests/ai_mock_parity.idnt does this when its fixture is missing." >&2
     echo "  Start it by hand with: python3 tools/mock_fixture_server.py 8799 &" >&2
     exit 1
 fi

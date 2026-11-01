@@ -146,11 +146,11 @@ get Join from path
 get Dirname from path
 get Basename from path
 
-var full string = Join "/home/user" "projects" "main.ind"
-say full                  #! "/home/user/projects/main.ind"
+var full string = Join "/home/user" "projects" "main.idnt"
+say full                  #! "/home/user/projects/main.idnt"
 
 say Dirname full          #! "/home/user/projects"
-say Basename full         #! "main.ind"
+say Basename full         #! "main.idnt"
 ```
 
 ---
@@ -215,7 +215,7 @@ say sys_arch()          #! "x86_64"
 say sys_executable()    #! "/home/user/.local/bin/indent"
 
 #! Command-line arguments
-say sys_argv()          #! ["script.ind", "--verbose"]
+say sys_argv()          #! ["script.idnt", "--verbose"]
 
 #! Exit with a status code
 process_exit 0           #! success

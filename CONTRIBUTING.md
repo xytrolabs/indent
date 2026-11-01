@@ -15,12 +15,12 @@ If you find a bug or have a feature request, please join the discussion:
 ## Contribute Packages
 
 The best way to contribute to the Indent ecosystem is by creating packages.
-Packages are `.ind` files that provide reusable functionality — math utilities,
+Packages are `.idnt` files that provide reusable functionality — math utilities,
 HTTP helpers, game frameworks, Discord bots, CLI tools, etc.
 
 ### What makes a good package?
 
-- A single `.ind` file with a clear purpose
+- A single `.idnt` file with a clear purpose
 - Uses only the standard library and built-in functions
 - Includes comments explaining usage
 - Works with the latest Indent release
@@ -49,6 +49,6 @@ bash install.sh
 Run a test file:
 
 ```bash
-indent v2.ind
+indent v2.idnt
 ```
 

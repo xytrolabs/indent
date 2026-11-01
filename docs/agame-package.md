@@ -1,4 +1,4 @@
-# agame.ind — Merged into InGame (compatibility shim)
+# agame.idnt — Merged into InGame (compatibility shim)
 
 > **⚠️ agame is now merged into [`ingame`](ingame-package.md)** (v2.0). The
 > `agame` package is kept only as a **compatibility shim** that re-exports the

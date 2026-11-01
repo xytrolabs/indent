@@ -1,4 +1,4 @@
-# Indent Language (.ind) v2.4.0
+# Indent Language (.idnt) v2.4.0
 
 Indent is a simple, readable programming language. No braces, no parentheses, no symbols — just clean, indented code. Designed to be easy to learn while powerful enough for real work.
 
@@ -69,7 +69,7 @@ say "Hello " + name + "!"
 > | 1-argument / 2-argument call | 402 / 700 ns | **213 / 338 ns** | 1.9× / 2.1× |
 > | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 > | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-> | `.ind` test suite (52 files) | 5.55 s | **3.96 s** cold | 1.4× |
+> | `.idnt` test suite (52 files) | 5.55 s | **3.96 s** cold | 1.4× |
 >
 > ### What made it faster
 > - 🧠 **Expressions are parsed once, not on every evaluation.** Every statement
@@ -313,13 +313,13 @@ is_generator g          #! → TRUE
 
 ### Tooling
 ```bash
-indent run file.ind        # Run a program
-indent fmt file.ind        # Format code
-indent check file.ind      # Check syntax
-indent lint file.ind       # Lint
+indent run file.idnt        # Run a program
+indent fmt file.idnt        # Format code
+indent check file.idnt      # Check syntax
+indent lint file.idnt       # Lint
 indent repl                # Interactive shell
 indent test tests/         # Run tests
-indent --debug file.ind    # Debug with breakpoints
+indent --debug file.idnt    # Debug with breakpoints
 indent --update            # Update to latest (keeps your channel)
 indent --channel           # Show the release channel (stable | exp)
 indent --switch-to-exp     # Follow experimental prereleases
@@ -392,12 +392,12 @@ say reply                    #! → "4"
 #! AI.SetApiKey("sk-...")
 #! var gpt = AI.Chat("gpt-4o-mini", [{"role":"user","content":"hi"}])
 ```
-Functions: `AI.Chat` (chat completions), `AI.Ask` (single prompt), `AI.Embed` / `AI.EmbedMany` (embeddings), `AI.Models` (list models), `AI.Similarity` (cosine), `AI.Search` (semantic search), plus `AI.SetBase` / `AI.SetApiKey` / `AI.SetDefaultModel` config. Under the hood it uses Indent's native `http_post_json` / `http_get` builtins — no Python needed. See `examples/ai_openai_api.ind` for the package API *and* the raw low-level way to call any REST API.
+Functions: `AI.Chat` (chat completions), `AI.Ask` (single prompt), `AI.Embed` / `AI.EmbedMany` (embeddings), `AI.Models` (list models), `AI.Similarity` (cosine), `AI.Search` (semantic search), plus `AI.SetBase` / `AI.SetApiKey` / `AI.SetDefaultModel` config. Under the hood it uses Indent's native `http_post_json` / `http_get` builtins — no Python needed. See `examples/ai_openai_api.idnt` for the package API *and* the raw low-level way to call any REST API.
 
 Also has full Python interop (`python_eval`, `python_eval_json`, `python_exec`, `python_run_file`).
 
 ### InGame — PyGame-style games in pure Indent
-[`std/ingame.ind`](std/ingame.ind) is a native 2D game framework that **mirrors PyGame's API**: `Init` (init), `SetMode` (display.set_mode), `DrawRect`/`DrawCircle`/`DrawLine`/`DrawPolygon`/`DrawText` (draw.*), `Flip` (display.flip), `GetEvents` (event.get), `GetKeys` (key.get_pressed), `GetMouse` (mouse.get_pos), `Tick` (time.Clock.tick), `Quit`. **All game logic lives in Indent** (movement, collision, physics, scoring, rendering); a native window just draws frames and reports input — like PyGame, but entirely in Indent.
+[`std/ingame.idnt`](std/ingame.idnt) is a native 2D game framework that **mirrors PyGame's API**: `Init` (init), `SetMode` (display.set_mode), `DrawRect`/`DrawCircle`/`DrawLine`/`DrawPolygon`/`DrawText` (draw.*), `Flip` (display.flip), `GetEvents` (event.get), `GetKeys` (key.get_pressed), `GetMouse` (mouse.get_pos), `Tick` (time.Clock.tick), `Quit`. **All game logic lives in Indent** (movement, collision, physics, scoring, rendering); a native window just draws frames and reports input — like PyGame, but entirely in Indent.
 ```indent
 get Init from ingame
 get SetMode from ingame
@@ -425,15 +425,15 @@ Works via `indent-ingame` (a native WebKitGTK canvas helper, built by `install.s
 
 #### Playable GUI game: Snake
 ```bash
-indent examples/snake_game.ind                 # play (arrow keys)
-INDENT_SNAKE_BOT=1 indent examples/snake_game.ind   # auto-play bot
+indent examples/snake_game.idnt                 # play (arrow keys)
+INDENT_SNAKE_BOT=1 indent examples/snake_game.idnt   # auto-play bot
 ```
 Snake is written 100% in Indent using InGame — the bot AI, wall/self collision, growth, and scoring are all Indent logic. `INDENT_SNAKE_BOT=1` makes it play itself (verified: scores 80, snake grows to 11 segments).
 
 #### Playable GUI game: Breakout
 ```bash
-indent examples/breakout_game.ind              # play (arrow keys)
-INDENT_BREAKOUT_BOT=1 indent examples/breakout_game.ind   # auto-play bot
+indent examples/breakout_game.idnt              # play (arrow keys)
+INDENT_BREAKOUT_BOT=1 indent examples/breakout_game.idnt   # auto-play bot
 ```
 Breakout is written 100% in Indent: paddle physics, ball bounce, brick collision, scoring, and HUD all in Indent. The bot autoplay verifies the full loop headlessly.
 

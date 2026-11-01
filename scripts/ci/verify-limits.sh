@@ -51,35 +51,35 @@ run() {
     ok "$label"
 }
 
-cat > "$TMP/spin.ind" <<'EOF'
+cat > "$TMP/spin.idnt" <<'EOF'
 var i = 0
 repeat 1000000000
     i += 1
 say i
 EOF
 
-cat > "$TMP/spin_unbounded.ind" <<'EOF'
+cat > "$TMP/spin_unbounded.idnt" <<'EOF'
 var i = 0
 repeat
     i += 1
 say i
 EOF
 
-cat > "$TMP/while_ind.ind" <<'EOF'
+cat > "$TMP/while_ind.idnt" <<'EOF'
 var i = 0
 repeat while i >= 0
     i += 1
 say i
 EOF
 
-cat > "$TMP/deep.ind" <<'EOF'
+cat > "$TMP/deep.idnt" <<'EOF'
 fun down n
     if n <= 0 then give 0
     give down(n - 1) + 1
 say down(100000)
 EOF
 
-cat > "$TMP/short.ind" <<'EOF'
+cat > "$TMP/short.idnt" <<'EOF'
 var total = 0
 var i = 0
 repeat 10
@@ -92,49 +92,49 @@ echo "verify-limits:"
 
 # ---- steps -----------------------------------------------------------------
 run "step budget stops a long repeat" "Step limit of 1000" \
-    "$BIN" --max-steps 1000 "$TMP/spin.ind"
+    "$BIN" --max-steps 1000 "$TMP/spin.idnt"
 run "step budget stops an unbounded repeat" "Step limit of 1000" \
-    "$BIN" --max-steps 1000 "$TMP/spin_unbounded.ind"
+    "$BIN" --max-steps 1000 "$TMP/spin_unbounded.idnt"
 run "step budget stops a compiled while" "Step limit of 1000" \
-    "$BIN" --max-steps 1000 "$TMP/while_ind.ind"
+    "$BIN" --max-steps 1000 "$TMP/while_ind.idnt"
 run "step budget is enforced with the VM off" "Step limit of 1000" \
-    env INDENT_VM=0 "$BIN" --max-steps 1000 "$TMP/spin.ind"
+    env INDENT_VM=0 "$BIN" --max-steps 1000 "$TMP/spin.idnt"
 run "step budget via INDENT_MAX_STEPS" "Step limit of 1000" \
-    env INDENT_MAX_STEPS=1000 "$BIN" "$TMP/spin.ind"
+    env INDENT_MAX_STEPS=1000 "$BIN" "$TMP/spin.idnt"
 
 # ---- wall clock ------------------------------------------------------------
 run "time budget stops a long repeat" "Time limit of 150 ms" \
-    "$BIN" --timeout-ms 150 "$TMP/spin.ind"
+    "$BIN" --timeout-ms 150 "$TMP/spin.idnt"
 
 # ---- call depth ------------------------------------------------------------
 # This is the case that used to abort the process with a core dump.
 run "depth budget stops deep recursion" "Call depth limit of 100" \
-    "$BIN" --max-depth 100 "$TMP/deep.ind"
+    "$BIN" --max-depth 100 "$TMP/deep.idnt"
 run "depth budget is enforced with the VM off" "Call depth limit of 100" \
-    env INDENT_VM=0 "$BIN" --max-depth 100 "$TMP/deep.ind"
+    env INDENT_VM=0 "$BIN" --max-depth 100 "$TMP/deep.idnt"
 run "the default depth budget stops 100k-deep recursion" "Call depth limit of" \
-    "$BIN" "$TMP/deep.ind"
+    "$BIN" "$TMP/deep.idnt"
 
 # ---- the per-loop ceiling, now raisable ------------------------------------
 # It guards loops whose length is *not* written in the source (`while`, `until`,
 # a `repeat` with no count). A `repeat N` is already bounded by N, so it is left to
 # the step and time budgets instead of being capped a second way.
 run "loop ceiling fires on its own" "Loop iteration limit of 50" \
-    "$BIN" --max-loop-iters 50 "$TMP/spin_unbounded.ind"
+    "$BIN" --max-loop-iters 50 "$TMP/spin_unbounded.idnt"
 run "loop ceiling fires on a while loop" "Loop iteration limit of 50" \
-    "$BIN" --max-loop-iters 50 "$TMP/while_ind.ind"
+    "$BIN" --max-loop-iters 50 "$TMP/while_ind.idnt"
 run "loop ceiling is raisable" "Step limit of 1000" \
-    "$BIN" --max-loop-iters 10000000 --max-steps 1000 "$TMP/spin_unbounded.ind"
+    "$BIN" --max-loop-iters 10000000 --max-steps 1000 "$TMP/spin_unbounded.idnt"
 
 # ---- budgets must not disturb ordinary programs ----------------------------
-out=$("$BIN" --max-steps 1000000 --max-depth 500 --timeout-ms 20000 "$TMP/short.ind" 2>&1)
+out=$("$BIN" --max-steps 1000000 --max-depth 500 --timeout-ms 20000 "$TMP/short.idnt" 2>&1)
 if [[ "$out" == *"short ok 45"* ]]; then
     ok "a program well inside its budgets is untouched"
 else
     bad "a program well inside its budgets is untouched — got: $out"
 fi
 
-out=$("$BIN" --max-steps 0 --max-depth 0 --max-loop-iters 0 "$TMP/short.ind" 2>&1)
+out=$("$BIN" --max-steps 0 --max-depth 0 --max-loop-iters 0 "$TMP/short.idnt" 2>&1)
 if [[ "$out" == *"short ok 45"* ]]; then
     ok "0 disables a budget"
 else
@@ -142,7 +142,7 @@ else
 fi
 
 # A bad value is a usage error, not a silent "no limit".
-out=$("$BIN" --max-steps=abc "$TMP/short.ind" 2>&1); rc=$?
+out=$("$BIN" --max-steps=abc "$TMP/short.idnt" 2>&1); rc=$?
 if [[ $rc -eq 2 && "$out" == *"Invalid value for --max-steps"* ]]; then
     ok "--max-steps=abc is rejected"
 else
@@ -153,7 +153,7 @@ fi
 # The display classifier used to be a second copy of the one behind `error_type()`,
 # and it read `--timeout-ms` as a network problem: the time budget came out as
 # `network_error` with a "check the URL" hint.
-for case in "--max-steps 1000:$TMP/spin.ind" "--timeout-ms 120:$TMP/spin.ind" "--max-depth 100:$TMP/deep.ind" "--max-loop-iters 40:$TMP/spin_unbounded.ind"; do
+for case in "--max-steps 1000:$TMP/spin.idnt" "--timeout-ms 120:$TMP/spin.idnt" "--max-depth 100:$TMP/deep.idnt" "--max-loop-iters 40:$TMP/spin_unbounded.idnt"; do
     flags=${case%%:*}
     file=${case#*:}
     out=$("$BIN" $flags "$file" 2>&1)
@@ -168,7 +168,7 @@ done
 # ---- a deep failure reports one line, not one per frame --------------------
 # Every unwinding frame prefixes the error with its own line, so the depth budget
 # used to print "Line 4: Line 3: Line 3: …" a hundred times before the message.
-out=$("$BIN" --max-depth 100 "$TMP/deep.ind" 2>&1)
+out=$("$BIN" --max-depth 100 "$TMP/deep.idnt" 2>&1)
 prefixes=$(printf '%s' "$out" | head -2 | grep -o "Line [0-9]*:" | wc -l)
 if [[ $prefixes -eq 1 ]]; then
     ok "a deep failure collapses its repeated line prefixes"

@@ -50,7 +50,7 @@ status=0
 for t in net_http_parity net_ws_parity ai_mock_parity; do
     echo
     echo "=== $t ==="
-    if ! "$INDENT" run "$ROOT/tests/$t.ind"; then
+    if ! "$INDENT" run "$ROOT/tests/$t.idnt"; then
         status=1
     fi
 done

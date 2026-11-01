@@ -512,7 +512,7 @@ http_serve handle 8080     #! blocking: listens until stopped
 
 > `http_serve` blocks the script while serving. Each request runs the handler
 > in a fresh scope (stateless per request). `req.query["x"]` reads the `?x=…`
-> query parameter (URL-decoded). Full example: `examples/web_server.ind`.
+> query parameter (URL-decoded). Full example: `examples/web_server.idnt`.
 >
 > **For a richer toolkit** — response builders and a `RunCode` helper that
 > executes Indent source POSTed from a browser (a "Run" button) — see
@@ -563,7 +563,7 @@ work — they are the same socket:
 ```indent
 var sock dynamic = ws_connect "wss://example.com/ws"
 ws_send_text sock "hi"              #! the dict returned by ws_connect
-ws_send_text sock["socket_id"] "hi" #! or its id (what std/discord.ind uses)
+ws_send_text sock["socket_id"] "hi" #! or its id (what std/discord.idnt uses)
 
 var reply dynamic = ws_recv_text sock
 if reply["ok"]
@@ -591,8 +591,8 @@ runtime** — the launched file's functions and module-level vars become availab
 here (include-like):
 
 ```indent
-#! helper.ind defines: fun double x  and  var helperMsg = "..."
-launch "helper.ind"
+#! helper.idnt defines: fun double x  and  var helperMsg = "..."
+launch "helper.idnt"
 var d = double 21          #! → 42  (function from the other file)
 say helperMsg              #! var from the other file is now in scope
 ```
@@ -604,7 +604,7 @@ say helperMsg              #! var from the other file is now in scope
 
 > Both forms run the file's top-level code in your script's runtime. To run a
 > file as a **separate process** (isolated, via the `indent` binary), use
-> `os_run "indent path.ind"` — which returns `{ok, status, stdout, stderr}`.
+> `os_run "indent path.idnt"` — which returns `{ok, status, stdout, stderr}`.
 
 ---
 
@@ -1076,7 +1076,7 @@ say time_format(1614834367, "%F %T")           #! → "2021-03-04 05:06:07"
 
 | Function | Returns | Description |
 |---|---|---|
-| `glob(pattern)` | list | List files matching wildcard (e.g. `"*.ind"`) |
+| `glob(pattern)` | list | List files matching wildcard (e.g. `"*.idnt"`) |
 | `path_join(a, b, ...)` | string | Join path components |
 | `path_basename(path)` | string | Extract filename from path |
 | `path_dirname(path)` | string | Extract directory from path |
@@ -1262,7 +1262,7 @@ catch as err:
 
 ## Safe mode (v2.2)
 
-`indent --safe file.ind` runs a script in a **default-deny** sandbox. Every
+`indent --safe file.idnt` runs a script in a **default-deny** sandbox. Every
 builtin is first checked against a whitelist; anything not allowed is refused
 with an error. Allowed are pure/computational families (`math_*`, `regex_*`,
 `random_*`, `str_*`, `path_*`, `is_*`, `set_*`), core data/logic builtins,

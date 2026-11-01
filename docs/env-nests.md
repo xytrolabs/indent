@@ -30,7 +30,7 @@ source .nest/activate          # PowerShell:  . .nest/Activate.ps1
 air install colors             # installs into .nest/air-packages (project-local)
 air deps                       # or use the deps.txt manifest
 
-indent myapp.ind               # imports resolve from the nest first
+indent myapp.idnt               # imports resolve from the nest first
 ```
 
 Activating sets:

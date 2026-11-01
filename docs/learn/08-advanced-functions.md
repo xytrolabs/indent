@@ -126,7 +126,7 @@ say sum_of_squares(3, 4)   #! 25
 Functions inside modules can call each other:
 
 ```indent
-#! packages/calculator.ind
+#! packages/calculator.idnt
 fun double n
     give n * 2
 
@@ -274,7 +274,7 @@ greet "Ada" empty       #! "Hello Ada!"
 ## Practice
 
 1. Write a recursive function to compute the sum of all numbers from 1 to n.
-2. Create a module `stats.ind` with functions `mean`, `median`, and `std_dev` that build on each other.
+2. Create a module `stats.idnt` with functions `mean`, `median`, and `std_dev` that build on each other.
 3. Write a function `apply_twice` that takes a number and a function (by name), and applies that function twice.
 4. Build a small string processing pipeline: trim → capitalize → reverse — using composed functions.
 

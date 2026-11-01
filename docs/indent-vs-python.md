@@ -371,8 +371,8 @@ port over easily:
 Beyond the PyGame basics, InGame adds tilemaps (`MakeTilemap`/`DrawTilemap`),
 emoji sprites (`DrawSprite`), a camera (`SetCamera`), and simple physics
 (`StepPhysics`/`MoveInMap`) for RPG/action games — all in pure Indent with a
-native window. See `examples/snake_game.ind`, `examples/breakout_game.ind`,
-and `examples/rpg_demo.ind`.
+native window. See `examples/snake_game.idnt`, `examples/breakout_game.idnt`,
+and `examples/rpg_demo.idnt`.
 
 ---
 

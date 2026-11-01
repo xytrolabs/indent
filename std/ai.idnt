@@ -1,0 +1,753 @@
+#! =============================================================================
+#! ai.idnt 1.5 — OpenAI-native AI assistant package for Indent
+#! =============================================================================
+#!
+#! Talks to ANY OpenAI-compatible API, so it works with real OpenAI OR a local
+#! Ollama server (which exposes the same OpenAI API at /v1):
+#!   - Local Ollama:  SetBase("http://localhost:11434/v1")  (no key needed)
+#!   - Real OpenAI:   SetBase("https://api.openai.com/v1") + SetApiKey("sk-...")
+#!
+#! System prompts work exactly like the OpenAI Python SDK: put a
+#! {"role":"system","content":"..."} message first in the `messages` list.
+#!
+#! v1.4: ROBUST — never crashes, and reports errors like the OpenAI Python SDK:
+#!   - checks the HTTP response (ok / status)
+#!   - classifies failures into typed errors (authentication_error, rate_limit_error,
+#!     connection_error, ...)
+#!   - retries ONLY retryable failures (connection, 408/409/429, 5xx) with
+#!     Retry-After + exponential backoff and jitter
+#!   - captures the provider's message/code/param and the x-request-id header
+#!   - records the last error (LastError) and returns empty on failure
+#!
+#! Mirror of the OpenAI Python SDK surface, adapted for Indent:
+#!   Chat      → openai client.chat.completions.create
+#!   Ask       → openai client.chat.completions.create (single prompt)
+#!   Embed     → openai client.embeddings.create (single input)
+#!   EmbedMany → openai client.embeddings.create (batch input)
+#!   Models    → openai client.models.list
+#!   Similarity → cosine similarity between two embeddings
+#!   Search    → semantic search: rank docs by similarity to a query
+#!   SetBase / SetApiKey / SetDefaultModel / SetDefaultEmbedModel → config
+#!   SetRetries / SetTimeout / GetLastError / WasError → robustness
+#!
+#! Two import styles:
+#!   get ai as AI
+#!   var reply = AI.Chat("qwen2.5:0.5b", [{"role":"user","content":"hi"}])
+#!
+#!   get Chat from ai
+#!   var reply = Chat("qwen2.5:0.5b", [{"role":"user","content":"hi"}])
+
+#! --- Configuration (module-level state) ---
+var _base = "http://localhost:11434/v1"
+var _apiKey = ""
+var _defaultModel = "qwen2.5:0.5b"
+var _defaultEmbedModel = "nomic-embed-text"
+var _maxRetries = 2
+var _timeout = 30.0
+var _errObj = {}
+var _errText = ""
+var _lastStatus = 0
+var _lastRequestId = ""
+var _lastUsage = {}
+var _lastFinish = ""
+
+#! --- client config (like openai.OpenAI(base_url=..., api_key=...)) ---
+fun SetBase url
+    _base is url
+
+fun SetApiKey key
+    _apiKey is key
+
+fun SetDefaultModel name
+    _defaultModel is name
+
+fun SetDefaultEmbedModel name
+    _defaultEmbedModel is name
+
+fun GetBase
+    give _base
+
+#! How many times to retry a retryable failure (default 2). Set 0 to disable.
+fun SetRetries n
+    _maxRetries is n
+
+#! Alias — matches the OpenAI SDK's kwargs.max_retries.
+fun SetMaxRetries n
+    _maxRetries is n
+
+#! Request timeout in seconds (default 30). Applied to every HTTP call.
+fun SetTimeout seconds
+    _timeout is float(seconds)
+    http_set_timeout _timeout
+
+fun GetTimeout
+    give _timeout
+
+#! Last error message from the most recent failed call ("" = success).
+fun GetLastError
+    give _errText
+
+#! Last HTTP status code from the most recent call (0 = no response).
+fun GetLastStatus
+    give _lastStatus
+
+#! Request id of the most recent call (from the x-request-id header), if any.
+fun GetRequestId
+    give _lastRequestId
+
+#! Token usage of the most recent chat call ({prompt_tokens, completion_tokens, total_tokens}).
+fun LastUsage
+    give _lastUsage
+
+#! Finish reason of the most recent chat call (e.g. "stop", "length", "tool_calls").
+fun LastFinishReason
+    give _lastFinish
+
+#! The full structured error object of the most recent failed call ({} = success).
+#! Fields: ok(false), type, status, code, message, param, request_id, body, provider.
+fun LastError
+    give _errObj
+
+#! Was the most recent call an error?
+fun WasError
+    give has_key _errObj "ok"
+
+#! Error category word (e.g. "authentication_error", "rate_limit_error").
+fun ErrorType
+    if has_key _errObj "type"
+        give _errObj.type
+    give ""
+
+#! Pure helper: classify an HTTP status into an error category (no state).
+fun ErrorTypeFor status
+    give _ErrorType status
+
+#! Pure helper: would a given HTTP status be retried? (0 = connection error)
+fun IsRetryable status
+    give _Retryable status
+
+#! ---- OpenAI-SDK-style typed error checkers ----
+fun IsAuthError
+    give ErrorType() == "authentication_error"
+fun IsPermissionError
+    give ErrorType() == "permission_error"
+fun IsBadRequest
+    give ErrorType() == "bad_request_error"
+fun IsNotFound
+    give ErrorType() == "not_found_error"
+fun IsRateLimit
+    give ErrorType() == "rate_limit_error"
+fun IsServerError
+    give ErrorType() == "internal_server_error"
+fun IsConnectionError
+    give ErrorType() == "connection_error"
+fun IsTimeout
+    give ErrorType() == "timeout_error"
+
+#! Authorization header: empty when no key (local Ollama), else "Bearer <key>"
+fun AuthHeader
+    if len(_apiKey) == 0
+        give ""
+    give "Bearer " + _apiKey
+
+#! Provider label derived from the base URL (for error reporting).
+fun _Provider
+    if contains(_base, "openai.com")
+        give "openai"
+    if contains(_base, "localhost")
+        give "local"
+    if contains(_base, "127.0.0.1")
+        give "local"
+    give "openai-compatible"
+
+#! Map an HTTP status to an OpenAI-SDK-style error category.
+fun _ErrorType status
+    if status == 400
+        give "bad_request_error"
+    if status == 401
+        give "authentication_error"
+    if status == 403
+        give "permission_error"
+    if status == 404
+        give "not_found_error"
+    if status == 409
+        give "conflict_error"
+    if status == 422
+        give "unprocessable_error"
+    if status == 429
+        give "rate_limit_error"
+    if status == 408
+        give "timeout_error"
+    if status >= 500 and status < 600
+        give "internal_server_error"
+    if status == 0
+        give "connection_error"
+    give "api_error"
+
+#! Should we retry this status? (mirrors the OpenAI SDK: connection, 408/409/429, 5xx)
+fun _Retryable status
+    if status == 0
+        give true
+    if status == 408 or status == 409 or status == 429
+        give true
+    if status >= 500 and status < 600
+        give true
+    give false
+
+#! Exponential backoff with jitter, capped (seconds).
+fun _Backoff attempt
+    var base float = 0.5
+    var i int = 1
+    repeat while i < attempt
+        base is base * 2.0
+        i is i + 1
+    var jitter float = random_float() * 0.25
+    var total float = base + jitter
+    if total > 20.0
+        give 20.0
+    give total
+
+#! Record a structured error on the module (also sets the flat text).
+fun _SetError etype status code message param requestId body
+    var prov = _Provider()
+    var obj dynamic = {"ok": false, "type": etype, "status": status, "code": code, "message": message, "param": param, "request_id": requestId, "body": body, "provider": prov}
+    _errObj is obj
+    _errText is message
+    give obj
+
+#! Extract and store the x-request-id header from a response (for support tickets).
+fun _CaptureRequestId resp
+    if type_of(resp) != "dict"
+        return empty
+    if not has_key resp "headers"
+        return empty
+    var h dynamic = resp.headers
+    if type_of(h) != "dict"
+        return empty
+    if has_key h "x-request-id"
+        _lastRequestId is string(h["x-request-id"])
+
+#! Retry-After delay from a response body/header (seconds, capped at 30).
+fun _RetryAfterObj resp
+    var delayS float = 0.0
+    if type_of(resp) == "dict"
+        if has_key resp "body"
+            var body string = resp.body
+            if len(body) > 0
+                var parsed = empty
+                do:
+                    parsed is json_loads body
+                catch as e:
+                    parsed is empty
+                if type_of(parsed) == "dict"
+                    if has_key parsed "retry_after"
+                        delayS is float(parsed.retry_after)
+        if has_key resp "headers"
+            var h dynamic = resp.headers
+            if type_of(h) == "dict"
+                if has_key h "retry-after"
+                    var ra float = float(h["retry-after"])
+                    if ra > delayS
+                        delayS is ra
+    if delayS < 0.0
+        delayS is 0.0
+    if delayS > 30.0
+        delayS is 30.0
+    give delayS
+
+#! Parse a provider error body into a structured error (type/status/code/message/param).
+fun _ErrorFromResponse status resp
+    var body string = ""
+    if has_key resp "body"
+        body is resp.body
+    var msg string = ""
+    var code string = ""
+    var param string = ""
+    if len(body) > 0
+        var parsed = empty
+        do:
+            parsed is json_loads body
+        catch as e:
+            parsed is empty
+        if type_of(parsed) == "dict"
+            if has_key parsed "error"
+                var er dynamic = parsed.error
+                if type_of(er) == "dict"
+                    if has_key er "message"
+                        msg is string(er.message)
+                    if has_key er "code"
+                        code is string(er.code)
+                    if has_key er "param"
+                        param is string(er.param)
+                    if has_key er "type"
+                        if len(code) == 0
+                            code is string(er.type)
+                otherwise
+                    msg is string(er)
+            if len(msg) == 0
+                if has_key parsed "message"
+                    msg is string(parsed.message)
+            if len(msg) == 0
+                if has_key parsed "detail"
+                    msg is string(parsed.detail)
+    if len(msg) == 0
+        if status == 0
+            msg is "connection failed"
+        otherwise
+            msg is _ErrorType status + " (HTTP " + string(status) + ")"
+    var et string = _ErrorType status
+    _SetError et status code msg param _lastRequestId body
+
+#! --- internal: the one true request path (retry + structured errors) ---
+#! Returns {"ok": bool, "status": int, "data": <parsed body|empty>, "error": <errObj|{}>}.
+#! Never throws. Retries connection errors, 408/409/429 and 5xx with backoff,
+#! honouring Retry-After. Captures the x-request-id header for support tickets.
+#! Clear the recorded error state. `LastError()`/`WasError()` are documented as
+#! "{} = success", so the state has to be reset when a call succeeds — including
+#! when a retry succeeds after an earlier attempt failed, which previously left
+#! WasError() true for a call that had actually returned fine.
+fun _ClearError
+    _errObj is {}
+    _errText is ""
+    _lastRequestId is ""
+
+fun _ApiRequest method path payload
+    _errObj is {}
+    _errText is ""
+    _lastStatus is 0
+    _lastRequestId is ""
+    var url string = _base + path
+    var auth string = AuthHeader()
+    var attempt int = 0
+    var resp dynamic = {"ok": false, "status": 0, "body": ""}
+    repeat while attempt <= _maxRetries
+        attempt is attempt + 1
+        #! A fresh attempt starts from a clean error state, so a retry that
+        #! succeeds cannot leave the previous attempt's error visible.
+        _ClearError()
+        do:
+            resp is http_request method url payload auth {}
+        catch as e:
+            _lastStatus is 0
+            var et0 string = "connection_error"
+            _SetError et0 0 "" string(e) "" "" ""
+            resp is {"ok": false, "status": 0, "body": ""}
+        var status int = 0
+        if type_of(resp) == "dict"
+            if has_key resp "status"
+                status is resp.status
+        _lastStatus is status
+        _CaptureRequestId resp
+
+        #! success path
+        if status >= 200 and status < 300
+            var body string = ""
+            if has_key resp "body"
+                body is resp.body
+            if len(body) == 0
+                _ClearError()
+                give {"ok": true, "status": status, "data": empty, "error": {}}
+            var parsed = empty
+            var parseOk int = 1
+            do:
+                parsed is json_loads body
+            catch as e:
+                parseOk is 0
+            if not parseOk
+                var ei string = "invalid_response_error"
+                _SetError ei status "" ("invalid JSON: " + string(e)) "" _lastRequestId body
+                give {"ok": false, "status": status, "data": empty, "error": _errObj}
+            _ClearError()
+            give {"ok": true, "status": status, "data": parsed, "error": {}}
+
+        #! failure — record structured error, maybe retry
+        _ErrorFromResponse status resp
+        var canRetry boolean = _Retryable status
+        if canRetry and attempt <= _maxRetries
+            var delayS float = _RetryAfterObj resp
+            if delayS <= 0.0
+                delayS is _Backoff attempt
+            time_sleep delayS
+            next
+        give {"ok": false, "status": status, "data": empty, "error": _errObj}
+    give {"ok": false, "status": _lastStatus, "data": empty, "error": _errObj}
+
+#! --- backwards-compatible internal wrappers ---
+fun _PostJson path payload
+    give _ApiRequest "POST" path payload
+
+fun _GetJson path
+    give _ApiRequest "GET" path empty
+
+#! --- openai client.models.list() ---
+fun Models
+    var r = _ApiRequest "GET" "/models" empty
+    if r["ok"] == true
+        var data = r["data"]
+        if type_of(data) == "dict"
+            if has_key data "data"
+                var out dynamic = []
+                repeat m in data["data"]
+                    if has_key m "id"
+                        out is append out m["id"]
+                give out
+    give []
+
+#! --- openai client.chat.completions.create(model, messages) ---
+#! messages = list of {"role":"user|assistant|system","content":"..."}
+#! Returns the assistant reply text, or empty on error (see GetLastError / LastError).
+fun Chat model messages
+    var ch = _ChatCompletion model messages {}
+    if ch == empty
+        give empty
+    if has_key ch "message"
+        var m = ch.message
+        if has_key m "content"
+            var c dynamic = m.content
+            if c == empty
+                give ""
+            give string(c)
+    give empty
+
+#! Full chat entry (mirrors client.chat.completions.create → the first choice dict).
+#! Returns the choice object {index, message, finish_reason, logprobs} or empty.
+fun ChatFull model messages
+    give _ChatCompletion model messages {}
+
+fun _ChatCompletion model messages options
+    var payload dynamic = {"model": model, "messages": messages}
+    repeat k in keys options
+        payload[k] is options[k]
+    if has_key options "json"
+        if options["json"] == true
+            payload["response_format"] is {"type": "json_object"}
+    var r = _ApiRequest "POST" "/chat/completions" payload
+    if r["ok"] == true
+        var data = r["data"]
+        if type_of(data) == "dict"
+            if has_key data "usage"
+                _lastUsage is data.usage
+            if has_key data "choices"
+                var choices = data["choices"]
+                if len(choices) > 0
+                    var first = choices[0]
+                    if has_key first "finish_reason"
+                        _lastFinish is string(first.finish_reason)
+                    give first
+    give empty
+
+#! --- single-prompt chat completion ---
+fun Ask model prompt
+    var msgs = [{"role": "user", "content": prompt}]
+    give Chat(model, msgs)
+
+#! --- openai client.embeddings.create(model, input) ---
+#! Single text → embedding vector (list of floats), or [] on error.
+fun Embed model text
+    var payload = {"model": model, "input": text}
+    var r = _ApiRequest "POST" "/embeddings" payload
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "data"
+            var rows = data["data"]
+            if len(rows) > 0
+                var first = rows[0]
+                if has_key first "embedding"
+                    give first["embedding"]
+    give []
+
+#! --- openai client.embeddings.create(model, input=[...]) ---
+#! Batch: list of texts → list of embedding vectors, or [] on error.
+fun EmbedMany model texts
+    var payload = {"model": model, "input": texts}
+    var r = _PostJson("/embeddings", payload)
+    if r["ok"] == true
+        var data = r["data"]
+        if has_key data "data"
+            var out dynamic = []
+            repeat item in data["data"]
+                if has_key item "embedding"
+                    out is out + [item["embedding"]]
+            give out
+    give []
+
+#! --- cosine similarity between two embedding vectors ---
+fun Similarity a b
+    if len(a) == 0 or len(b) == 0
+        give 0
+    var dot = 0
+    var i = 0
+    repeat while i < len(a)
+        dot is dot + a[i] * b[i]
+        i is i + 1
+    var magA = 0
+    var magB = 0
+    var j = 0
+    repeat while j < len(a)
+        magA is magA + a[j] * a[j]
+        magB is magB + b[j] * b[j]
+        j is j + 1
+    var denom = math_sqrt(magA) * math_sqrt(magB)
+    if denom == 0
+        give 0
+    give dot / denom
+
+#! --- semantic search: rank docs (list of strings) by similarity to query ---
+#! Returns list of [similarity, doc] sorted best-first, or [] on error.
+fun Search query docs
+    var q = Embed(_defaultEmbedModel, query)
+    if len(q) == 0
+        give []
+    var scored dynamic = []
+    repeat d in docs
+        var v = Embed(_defaultEmbedModel, d)
+        if len(v) > 0
+            var sim = Similarity(q, v)
+            scored is scored + [[sim, d]]
+    give reverse(sort(scored))
+
+#! --- Chat with a system prompt and single user prompt ---
+fun ChatWithSystem model systemPrompt userPrompt
+    var msgs = []
+    if len(systemPrompt) > 0
+        msgs is append msgs {"role": "system", "content": systemPrompt}
+    msgs is append msgs {"role": "user", "content": userPrompt}
+    give Chat(model, msgs)
+
+#! --- Chat with options: temperature, max_tokens, json mode, etc. ---
+#! options may include: temperature, max_tokens, top_p, seed, json (bool),
+#! presence_penalty, frequency_penalty, stop, tools, tool_choice, ...
+fun ChatWithOptions model messages options
+    var ch = _ChatCompletion model messages options
+    if ch == empty
+        give empty
+    if has_key ch "message"
+        var m = ch.message
+        if has_key m "content"
+            var c dynamic = m.content
+            if c == empty
+                give ""
+            give string(c)
+    give empty
+
+#! --- Ask for structured JSON output ---
+#! Prompts the model to return a JSON object and parses it into an Indent dictionary.
+fun AskJson model prompt
+    var msgs = [{"role": "system", "content": "You are a helpful assistant that always responds with valid JSON."}, {"role": "user", "content": prompt}]
+    var reply = ChatWithOptions(model, msgs, {"json": true})
+    if len(reply) == 0
+        give empty
+    var parsed = empty
+    var parseOk int = 1
+    do:
+        parsed is json_loads reply
+    catch as e:
+        parseOk is 0
+        _errText is "JSON parse failed: " + string(e)
+        var et string = "invalid_response_error"
+        _SetError et 0 "" _errText "" _lastRequestId reply
+    if not parseOk
+        give empty
+    give parsed
+
+#! --- Conversation / Agent state management ---
+fun NewConversation systemPrompt = ""
+    var conv = {"messages": []}
+    if len(systemPrompt) > 0
+        conv["messages"] is [{"role": "system", "content": systemPrompt}]
+    give conv
+
+fun Converse conv model userText
+    var msgs = conv["messages"]
+    msgs is append msgs {"role": "user", "content": userText}
+    var reply = Chat(model, msgs)
+    if len(reply) > 0
+        msgs is append msgs {"role": "assistant", "content": reply}
+    var updated = {"messages": msgs}
+    give {"reply": reply, "conv": updated}
+
+#! --- In-Memory Semantic Vector Store ---
+fun NewVectorStore
+    give {"items": []}
+
+fun VectorStoreAdd store id text metadata = {}
+    var vec = Embed(_defaultEmbedModel, text)
+    if len(vec) == 0
+        give store
+    var item = {"id": id, "text": text, "embedding": vec, "metadata": metadata}
+    var items = store["items"]
+    items is append items item
+    give {"items": items}
+
+fun VectorStoreSearch store query topK = 5
+    var q = Embed(_defaultEmbedModel, query)
+    if len(q) == 0
+        give []
+    var items = store["items"]
+    var scored = []
+    repeat it in items
+        var sim = Similarity(q, it["embedding"])
+        var match = {"id": it["id"], "text": it["text"], "similarity": sim, "metadata": it["metadata"]}
+        scored is append scored [sim, match]
+    var sorted_matches = reverse(sort(scored))
+    var results = []
+    var count = 0
+    repeat sm in sorted_matches
+        if count < topK
+            results is append results sm[1]
+            count is count + 1
+    give results
+
+#! ============================================================================
+#! High-level helpers — one-call convenience wrappers (simpler than raw SDK).
+#! These use the DEFAULT chat model (set with SetDefaultModel).
+#! ============================================================================
+
+#! Chat using the default model. Same as Chat(_defaultModel, messages).
+fun ChatDefault messages
+    give Chat(_defaultModel, messages)
+
+#! Ask using the default model. Same as Ask(_defaultModel, prompt).
+fun AskDefault prompt
+    give Ask(_defaultModel, prompt)
+
+#! Summarize text in `sentences` bullet points (default 3).
+fun Summarize text sentences = 3
+    var sys = "You are a concise summarizer. Reply with at most " + string(sentences) + " short bullet points, each on its own line, no preamble."
+    give ChatWithSystem(_defaultModel, sys, text)
+
+#! Translate text into `language` (e.g. "French", "Japanese").
+fun Translate text language
+    var sys = "You are a professional translator. Translate the user's text into " + language + ". Reply with only the translation."
+    give ChatWithSystem(_defaultModel, sys, text)
+
+#! Classify text into one of the given labels; returns the chosen label string.
+fun Classify text labels
+    var joined = join labels ", "
+    var sys = "You are a classifier. Choose exactly one label from this list: " + joined + ". Reply with only the label, nothing else."
+    var reply = ChatWithSystem(_defaultModel, sys, text)
+    if len(reply) == 0
+        give ""
+    var clean = trim reply
+    repeat lab in labels
+        if clean == lab
+            give lab
+    repeat lab in labels
+        if contains clean lab
+            give lab
+    give clean
+
+#! Extract structured fields from text; returns a dict of {field: value}.
+fun Extract text fields
+    var joined = join fields ", "
+    var sys = "Extract these fields from the user's text: " + joined + ". Reply with only a JSON object mapping each field name to its value, using null when absent."
+    var prompt = "Text:\n" + text
+    var full = prompt + "\n\n(" + sys + ")"
+    give AskJson(_defaultModel, full)
+
+#! Retrieval-augmented answer: answer `question` using the vector store's top matches.
+fun RagAnswer store question topK = 3
+    var hits = VectorStoreSearch store question topK
+    if len(hits) == 0
+        give AskDefault question
+    var context string = ""
+    repeat h in hits
+        context is context + "- " + h["text"] + "\n"
+    var sys = "Answer the question using only the provided context. If the answer is not in the context, say you don't know."
+    var user = "Context:\n" + context + "\nQuestion: " + question
+    give ChatWithSystem(_defaultModel, sys, user)
+
+#! =============================================================================
+#! NAMESPACE OBJECT — `AI.<Fn> ...`
+#! =============================================================================
+#! Some code (including older versions of this package and the Angela bot)
+#! calls the API through an `AI` namespace:
+#!
+#!   get AI from ai
+#!   AI.SetBase "https://ai.example/v1"
+#!   AI.SetApiKey key
+#!   AI.SetDefaultModel "xael-turbo"
+#!   var reply string = AI.Chat model messages
+#!
+#! That style keeps working here: `AI` is a plain dict of function references,
+#! and `AI.Chat model messages` resolves back to this module. Everything below
+#! is the same public API documented at the top of this file — the namespace is
+#! just an alternative calling convention, not a second implementation.
+
+#! Human-readable text for the most recent error ("" when there is none).
+#! The dict form remains available as `LastError`.
+fun LastErrorText
+    var e dynamic = LastError
+    if e == empty or e == {}
+        give ""
+    var msg string = ""
+    var kind string = ""
+    if has_key e "message"
+        msg is e.message
+    if has_key e "type"
+        kind is e.type
+    if msg == "" and kind == ""
+        give string(e)
+    if kind == ""
+        give msg
+    if msg == ""
+        give kind
+    give kind + ": " + msg
+
+
+#! ---- namespace object: AI.<Fn> ... (alternative calling convention) ----
+#! `AI` is a dict of function references; `AI.Chat model messages` resolves
+#! back to this module, so older code and the Angela bot keep working.
+#! Built incrementally because multi-line dict literals are not supported.
+var AI dynamic = {}
+AI["SetBase"] is SetBase
+AI["SetApiKey"] is SetApiKey
+AI["SetDefaultModel"] is SetDefaultModel
+AI["SetDefaultEmbedModel"] is SetDefaultEmbedModel
+AI["GetBase"] is GetBase
+AI["SetRetries"] is SetRetries
+AI["SetMaxRetries"] is SetMaxRetries
+AI["SetTimeout"] is SetTimeout
+AI["GetTimeout"] is GetTimeout
+AI["GetLastError"] is LastErrorText
+AI["LastError"] is LastError
+AI["LastErrorText"] is LastErrorText
+AI["GetLastStatus"] is GetLastStatus
+AI["GetRequestId"] is GetRequestId
+AI["LastUsage"] is LastUsage
+AI["LastFinishReason"] is LastFinishReason
+AI["WasError"] is WasError
+AI["ErrorType"] is ErrorType
+AI["ErrorTypeFor"] is ErrorTypeFor
+AI["IsRetryable"] is IsRetryable
+AI["IsAuthError"] is IsAuthError
+AI["IsPermissionError"] is IsPermissionError
+AI["IsBadRequest"] is IsBadRequest
+AI["IsNotFound"] is IsNotFound
+AI["IsRateLimit"] is IsRateLimit
+AI["IsServerError"] is IsServerError
+AI["IsConnectionError"] is IsConnectionError
+AI["IsTimeout"] is IsTimeout
+AI["Models"] is Models
+AI["Chat"] is Chat
+AI["ChatFull"] is ChatFull
+AI["Ask"] is Ask
+AI["Embed"] is Embed
+AI["EmbedMany"] is EmbedMany
+AI["Similarity"] is Similarity
+AI["Search"] is Search
+AI["ChatWithSystem"] is ChatWithSystem
+AI["ChatWithOptions"] is ChatWithOptions
+AI["AskJson"] is AskJson
+AI["ChatDefault"] is ChatDefault
+AI["AskDefault"] is AskDefault
+AI["Summarize"] is Summarize
+AI["Translate"] is Translate
+AI["Classify"] is Classify
+AI["Extract"] is Extract
+AI["NewConversation"] is NewConversation
+AI["Converse"] is Converse
+AI["NewVectorStore"] is NewVectorStore
+AI["VectorStoreAdd"] is VectorStoreAdd
+AI["VectorStoreSearch"] is VectorStoreSearch
+AI["RagAnswer"] is RagAnswer

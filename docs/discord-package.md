@@ -1,4 +1,4 @@
-# discord.ind 7.0 — The Discord Bot Library for Indent
+# discord.idnt 7.0 — The Discord Bot Library for Indent
 
 A standalone Discord library (like discord.py) providing REST API, WebSocket
 Gateway, command routing, event system, puzzle/cog loader, a discord.py-style
@@ -7,8 +7,8 @@ log, slash commands, permissions, modals, paginators, voice, **and a
 production-grade minimal-boilerplate Bot API (since 6.0)**. Import it and write
 your bot.
 
-> **Note**: Aether `.ath` files are the same language as Indent `.ind` — you can
-> just rename them.  `discord` is a single package available as `discord.ind`.
+> **Note**: Aether `.ath` files are the same language as Indent `.idnt` — you can
+> just rename them.  `discord` is a single package available as `discord.idnt`.
 >
 > **Important**: the native Indent runtime passes function arguments *by value*,
 > so every function that modifies the bot **returns the modified bot** and you
@@ -37,7 +37,7 @@ bot.slash("ban", "Ban a member", "onBan")
 bot.run()
 ```
 
-| discord.py | discord.ind |
+| discord.py | discord.idnt |
 |---|---|
 | `@bot.command()` | `bot.command("name" [, desc [, handler [, options]]])` |
 | `@bot.event` | `bot.on("message", "handler")` — also `bot.event` |
@@ -154,7 +154,7 @@ Key rules:
   useful for tests or multiple bots; the helpers detect which form you used.
 - `GetBot()` / `SetBot b` read/replace the ambient bot.
 
-| Task | discord.py | discord.ind 6.9 (ambient) |
+| Task | discord.py | discord.idnt 6.9 (ambient) |
 |---|---|---|
 | create bot | `bot = Bot(...)` | `BotFromEnv` / `Bot token prefix` |
 | command | `@bot.command()` | `Command "name" [desc] [handler]` |
@@ -221,7 +221,7 @@ fun riddle ctx args
 
 ### discord.py parity at a glance
 
-| discord.py | discord.ind |
+| discord.py | discord.idnt |
 |---|---|
 | `@bot.command()` | `Command bot "name" …` / `Commands` |
 | `@bot.slash_command()` | `Slash bot …` / `AddSlash` |
@@ -366,7 +366,7 @@ QuickStart
 `puzzles/`, and connects.  Add commands by dropping files into `puzzles/`:
 
 ```indent
-#! puzzles/fun.ind
+#! puzzles/fun.idnt
 command "ping" "Check latency" "🏓 Pong!"
 command "roll" "Roll a die" "🎲 You rolled a 6!"
 ```
@@ -799,13 +799,13 @@ is the raw JSON string — use `json_loads` to parse.
 
 ## 7. Puzzle System (Cog-like command groups)
 
-Puzzles are self-contained `.ind` files in a `puzzles/` directory.
+Puzzles are self-contained `.idnt` files in a `puzzles/` directory.
 Each file can define multiple commands — like Discord.py cogs.
 
 ### Puzzle file format
 
 ```indent
-#! puzzles/fun.ind
+#! puzzles/fun.idnt
 get sendMsg from discord
 get add from discord
 
@@ -825,7 +825,7 @@ get load from discord
 load bot "puzzles"
 ```
 
-Puzzles load all `.ind` files from the directory.  Each puzzle
+Puzzles load all `.idnt` files from the directory.  Each puzzle
 registers its own commands using `add`/`addCmd` and imports what it
 needs from `discord`.
 
@@ -835,12 +835,12 @@ needs from `discord`.
 
 ```indent
 #! ============================================================
-#! MyBot — Complete discord.ind example
+#! MyBot — Complete discord.idnt example
 #! ============================================================
 #!
 #! Prerequisites: a config.glo file with BOT_TOKEN and BOT_PREFIX
 #!
-#! Run:  indent run mybot.ind
+#! Run:  indent run mybot.idnt
 #! ============================================================
 
 #! ---- 1. Import config --------------------------------------

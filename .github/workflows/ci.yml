@@ -41,25 +41,18 @@ jobs:
       - name: Golden outputs (VM and tree-walker)
         run: sh scripts/ci/golden-outputs.sh
 
-      # The `.ind` suite is the actual language regression net, and until now CI
-      # never ran it: `cargo test` covers the interpreter's Rust internals and the
-      # golden fixtures cover eight programs, so 79 behavioural tests were only ever
-      # run by hand.
-      #
-      # It does not gate the build yet, for three environment reasons this step
-      # surfaces rather than hides:
-      #   * the fixture server (`tools/mock_fixture_server.py`) needs `aiohttp`, so the
-      #     AI/network parity tests skip and `tests/ai_mock_parity.ind` calls
-      #     `process_exit 0`, which ends an in-process run before its summary line;
-      #   * `tests/datetime_pkg.ind` wants a tz database the runner image lacks;
-      #   * `tests/module_dispatch_builtins.ind` passes locally and fails there.
-      # Fix those, then delete `continue-on-error`.
+      # The `.idnt` suite is the language regression net: `cargo test` covers the
+      # interpreter's Rust internals and the golden fixtures cover eight programs, so
+      # these tests are where behaviour actually lives. It gates now: the fixture
+      # server's `aiohttp` dependency is installed above, and `run_suite.sh` starts it
+      # and requires the summary line, so a test that exits early cannot pass the job.
       - name: Install the fixture server's dependency
         run: python3 -m pip install --quiet aiohttp
 
-      - name: Indent test suite (both engines, advisory until CI-clean)
-        continue-on-error: true
-        run: bash benchmarks/run_suite.sh
+      - name: Indent test suite (both engines)
+        run: |
+          bash benchmarks/run_suite.sh
+          INDENT_VM=0 bash benchmarks/run_suite.sh
 
       - name: Execution budgets (--max-steps / --max-depth / --timeout-ms)
         run: bash scripts/ci/verify-limits.sh

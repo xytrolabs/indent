@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Language A/B: the Python half of benchmarks/ab_lang_bench.ind.
+"""Language A/B: the Python half of benchmarks/ab_lang_bench.idnt.
 
 Mirror of the Indent benchmark — keep the two in sync. Each line printed is
 "<name> <microseconds per op>"; ab_lang.sh runs both and prints the ratio.

@@ -15,7 +15,7 @@ ab_pair() { # ab_pair label file reps — INTERLEAVED old/new, best of N each.
     # so the second binary silently reads the cache the first one wrote. That
     # is how the startup section used to report 59% when the truth was ~2%.
     # $file is deliberately unquoted so a caller can pass flags, e.g.
-    # "--no-cache benchmarks/bench_startup_imports.ind".
+    # "--no-cache benchmarks/bench_startup_imports.idnt".
     label="$1"; file="$2"; reps="$3"
     ob=""; nb=""; i=1
     while [ "$i" -le "$reps" ]; do
@@ -32,13 +32,13 @@ ab_pair() { # ab_pair label file reps — INTERLEAVED old/new, best of N each.
 
 printf '%s\n' "old = $("$OLD" --version 2>/dev/null)   new = $("$NEW" --version 2>/dev/null)" >> "$OUT"
 echo "" >> "$OUT"
-for f in benchmarks/bench_loops.ind benchmarks/bench_deep_calls.ind benchmarks/bench_calls.ind benchmarks/bench_hot_paths.ind; do
+for f in benchmarks/bench_loops.idnt benchmarks/bench_deep_calls.idnt benchmarks/bench_calls.idnt benchmarks/bench_hot_paths.idnt; do
     echo "=== $f ===" >> "$OUT"
     ab_pair "$f" "$f" 3
 done
 
 echo "" >> "$OUT"
 echo "=== startup, interleaved, --no-cache (identical cache state by construction) ===" >> "$OUT"
-ab_pair "5 std imports" "--no-cache benchmarks/bench_startup_imports.ind" 30
+ab_pair "5 std imports" "--no-cache benchmarks/bench_startup_imports.idnt" 30
 
 cat "$OUT"

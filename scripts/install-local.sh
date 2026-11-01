@@ -161,10 +161,10 @@ fi
 
 echo ""
 echo "  Try it:   $(bold 'indent --version')"
-echo "  Format:   $(bold 'indent fmt myfile.ind')"
+echo "  Format:   $(bold 'indent fmt myfile.idnt')"
 echo "  REPL:     $(bold 'indent repl')"
 
-# ---- File manager integration (Indent file icon + MIME for .ind / .glo) ----
+# ---- File manager integration (Indent file icon + MIME for .idnt / .glo) ----
 if [[ "$(uname -s)" == "Linux" && -f "${SCRIPT_DIR}/install-file-manager.sh" && -d "${PROJECT_DIR}/share" ]]; then
   bash "${SCRIPT_DIR}/install-file-manager.sh"
 elif [[ "$(uname -s)" == "Linux" ]]; then

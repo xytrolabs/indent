@@ -17,27 +17,41 @@
 
 ## Install
 
+The installer fetches the latest **stable** release for your platform, puts
+`indent` (and `air`, the package manager) in a user-space location, and adds them
+to your `PATH`. No admin rights are needed, and nothing else has to be installed
+first.
+
 ### Linux / macOS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.sh | bash
+curl -fsSL https://indent.xytro.site/install.sh | bash
 ```
 
-### Windows (PowerShell)
+### Windows (PowerShell 5.1+)
 ```powershell
-irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex
+irm https://indent.xytro.site/install.ps1 | iex
 ```
 
 ### Verify
 ```bash
 indent --version
-# → indent 1.3.0
+# → indent 2.4.0 (stable)
+```
+
+The number tracks the latest release; the bracketed part is the **channel** you are
+following. To try what is coming next, install or switch to the experimental
+channel — and come back whenever you like:
+
+```bash
+curl -fsSL https://indent.xytro.site/install.sh | bash -s -- --channel exp
+indent --switch-to-stable
 ```
 
 ---
 
 ## 1. Hello World
 
-Create `hello.ind`:
+Create `hello.idnt`:
 
 ```indent
 #! This is a comment. Comments start with #! (hash-bang).
@@ -47,7 +61,7 @@ say "Hello, %name%!"
 
 Run it:
 ```bash
-indent run hello.ind
+indent run hello.idnt
 # → Hello, Indent!
 ```
 
@@ -55,7 +69,7 @@ indent run hello.ind
 
 ## 2. Variables
 
-Indent has six types. You can declare them explicitly — or let Indent infer the type:
+Indent has eight built-in types. You can declare them explicitly — or let Indent infer the type:
 
 ```indent
 #! Explicit types (always works)

@@ -74,7 +74,7 @@ def main():
 
     env = dict(os.environ, NET_FIXTURE_URL=base, NET_AB_N=str(n))
     out = subprocess.run(
-        [INDENT, "run", os.path.join(ROOT, "benchmarks/net_ab_indent.ind")],
+        [INDENT, "run", os.path.join(ROOT, "benchmarks/net_ab_indent.idnt")],
         capture_output=True, text=True, env=env, timeout=600,
     )
     if out.returncode != 0:
@@ -118,7 +118,7 @@ def main():
         f"urllib.request.urlopen('{base}/get').read();"
         "print((time.perf_counter()-t)*1e3)"
     )
-    ind_snippet = os.path.join("/tmp", "indent_oneshot.ind")
+    ind_snippet = os.path.join("/tmp", "indent_oneshot.idnt")
     with open(ind_snippet, "w") as f:
         f.write(
             'var t0 float = time_perf_counter\n'

@@ -376,7 +376,7 @@ repeat pair in ranked
     say string(pair[0]) + "  " + string(pair[1])   #! similarity + doc
 ```
 
-Under the hood it uses Indent's native `http_post_json` / `http_get` builtins (no Python needed) — see `examples/ai_openai_api.ind` for both the package API and the raw low-level way to call any REST API. Local target: [Ollama](https://ollama.com) at `http://localhost:11434/v1`.
+Under the hood it uses Indent's native `http_post_json` / `http_get` builtins (no Python needed) — see `examples/ai_openai_api.idnt` for both the package API and the raw low-level way to call any REST API. Local target: [Ollama](https://ollama.com) at `http://localhost:11434/v1`.
 
 ---
 
@@ -445,7 +445,7 @@ repeat while running
 Quit()
 ```
 
-Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + gtk3 + webkit2gtk). See `examples/snake_game.ind` and `examples/breakout_game.ind` for complete games.
+Requires the `indent-ingame` native helper (built by `install.sh`; needs gcc + gtk3 + webkit2gtk). See `examples/snake_game.idnt` and `examples/breakout_game.idnt` for complete games.
 
 ## Web & More
 

@@ -5,30 +5,30 @@ build — a debug build is 10–50× slower and will look alarming:
 
 ```sh
 cargo build --release --manifest-path indent-native/Cargo.toml
-./indent-native/target/release/indent benchmarks/bench_hot_paths.ind
-./indent-native/target/release/indent benchmarks/bench_append_scaling.ind
-./indent-native/target/release/indent benchmarks/bench_list_building.ind
+./indent-native/target/release/indent benchmarks/bench_hot_paths.idnt
+./indent-native/target/release/indent benchmarks/bench_append_scaling.idnt
+./indent-native/target/release/indent benchmarks/bench_list_building.idnt
 ```
 
 | Benchmark | What it measures |
 |---|---|
-| `bench_hot_paths.ind` | Call overhead, string concat, list append, dict writes, JSON round-trips, dynamic dispatch |
-| `bench_calls.ind` | Per-operation cost in ns of the individual constructs (call, assign, compare, concat) |
-| `bench_deep_calls.ind` | Whether per-call cost scales with the SIZE of the function body |
-| `bench_loops.ind` | Iterating: ranges, large int lists, string lists, nested loops |
-| `bench_container_reads.ind` | The cost of READING a container (`len`, `has_key`, passing it to a function) |
-| `bench_append_scaling.ind` | Whether `l is append l x` grows linearly or quadratically |
-| `bench_list_building.ind` | Fastest way to build a large list (append vs comprehension vs whole-list concat) |
-| `bench_index_writes.ind` | Whether `d[k] is v` / `l[i] is v` grow linearly or quadratically |
-| `bench_index_reads.ind` | Whether `xs[i]` / `d[k]` / `xs[a:b]` on a variable read in O(1) or clone the container (was O(n²)) |
-| `bench_startup_empty.ind` / `bench_startup_imports.ind` | Cold process startup, with and without std imports |
+| `bench_hot_paths.idnt` | Call overhead, string concat, list append, dict writes, JSON round-trips, dynamic dispatch |
+| `bench_calls.idnt` | Per-operation cost in ns of the individual constructs (call, assign, compare, concat) |
+| `bench_deep_calls.idnt` | Whether per-call cost scales with the SIZE of the function body |
+| `bench_loops.idnt` | Iterating: ranges, large int lists, string lists, nested loops |
+| `bench_container_reads.idnt` | The cost of READING a container (`len`, `has_key`, passing it to a function) |
+| `bench_append_scaling.idnt` | Whether `l is append l x` grows linearly or quadratically |
+| `bench_list_building.idnt` | Fastest way to build a large list (append vs comprehension vs whole-list concat) |
+| `bench_index_writes.idnt` | Whether `d[k] is v` / `l[i] is v` grow linearly or quadratically |
+| `bench_index_reads.idnt` | Whether `xs[i]` / `d[k]` / `xs[a:b]` on a variable read in O(1) or clone the container (was O(n²)) |
+| `bench_startup_empty.idnt` / `bench_startup_imports.idnt` | Cold process startup, with and without std imports |
 
 Helper scripts:
 
 | Script | Purpose |
 |---|---|
 | `sh benchmarks/verify.sh` | Performance **and** both test suites, in one go |
-| `sh benchmarks/best_of.sh <bench.ind> [n]` | Best of N runs — **use this**, single runs vary ±15% |
+| `sh benchmarks/best_of.sh <bench.idnt> [n]` | Best of N runs — **use this**, single runs vary ±15% |
 | `sh benchmarks/startup_ab.sh [file] [n]` | Interleaved startup A/B vs the installed release |
 | `sh benchmarks/ab_current.sh` | A/B the working build vs the installed release |
 | `sh benchmarks/ab_compare.sh` | A/B against an older binary (`indent-2.2.2.bak`) |
@@ -38,7 +38,7 @@ Helper scripts:
 | `sh benchmarks/cache_write_check.sh` | Prove a run *reuses* the cache instead of rewriting it |
 | `sh benchmarks/measure.sh [binary] [outfile]` | Startup + hot-path timings |
 | `sh benchmarks/unit_tests.sh` | Rust unit tests, compact output |
-| `sh benchmarks/run_suite.sh` | Run the `.ind` test suite (avoids shell autocorrect of `test`) |
+| `sh benchmarks/run_suite.sh` | Run the `.idnt` test suite (avoids shell autocorrect of `test`) |
 | `sh benchmarks/build.sh` | Release build, printing only compile errors |
 
 ### Measurement method
@@ -57,7 +57,7 @@ Helper scripts:
 
 ## Reference results
 
-### `bench_hot_paths.ind` — the same file, both binaries (best of 3)
+### `bench_hot_paths.idnt` — the same file, both binaries (best of 3)
 
 The cleanest comparison available: one benchmark file, run against the released
 2.2.2 binary and the current build.
@@ -132,7 +132,7 @@ biggest hidden cost in real programs.
 | Startup, hello-world (per run) | 1.0 ms | **0.8 ms** |
 | Startup, 5 std imports (per run) | 7.0 ms | **5.8 ms** → **3.3 ms** with `__incache__` |
 | Startup, `discord` import (per run) | 4.88 ms | **2.47 ms** with `__incache__` |
-| `.ind` test suite, 52 files | 5.55 s | **3.96 s** (cold), faster warm |
+| `.idnt` test suite, 52 files | 5.55 s | **3.96 s** (cold), faster warm |
 | Interpreter hot-path suite (per run) | 377 ms | **120 ms** |
 | 20 000 calls into a 302-statement body | 407 ms | **13 ms** |
 | 50 000 appends | 75.6 s | **0.01 s** |
@@ -142,7 +142,7 @@ Careful: `l is l + [x]` in a loop is **quadratic** (20 000 items ≈ 6.5 s). Bui
 lists with `append` in a loop, or with a comprehension / `map`.
 
 Note: examples that talk to a service that is not running
-(`examples/ai_semantic_search.ind` wants a local Ollama) are dominated by
+(`examples/ai_semantic_search.idnt` wants a local Ollama) are dominated by
 network timeouts, so `ab_compare.sh` reports them as noise.
 
 A full Angela-bot local startup (discord + ai + all puzzle modules, no network)

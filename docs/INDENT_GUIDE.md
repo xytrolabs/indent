@@ -55,7 +55,7 @@ and are built automatically when you install.
 ### Linux (any distro)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.sh | bash
+curl -fsSL https://indent.xytro.site/install.sh | bash
 ```
 
 This installs the `indent` binary (and `air`, the package manager) to
@@ -67,10 +67,10 @@ This installs the `indent` binary (and `air`, the package manager) to
 brew install xytrolabs/indent/indent
 ```
 
-### Windows (PowerShell)
+### Windows (PowerShell 5.1+)
 
 ```powershell
-irm https://raw.githubusercontent.com/xytrolabs/indent/main/scripts/install.ps1 | iex
+irm https://indent.xytro.site/install.ps1 | iex
 ```
 
 The Windows installer downloads a prebuilt `indent.exe` from the GitHub
@@ -97,7 +97,7 @@ indent repl          # opens an interactive prompt; type quit to leave
 
 ## 2. Hello, World & the mental model
 
-Create `hello.ind`:
+Create `hello.idnt`:
 
 ```indent
 say "Hello, World!"
@@ -106,7 +106,7 @@ say "Hello, World!"
 Run it:
 
 ```bash
-indent run hello.ind        # "indent hello.ind" also works
+indent run hello.idnt        # "indent hello.idnt" also works
 ```
 
 Prints:
@@ -878,7 +878,7 @@ get Write from fs
 Modules resolve **in order**:
 
 1. The importing script's directory and its **parent directories** (walking
-   up), for `name.ind`, `name.glo`, or `name/__init__.ind`.
+   up), for `name.idnt`, `name.glo`, or `name/__init__.idnt`.
 2. Every directory in the `INDENT_PATH` environment variable
    (colon-separated on POSIX, semicolon on Windows).
 3. `~/.local/share/indent/site-packages/` (where the std library installs).
@@ -888,23 +888,23 @@ If a file lives inside a project with a `.nest/` environment (see
 are **prepended** to the search path automatically.
 
 > ⚠️ On Windows the module search does **not** use `.ath` files — rename
-> `foo.ath` to `foo.ind` (they are the same language; only the extension
+> `foo.ath` to `foo.idnt` (they are the same language; only the extension
 > changed). See [`windows.md`](windows.md).
 
 ### Running another Indent file
 
-`launch "file.ind"` runs the file **in the current runtime**, so its functions
+`launch "file.idnt"` runs the file **in the current runtime**, so its functions
 and module-level variables become available:
 
 ```indent
-#! helper.ind defines: fun double x   and   var helperMsg = "..."
-launch "helper.ind"
+#! helper.idnt defines: fun double x   and   var helperMsg = "..."
+launch "helper.idnt"
 var d = double 21          #! → 42
 say helperMsg              #! the other file's module var is in scope
 ```
 
-`run_file "file.ind"` is a deprecated alias. To run a file as a **separate
-process**, use `os_run "indent file.ind"`.
+`run_file "file.idnt"` is a deprecated alias. To run a file as a **separate
+process**, use `os_run "indent file.idnt"`.
 
 ---
 
@@ -987,7 +987,7 @@ os_is_dir("src")          #! → TRUE
 os_mkdir("build")         #! create a directory
 os_remove("out.txt")      #! delete a file
 os_list_dir(".")          #! list entries
-glob("src/*.ind")         #! files matching a glob
+glob("src/*.idnt")         #! files matching a glob
 walk("src")               #! recursive file listing
 
 os_copy("a.txt", "b.txt")
@@ -1278,7 +1278,7 @@ gui_show_html("<h1>Hello</h1>", "My App", 800, 600)
 
 ### 2D games with InGame
 
-[`std/ingame.ind`](std/ingame.ind) is a native 2D game framework that **mirrors
+[`std/ingame.idnt`](std/ingame.idnt) is a native 2D game framework that **mirrors
 PyGame's API** — all game logic lives in Indent; a native window draws frames
 and reports input. Install with `air install ingame`, or import the std copy:
 
@@ -1316,9 +1316,9 @@ re-exports `ingame`.
 Playable examples:
 
 ```bash
-indent examples/snake_game.ind            # play Snake (arrow keys)
-INDENT_SNAKE_BOT=1 indent examples/snake_game.ind   # bot autoplay
-indent examples/breakout_game.ind         # play Breakout
+indent examples/snake_game.idnt            # play Snake (arrow keys)
+INDENT_SNAKE_BOT=1 indent examples/snake_game.idnt   # bot autoplay
+indent examples/breakout_game.idnt         # play Breakout
 ```
 
 Full API: [`ingame-package.md`](ingame-package.md) and
@@ -1402,18 +1402,18 @@ whole project with `air delivery`.
 ### Running programs
 
 ```bash
-indent run file.ind          # run a program  ("indent file.ind" also works)
+indent run file.idnt          # run a program  ("indent file.idnt" also works)
 indent repl                  # interactive REPL
 ```
 
 ### Development commands
 
 ```bash
-indent fmt file.ind          # auto-format code
-indent check file.ind        # parse/syntax check
-indent lint file.ind         # lint for issues
+indent fmt file.idnt          # auto-format code
+indent check file.idnt        # parse/syntax check
+indent lint file.idnt         # lint for issues
 indent test tests/           # run tests in a folder (expects a directory)
-indent --debug file.ind      # debug with breakpoints
+indent --debug file.idnt      # debug with breakpoints
 indent --update              # update to the latest release on your channel
 indent --version             # the version *and* the channel
 ```
@@ -1456,10 +1456,10 @@ Re-parses and re-runs the script **whenever it changes on disk** (polls every
 iterating on a server or window.
 
 ```bash
-indent --watch server.ind
+indent --watch server.idnt
 ```
 
-Edit `server.ind`, save, and it restarts automatically.
+Edit `server.idnt`, save, and it restarts automatically.
 
 ### Environments — `indent nest`
 
@@ -1510,13 +1510,13 @@ indent --version             # show the installed version
 
 ## 24. Running untrusted code with `--safe`
 
-`indent --safe file.ind` runs a script inside a **default-deny sandbox**: only
+`indent --safe file.idnt` runs a script inside a **default-deny sandbox**: only
 *pure, computational* builtins are allowed, and anything that touches the
 filesystem, the OS, the network, Python, subprocesses, sockets, or the GUI is
 **blocked with an error**.
 
 ```bash
-indent --safe untrusted.ind
+indent --safe untrusted.idnt
 ```
 
 Safe mode is *opt-in*: run a normal script **without** `--safe` and every
@@ -1555,7 +1555,7 @@ file_write_text("pwned.txt", "you got hacked")
 ```
 
 ```bash
-$ indent --safe evil.ind
+$ indent --safe evil.idnt
 error: 'file_write_text' is not allowed in safe mode
 ```
 
@@ -1586,8 +1586,8 @@ error: 'file_write_text' is not allowed in safe mode
 
 ### Style notes
 
-- Name files with the `.ind` extension (`.ath` is the legacy name).
-- Put reusable functions in their own `.ind` file and `launch` or import them
+- Name files with the `.idnt` extension (`.ath` is the legacy name).
+- Put reusable functions in their own `.idnt` file and `launch` or import them
   rather than copy-pasting.
 - Prefer small, single-purpose functions with `give` results.
 - For side-effecting statements, keep them as the final statement of a block
@@ -1618,7 +1618,7 @@ append(l, 5)
 l = append(l, 5)
 ```
 
-### `indent check` says "No .ind files found under <file>"
+### `indent check` says "No .idnt files found under <file>"
 
 `indent check` expects a **directory**. To parse-check a single file, run it
 (top-level statements run; package files that only define functions are safe to
@@ -1628,7 +1628,7 @@ run).
 
 Check the search order in [§13](#13-imports--the-module-system): script
 directory and parents → `INDENT_PATH` → `~/.local/share/indent/site-packages/`.
-Make sure the file is named `foo.ind` (not `.ath`) and is in one of those
+Make sure the file is named `foo.idnt` (not `.ath`) and is in one of those
 places. On Windows, the runtime does not look for `.ath`.
 
 ### Windows install fails or 404s

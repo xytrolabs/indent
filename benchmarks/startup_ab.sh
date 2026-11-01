@@ -4,7 +4,7 @@
 OLD=/home/raf/.local/share/indent/bin/indent
 NEW=/run/media/raf/Z/Aether.ath/indent-native/target/release/indent
 cd /run/media/raf/Z/Aether.ath || exit 1
-FILE="${1:-benchmarks/bench_startup_imports.ind}"
+FILE="${1:-benchmarks/bench_startup_imports.idnt}"
 RUNS="${2:-5}"
 
 best_old=999999

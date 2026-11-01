@@ -1,5 +1,5 @@
 #!/bin/bash
-# Automated GUI game test for examples/snake_game.ind
+# Automated GUI game test for examples/snake_game.idnt
 # Verifies: window opens -> renders -> closes -> indent completes cleanly.
 # Usage: bash tests/gui_snake_test.sh
 set -u
@@ -9,7 +9,7 @@ LOG="/tmp/snake_gui_test.log"
 rm -f "$LOG"
 
 echo "=== GUI Snake test: opens and renders ==="
-nohup "$HOME/.local/bin/indent" examples/snake_game.ind > "$LOG" 2>&1 &
+nohup "$HOME/.local/bin/indent" examples/snake_game.idnt > "$LOG" 2>&1 &
 INDENT_PID=$!
 
 GUIPID=""

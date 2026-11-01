@@ -39,7 +39,7 @@ build (`benchmarks/`, best-of-N — run `sh benchmarks/verify.sh` yourself).
 | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 | Startup — hello-world program | 1.0 ms | **0.8 ms** | 1.2× |
 | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-| `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
+| `.idnt` test suite (51 files) | 5.55 s | **3.96 s** cold, ~3.2 s warm | 1.4× |
 | `size_of::<Value>()` | 128 B | **56 B** | 2.3× less memory traffic |
 
 `call_func_lenient` has no 2.2.2 figure because it did not exist yet.
@@ -158,7 +158,7 @@ README_SECTION = """> ## 🚀 Indent 2.3.0 — the performance release
 > | 1-argument / 2-argument call | 402 / 700 ns | **213 / 338 ns** | 1.9× / 2.1× |
 > | `i is i + 1` in a loop | 202 ns | **156 ns** | 1.3× |
 > | Startup — 5 std imports | 6.19 ms | **3.35 ms** | 1.8× |
-> | `.ind` test suite (51 files) | 5.55 s | **3.96 s** cold | 1.4× |
+> | `.idnt` test suite (51 files) | 5.55 s | **3.96 s** cold | 1.4× |
 >
 > ### What made it faster
 > - 🧠 **Expressions are parsed once, not on every evaluation.** Every statement
@@ -223,7 +223,7 @@ def main():
         "> ### 🎉 What's New in 2.2.2",
         README_SECTION + "\n",
     )
-    new_r = new_r.replace("# Indent Language (.ind) v2.6.0", "# Indent Language (.ind) v2.3.0", 1)
+    new_r = new_r.replace("# Indent Language (.idnt) v2.6.0", "# Indent Language (.idnt) v2.3.0", 1)
     print("readme: collapsed the 2.6/2.5/2.4/2.3 blocks into one 2.3.0 block")
 
     if dry:

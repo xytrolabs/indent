@@ -164,7 +164,7 @@ Let's put it all together — a personal blog with:
 - A local dev server
 
 ```indent
-#! blog.ind — Personal blog generator
+#! blog.idnt — Personal blog generator
 
 get Tag from html
 get Page from html

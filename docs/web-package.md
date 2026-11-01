@@ -54,7 +54,7 @@ say "answer: " + string(x * 7)' http://127.0.0.1:8080/run
 Each request gets its own stateless handler run; `RunCode` spins up an
 isolated `indent` process per call, so misbehaving or crashing code can never
 take down the server. A full, runnable example lives at
-`examples/web_run.ind`.
+`examples/web_run.idnt`.
 
 ## Notes & gotchas
 

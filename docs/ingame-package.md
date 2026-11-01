@@ -1,4 +1,4 @@
-# ingame.ind — PyGame-Style 2D Game Framework for Indent
+# ingame.idnt — PyGame-Style 2D Game Framework for Indent
 
 **InGame** ("Indent Game") mirrors [PyGame's API](https://www.pygame.org/docs/)
 so you can write games **entirely in Indent** — movement, physics, collision,
@@ -53,8 +53,8 @@ repeat while running
 Quit()
 ```
 
-See `examples/rpg_demo.ind` for a complete tilemap RPG, and
-`examples/snake_game.ind` / `examples/breakout_game.ind` for classic games.
+See `examples/rpg_demo.idnt` for a complete tilemap RPG, and
+`examples/snake_game.idnt` / `examples/breakout_game.idnt` for classic games.
 
 ---
 
