@@ -1,23 +1,112 @@
-# discord.idnt 7.0 — The Discord Bot Library for Indent
+# discord.idnt 7.1 — The Discord Bot Library for Indent
 
 A standalone Discord library (like discord.py) providing REST API, WebSocket
 Gateway, command routing, event system, puzzle/cog loader, a discord.py-style
 `ctx` system, clean block-style helpers, message monitoring, a built-in audit
-log, slash commands, permissions, modals, paginators, voice, **and a
-production-grade minimal-boilerplate Bot API (since 6.0)**. Import it and write
-your bot.
+log, slash commands, permissions, modals, paginators, voice, **a
+production-grade minimal-boilerplate Bot API (since 6.0)**, an **object API
+(`Bot` / `Context`, 7.0)**, **live session helpers (7.1)** and **private-channel
+tickets (7.1)**. Import it and write your bot.
 
 > **Note**: Aether `.ath` files are the same language as Indent `.idnt` — you can
 > just rename them.  `discord` is a single package available as `discord.idnt`.
 >
 > **Important**: the native Indent runtime passes function arguments *by value*,
-> so every function that modifies the bot **returns the modified bot** and you
-> **must reassign** the result:
+> so a helper that takes a **table** bot returns the modified bot and you must
+> reassign the result (an **object** bot needs no reassignment — its methods
+> mutate its own fields):
 > ```indent
 > bot is addCmd bot "ping" pingCmd empty
 > bot is On bot "ready" "onReady"
 > bot is LoadPuzzles bot "puzzles"
 > ```
+
+## 🆕 v7.1 — object API, live session helpers, tickets
+
+`discord.idnt` 7.1 is the package that used to ship as `discord-exp.idnt`; it is
+now canonical and `discord-exp.idnt` is a one-line alias that `launch`es it.
+
+### One `Bot` class, discord.py shape
+
+```indent
+get Bot from discord
+
+var bot dynamic = Bot "TOKEN" "!"
+bot.command "ping"                                   # handler defaults to the name
+bot.command "greet" "Greet someone" "onGreet"
+bot.slash "ban" "Ban a member" "onBan" [UserOption "user" "Who" true]
+bot.on "ready" "onReady"
+bot.check "ban" "IsMod"
+bot.cooldown "ban" 30
+bot.error "onCmdError"
+bot.alias "ban" "b"
+bot.run()                                            # or bot.start()
+```
+
+Methods: `command`, `slash`, `on`, `event`, `ready`, `message`, `interaction`,
+`member_join`, `member_leave`, `check`, `global_check`, `cooldown`, `error`,
+`alias`, `handler`, `ref_command`, `reply_command`, `user_command`,
+`message_command`, `command_names`, `load`, `run`, `start`, `describe`.
+
+`Context` is what a `(ctx, args)` handler receives, so `ctx.send(...)`,
+`ctx.reply(...)`, `ctx.embed(e)`, `ctx.ephemeral(...)`, `ctx.edit(...)` and
+`ctx.is_interaction()` are methods, while `ctx.author`, `ctx.user_id`,
+`ctx.user_name`, `ctx.channel_id`, `ctx.guild_id`, `ctx.cmd`, `ctx.args`,
+`ctx.bot`, `ctx.source` stay plain fields.
+
+### Table bot vs object bot
+
+| Create with | You get | Registration style |
+|---|---|---|
+| `Bot token prefix` / `Client token prefix` | an **object** (class `Bot`) | methods — `bot.command "ping"`, `bot.run()` |
+| `QuickBot token prefix` / `NewBot token prefix` / `BotFromEnv` / `MakeBot` | a **table** (dict) | ambient helpers plus `bot is Helper bot …` |
+
+Both work everywhere: every legacy helper (`AddCommand`, `BotHandler`,
+`AddCheck`, `SetCooldown`, `CommandAlias`, `SimpleCommand`, `AddUserCommand`,
+`AddMessageCommand`, `AddGlobalCheck`, `SetErrorHandler`) accepts an object bot
+and routes to the matching method, so the two styles mix freely.
+
+### Live session info
+
+A module function only sees the module's *load-time* state, and `Bot.run` hands
+the gateway a snapshot — so after READY, `bot.user` on your instance is stale.
+Read the live values instead:
+
+```indent
+BotUserName()   BotUserId()   BotUser()   BotReady()
+```
+
+### Tickets — a private channel per applicant
+
+```indent
+TicketPanel bot "<channel id>" "Open a ticket" "Click below" "ticket_open"
+
+fun onInteraction interaction
+    TicketInteraction interaction "<category id>" "<staff role id>"
+
+AddTicketCloseButton bot channelId     # the red Close button
+CloseTicket bot channelId              # delete the channel
+```
+
+`TicketInteraction` routes `ticket_open*` to `OpenTicketFromInteraction` — it
+acknowledges the click immediately, creates `#ticket-<username>` under the
+category with per-user permission overwrites (`@everyone` denied VIEW_CHANNEL,
+applicant and staff role allowed to read/write, the bot allowed to manage),
+welcomes the applicant, posts a close button and edits the ephemeral reply to
+mention the channel — and `ticket_close*` to `CloseTicket`. Lower level pieces:
+`OpenTicket`, `TicketOverwrites`, `TicketChannelName`.
+
+### Fixed in 7.1
+
+- `Delete` declared its body default on a **block** signature, which Indent only
+  parses on a one-line signature — so `Delete path token {}` raised
+  `Too many positional arguments` and **Unban, RemoveRole, DeleteMsg,
+  DeleteChannel, DeleteRole, DeleteSlash, Unpin, RemoveAllReactions and
+  RemoveThreadMember** all failed. `Delete` is now `fun Delete path token body = empty`.
+- The bounded message cache (`_MSG_CACHE`) declared its variable again.
+- `NewBot` returns the table bot once more, so every legacy helper works.
+
+---
 
 ## 🐍 The discord.py method surface (v7.0)
 

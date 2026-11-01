@@ -1,0 +1,49 @@
+launch "std/discord.idnt"
+say "EXP_VERSION = " + DiscordVersion
+
+#! --- legacy table bot ---
+var bot0 dynamic = QuickBot "TOKEN" "!"
+bot0 is AddCommand bot0 "ping" "latency" empty
+if not has_key bot0.commands "ping"
+    say "FAIL ping"
+    process_exit 1
+
+#! --- discord.py-style object bot ---
+var bot1 dynamic = Bot "TOKEN" "!"
+bot1.command "ping"
+bot1.slash "ban" "Ban a member" "onBan" []
+bot1.on "ready" "onReady"
+bot1.check "ban" "IsMod"
+bot1.cooldown "ban" 30
+if type_of(bot1) != "object"
+    say "FAIL bot1 is not an object"
+    process_exit 1
+if not has_key bot1.commands "ban"
+    say "FAIL slash registration"
+    process_exit 1
+if not has_key bot1.handlers "ready"
+    say "FAIL event registration"
+    process_exit 1
+if not has_key bot1._cooldowns "ban"
+    say "FAIL cooldown registration"
+    process_exit 1
+
+#! --- context object ---
+var ctx0 dynamic = Ctx bot1 "TOKEN" {"channel_id": "9", "author": {"id": "7", "username": "Ann"}} "hi" ["a"]
+if type_of(ctx0) != "object"
+    say "FAIL ctx is not an object"
+    process_exit 1
+if ctx0.user_name != "Ann"
+    say "FAIL ctx.user_name"
+    process_exit 1
+
+#! --- live session helpers (no session yet) ---
+if BotReady()
+    say "FAIL BotReady should be false without a session"
+    process_exit 1
+if BotUserName() != ""
+    say "FAIL BotUserName should be empty"
+    process_exit 1
+
+say "PASS discord parse and basic"
+say "OK"

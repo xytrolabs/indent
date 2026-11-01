@@ -1,5 +1,5 @@
 #! =============================================================================
-#! discord.idnt 6.9 — The Indent Discord bot library
+#! discord.idnt 7.0 — The Indent Discord bot library
 #! =============================================================================
 #!
 #! A standalone Discord library (like discord.py): REST API, WebSocket Gateway,
@@ -52,7 +52,39 @@
 #!       CtxSend ctx "Hello!"
 #!   bot is BotHandler bot "greet" "Greet people" "greet"
 #!
-#! 📖 Full reference: docs/discord-package.md
+#! � OBJECT API (discord.py shape) — with just as little ceremony as before:
+#!   get Bot, Context from discord
+#!
+#!   var bot dynamic = Bot "TOKEN" "!"
+#!   bot.command "ping"                       # handler defaults to the name
+#!   bot.slash "ban" "Ban a member" "onBan" [UserOption "user" "Who" true]
+#!   bot.on "ready" "onReady"
+#!   bot.cooldown "ban" 30
+#!   bot.run()                                # or bot.start()
+#!
+#! `Context` is the `ctx` a command handler receives, so `ctx.send(...)`,
+#! `ctx.reply(...)`, `ctx.embed(e)`, `ctx.ephemeral(...)`, `ctx.edit(...)` are
+#! methods, and `ctx.author` / `ctx.channel_id` / `ctx.guild_id` / `ctx.args`
+#! stay plain fields.
+#!
+#! The two styles mix freely: every legacy helper (`AddCommand`, `BotHandler`,
+#! `AddCheck`, `SetCooldown`, `CommandAlias`, `SimpleCommand`, …) accepts a
+#! `Bot` object as well as a table bot, and routes to the matching method.
+#!
+#! Live session info (`Bot` snapshots its fields when `run` starts, so read
+#! these instead of `bot.user` while the bot is running):
+#!   BotUserName()   BotUserId()   BotUser()   BotReady()
+#!
+#! 🎟️ TICKETS — a private channel per applicant, one call per button:
+#!   TicketPanel bot "<channel id>" "Open a ticket" "Click below" "ticket_open"
+#!   fun onInteraction interaction
+#!       TicketInteraction interaction "<category id>" "<staff role id>"
+#!   AddTicketCloseButton bot channelId      # the red Close button
+#! `TicketInteraction` routes "ticket_open*" to OpenTicketFromInteraction (a
+#! private channel with per-user permission overwrites, a welcome message and a
+#! channel mention in the ephemeral reply) and "ticket_close*" to CloseTicket.
+#!
+#! �📖 Full reference: docs/discord-package.md
 #! =============================================================================
 
 #! ---- constants ----
@@ -60,7 +92,7 @@ var API string = "https://discord.com/api/v10"
 var GatewayURL string = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 #! discord package version
-var DiscordVersion string = "7.0.0"
+var DiscordVersion string = "7.1.0"
 
 #! REST layer configuration. The base is overridable for testing, self-hosting
 #! or going through a proxy; the retry cap mirrors discord.py's max_retries.
@@ -106,21 +138,267 @@ var _LAST_ACK float = 0.0
 #!
 #! Handlers are called with their event data only (no `bot`); call `GetBot()`
 #! when a handler needs the bot itself (e.g. `GetBot().user.id`).
+#!
+#! 🐍 THE OBJECT API — `class Bot`, mirroring discord.py's `commands.Bot`.
+#! It keeps its state in ordinary fields (`token`, `prefix`, `commands`,
+#! `handlers`, `user`, `_checks`, `_cooldowns`, `_aliases`, …), and its methods
+#! mutate those fields in place, so there is no `bot is …` reassignment:
+#!
+#!   var bot dynamic = Bot "TOKEN" "!"
+#!   bot.command "ping"                # handler defaults to the command name
+#!   bot.slash "ban" "Ban a member" "onBan" []
+#!   bot.on "ready" "onReady"
+#!   bot.run()
+#!
+#! `run`/`start` hand the current field snapshot to the gateway engine, and a
+#! module function only ever sees the module's load-time state — so read live
+#! session data with `BotUser()` / `BotUserName()` / `BotUserId()` / `BotReady()`
+#! rather than `bot.user`.
+class Bot
+    var token string = ""
+    var prefix string = ""
+    var commands dynamic = {}
+    var handlers dynamic = {}
+    var user dynamic = {}
+    var _checks dynamic = {}
+    var _cooldowns dynamic = {}
+    var _aliases dynamic = {}
+    var _globalChecks list = []
+    var _userCommands dynamic = {}
+    var _messageCommands dynamic = {}
+    var _errorHandler dynamic = empty
+    var _started dynamic = empty
+    var _reconnects int = 0
+    var _lastHb dynamic = empty
+    var _socketId int = 0
+    var _tasks list = []
+    var _waitData dynamic = empty
+    var _waitDone int = 0
+    var intents int = 114301
+
+    fun describe
+        give "bot(" + prefix + ")"
+
+    #! NOTE: a class method sees the module's LOAD-TIME state, so it cannot
+    #! read the live gateway session. Live data comes from the module helpers
+    #! `BotUser()` / `BotUserName()` / `BotUserId()` / `BotReady()`.
+    fun command name desc=empty handlerName=empty options=empty
+        if type_of(commands) != "dict"
+            commands is {}
+        var d dynamic = desc
+        if d == empty or d == ""
+            d is ""
+        var h dynamic = handlerName
+        if h == empty or h == ""
+            h is name
+        var opts dynamic = options
+        if type_of(opts) != "list"
+            opts is []
+        var entry dynamic = {"description": d, "handler_name": h, "slash": 1, "options": opts}
+        commands is dict_set commands name entry
+
+    fun on event handlerName
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers event handlerName
+
+    fun ready handler
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers "ready" handler
+
+    fun message handler
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers "message" handler
+
+    fun interaction handler
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers "interaction" handler
+
+    fun member_join handler
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers "member_join" handler
+
+    fun member_leave handler
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers "member_leave" handler
+
+    fun slash name desc=empty handlerName=empty options=empty
+        if type_of(commands) != "dict"
+            commands is {}
+        var d dynamic = desc
+        if d == empty or d == ""
+            d is ""
+        var h dynamic = handlerName
+        if h == empty or h == ""
+            h is name
+        var opts dynamic = options
+        if type_of(opts) != "list"
+            opts is []
+        var entry dynamic = {"description": d, "handler_name": h, "slash": 1, "options": opts}
+        commands is dict_set commands name entry
+
+    fun check cmd checkFn
+        if type_of(_checks) != "dict"
+            _checks is {}
+        _checks is dict_set _checks cmd checkFn
+
+    fun global_check checkFn
+        if type_of(_globalChecks) != "list"
+            _globalChecks is []
+        _globalChecks is append _globalChecks checkFn
+
+    fun cooldown cmd seconds
+        if type_of(_cooldowns) != "dict"
+            _cooldowns is {}
+        _cooldowns is dict_set _cooldowns cmd seconds
+
+    #! Name of the function that handles command errors (discord.py `@bot.error`).
+    fun error handlerName
+        _errorHandler is handlerName
+
+    fun event eventName handlerName
+        if type_of(handlers) != "dict"
+            handlers is {}
+        handlers is dict_set handlers eventName handlerName
+
+    #! Register a command whose handler is a function VALUE (not a name).
+    fun ref_command name description handler
+        if type_of(commands) != "dict"
+            commands is {}
+        var entry dynamic = {"description": description, "handler": handler}
+        commands is dict_set commands name entry
+
+    #! Register a command whose handler is a function NAME.
+    fun handler name description handlerName
+        if type_of(commands) != "dict"
+            commands is {}
+        var entry dynamic = {"description": description, "handler_name": handlerName, "slash": 1, "options": []}
+        commands is dict_set commands name entry
+
+    #! Register a one-line reply command (no handler function needed).
+    fun reply_command name description replyText
+        if type_of(commands) != "dict"
+            commands is {}
+        var entry dynamic = {"description": description, "reply": replyText}
+        commands is dict_set commands name entry
+
+    #! Give `target` another name:  bot.alias "ban" "b"
+    fun alias target aliasName
+        if type_of(_aliases) != "dict"
+            _aliases is {}
+        _aliases is dict_set _aliases aliasName target
+
+    fun user_command name handlerName
+        if type_of(_userCommands) != "dict"
+            _userCommands is {}
+        _userCommands is dict_set _userCommands name handlerName
+
+    fun message_command name handlerName
+        if type_of(_messageCommands) != "dict"
+            _messageCommands is {}
+        _messageCommands is dict_set _messageCommands name handlerName
+
+    #! Every registered command name, sorted, for help output.
+    fun command_names
+        var out dynamic = []
+        var kind string = type_of(commands)
+        if kind != "dict"
+            give out
+        var ks dynamic = keys commands
+        var sorted dynamic = sort ks
+        give sorted
+
+    fun load directory
+        var snap dynamic = {"token": token, "prefix": prefix, "commands": commands, "handlers": handlers, "_checks": _checks, "_cooldowns": _cooldowns, "_aliases": _aliases, "_globalChecks": _globalChecks, "_userCommands": _userCommands, "_messageCommands": _messageCommands, "user": user, "_errorHandler": _errorHandler, "intents": intents}
+        var ret dynamic = LoadPuzzles snap directory
+        if has_key ret "commands"
+            commands is ret.commands
+        if has_key ret "handlers"
+            handlers is ret.handlers
+
+    fun run
+        var snap dynamic = {"token": token, "prefix": prefix, "commands": commands, "handlers": handlers, "_checks": _checks, "_cooldowns": _cooldowns, "_aliases": _aliases, "_globalChecks": _globalChecks, "_userCommands": _userCommands, "_messageCommands": _messageCommands, "user": user, "_errorHandler": _errorHandler, "intents": intents}
+        Run snap
+
+    fun start
+        run
+
+fun Client token prefix
+    give Bot token prefix
+
+fun NewClient token prefix
+    give NewBot token prefix
+
+#! The ambient bot is a plain TABLE (not a `Bot` instance): the gateway and the
+#! registration helpers all speak "bot dict", and `has_key`/`keys` work on it.
+#! `Bot` instances participate too — `bot.run()` hands its snapshot over, so
+#! `GetBot()` returns that live table once a class-based bot starts.
 var _Bot dynamic = {"token": "", "prefix": "!", "commands": {}, "handlers": {}, "_checks": {}, "_cooldowns": {}, "_aliases": {}, "_globalChecks": [], "_userCommands": {}, "_messageCommands": {}, "user": {}}
+
 
 #! The ambient bot (created by `Bot` / `BotFromEnv`). Returns the bot dict.
 fun GetBot
     give _Bot
 
+#! ---- LIVE session info -------------------------------------------------------
+#! These are MODULE functions on purpose: a class method only ever sees the
+#! module state as it was when the module was loaded, so `bot.user` on a `Bot`
+#! instance stays at whatever it was when `run` was called. The gateway keeps
+#! the ambient bot current, and these helpers read it — so they are always
+#! accurate, even mid-session.
+#!   say "online as " + BotUserName()
+
+fun BotUser
+    var u dynamic = {}
+    do:
+        if has_key(_Bot, "user")
+            u is _Bot.user
+    catch as e:
+        u is {}
+    give u
+
+fun BotUserName
+    var name string = ""
+    do:
+        var u dynamic = BotUser()
+        if has_key(u, "username")
+            name is u.username
+    catch as e:
+        name is ""
+    give name
+
+fun BotUserId
+    var uid string = ""
+    do:
+        var u dynamic = BotUser()
+        if has_key(u, "id")
+            uid is u.id
+    catch as e:
+        uid is ""
+    give uid
+
+fun BotReady
+    if BotUserName() != ""
+        give true
+    give false
+
 #! Replace the ambient bot (useful for tests or multi-bot scripts).
-fun SetBot b
-    _Bot is _AttachSurface b
+fun SetBot newBot
+    _Bot is _AttachSurface newBot
     give _Bot
 
 #! Is `x` a bot dict (vs a string/number)? Used to let the registration helpers
 #! accept both `Command bot "name"` (explicit) and `Command "name"` (ambient).
 fun _IsBot x
     var isBot int = 0
+    if type_of(x) == "object"
+        isBot is 1
+        give isBot
     do:
         var _kp dynamic = keys x
         if has_key x "commands"
@@ -140,28 +418,30 @@ fun _IsBot x
 #! are the same registration. The table form exists so code written against
 #! discord.py's `@bot.command()` reads the same way here; nothing else changes.
 #! Keys never collide with the bot's data (`commands`, `handlers`, `token`, …).
-fun _AttachSurface b
-    b["command"] is Command
-    b["on"] is On
-    b["event"] is On
-    b["handler"] is BotHandler
-    b["slash"] is Slash
-    b["add_slash"] is AddSlash
-    b["add_commands"] is Commands
-    b["alias"] is CommandAlias
-    b["check"] is AddCheck
-    b["global_check"] is AddGlobalCheck
-    b["cooldown"] is SetCooldown
-    b["error"] is SetErrorHandler
-    b["load"] is LoadPuzzles
-    b["run"] is Run
-    b["start"] is Run
-    b["ready"] is Ready
-    b["message"] is Message
-    b["interaction"] is Interaction
-    b["member_join"] is MemberJoin
-    b["member_leave"] is MemberLeave
-    give b
+fun _AttachSurface target
+    if type_of(target) == "object"
+        give target
+    target["command"] is Command
+    target["on"] is On
+    target["event"] is On
+    target["handler"] is BotHandler
+    target["slash"] is Slash
+    target["add_slash"] is AddSlash
+    target["add_commands"] is Commands
+    target["alias"] is CommandAlias
+    target["check"] is AddCheck
+    target["global_check"] is AddGlobalCheck
+    target["cooldown"] is SetCooldown
+    target["error"] is SetErrorHandler
+    target["load"] is LoadPuzzles
+    target["run"] is Run
+    target["start"] is Run
+    target["ready"] is Ready
+    target["message"] is Message
+    target["interaction"] is Interaction
+    target["member_join"] is MemberJoin
+    target["member_leave"] is MemberLeave
+    give target
 
 #! Lightweight in-memory message cache (keyed by message id) so MESSAGE_DELETE
 #! / MESSAGE_UPDATE handlers can see the last-known message content.
@@ -374,10 +654,7 @@ fun Patch
     give _RestRequest "PATCH" path token body {}
 
 #! DELETE, with an optional JSON body (Discord reads the audit-log reason from it).
-fun Delete
-    path
-    token
-    body = empty
+fun Delete path token body = empty
     give _RestRequest "DELETE" path token body {}
 
 #! ==============================
@@ -890,6 +1167,8 @@ fun HandleInteraction
 
     #! ---- dispatch ALL custom_id interactions (buttons, menus) to user code ----
     if hasCustom
+        var dbgCid string = cmdData.custom_id
+        say "   interaction: " + dbgCid
         do:
             CallEvent bot "interaction" interaction
         catch as err:
@@ -1249,8 +1528,12 @@ fun ReplyTo
         if source.author != empty
             Reply token source.channel_id source.id content
             give empty
-    #! interaction source
-    InteractionReply token source content
+    if has_key source "id"
+        if has_key source "token"
+            InteractionReply token source content
+            give empty
+    give Send token source.channel_id content
+
 
 #! Fire an event. Handlers are called with the event data ONLY — no `bot`
 #! argument — matching discord.py's `on_message(message)`. Handlers that need
@@ -1320,6 +1603,9 @@ fun WaitForPoll
 #! ==============================
 
 #! Create a bot — one function call
+#! `QuickBot` returns the classic TABLE bot: every legacy helper (`AddCommand`,
+#! `BotHandler`, `On`, `SetCooldown`, …) mutates it with `bot is …`. For the
+#! discord.py-style object API, construct `Bot` instead.
 fun QuickBot
     token
     prefix
@@ -1328,6 +1614,10 @@ fun QuickBot
     _Bot is _nb
     give _nb
 
+#! Attach the class-compatible ambient bot after all helpers are defined.
+
+
+
 #! Add a prefix command (handler = function reference — limited support)
 #! Returns bot — reassign:  bot is AddCommand bot "name" "desc" handler
 fun AddCommand
@@ -1335,6 +1625,9 @@ fun AddCommand
     name
     description
     handler
+    if type_of(bot) == "object"
+        bot.ref_command name description handler
+        give bot
     var _cmds4 dynamic = bot.commands
     _cmds4[name] is {"description": description, "handler": handler}
     bot.commands is _cmds4
@@ -1351,6 +1644,9 @@ fun BotHandler ...args
         var name dynamic = args[1]
         var desc dynamic = args[2]
         var handlerName dynamic = args[3]
+        if type_of(bot) == "object"
+            bot.handler name desc handlerName
+            give bot
         var _cmds5 dynamic = bot.commands
         _cmds5[name] is {"description": desc, "handler_name": handlerName}
         bot.commands is _cmds5
@@ -1373,6 +1669,9 @@ fun On ...args
         var bot dynamic = args[0]
         var event dynamic = args[1]
         var handler dynamic = args[2]
+        if type_of(bot) == "object"
+            bot.on event handler
+            give bot
         var _handlers2 dynamic = bot.handlers
         _handlers2[event] is handler
         bot.handlers is _handlers2
@@ -1414,7 +1713,11 @@ fun On ...args
 #! (Registration helpers mutate the ambient bot directly, so both the ambient
 #!  spelling above and the discord.py spelling `bot.command(...)` / `bot.run()`
 #!  persist — see `_AttachSurface`.)
-fun NewBot token prefix
+#! `NewBot` returns the classic TABLE bot (built-ins registered, error handler
+#! installed) so every legacy helper keeps working. For the object API use
+#! `Bot` / `Client` instead — registrations on a table bot still read like
+#! `bot.command(...)` because table bots carry the same method surface.
+fun NewBot token prefix = "!"
     var bot dynamic = QuickBot token prefix
     bot is BotHandler bot "ping" "Check bot latency" "_bot_ping"
     bot is BotHandler bot "help" "List all commands" "_bot_help"
@@ -1498,6 +1801,26 @@ fun Command ...args
 
 #! Internal: register a command on a specific bot, inferring the handler.
 fun _CommandOn bot rest
+    if type_of(bot) == "object"
+        var start int = 0
+        var r int = len(rest)
+        if r >= 2
+            if _IsPrefixToken bot rest[0]
+                start is 1
+        var a dynamic = rest[start:]
+        var m int = len(a)
+        if m == 1
+            bot.command a[0]
+            give bot
+        if m == 2
+            bot.command a[0] a[1]
+            give bot
+        if m == 3
+            bot.command a[0] a[1] a[2]
+            give bot
+        if m >= 4
+            bot.command a[0] a[1] a[2] a[3]
+            give bot
     var r int = len(rest)
     if r < 1
         give bot
@@ -1613,7 +1936,7 @@ fun Slash ...args
     if len(args) < 1
         give _Bot
     if _IsBot args[0]
-        var bot dynamic = args[0]
+        var __bot dynamic = args[0]
         var snameX dynamic = args[1]
         var sdescX dynamic = args[2]
         var hsX dynamic = snameX
@@ -1622,7 +1945,10 @@ fun Slash ...args
         var optX dynamic = []
         if len(args) >= 5
             optX is args[4]
-        give AddSlash bot snameX sdescX hsX optX
+        if type_of(__bot) == "object"
+            __bot.slash snameX sdescX hsX optX
+            give __bot
+        give AddSlash __bot snameX sdescX hsX optX
     var snameA dynamic = args[0]
     var sdescA dynamic = args[1]
     var hsA dynamic = snameA
@@ -1643,6 +1969,12 @@ fun CommandAlias ...args
     if _IsBot args[0]
         var bot dynamic = args[0]
         var target dynamic = args[1]
+        if type_of(bot) == "object"
+            var k int = 2
+            repeat while k < len(args)
+                bot.alias target args[k]
+                k is k + 1
+            give bot
         var amap dynamic = {}
         if has_key bot "_aliases"
             amap is bot._aliases
@@ -1871,6 +2203,9 @@ fun AddCheck ...args
         var bot dynamic = args[0]
         var cmdName dynamic = args[1]
         var checkFnName dynamic = args[2]
+        if type_of(bot) == "object"
+            bot.check cmdName checkFnName
+            give bot
         var checksStore dynamic = {}
         if has_key bot "_checks"
             checksStore is bot._checks
@@ -1894,6 +2229,9 @@ fun AddGlobalCheck ...args
     if _IsBot args[0]
         var bot dynamic = args[0]
         var checkFnName dynamic = args[1]
+        if type_of(bot) == "object"
+            bot.global_check checkFnName
+            give bot
         var gcs dynamic = []
         if has_key bot "_globalChecks"
             gcs is bot._globalChecks
@@ -1982,6 +2320,9 @@ fun SetErrorHandler ...args
         give _Bot
     if _IsBot args[0]
         var bot dynamic = args[0]
+        if type_of(bot) == "object"
+            bot.error args[1]
+            give bot
         bot._errorHandler is args[1]
         give bot
     _Bot._errorHandler is args[0]
@@ -2002,6 +2343,9 @@ fun SetCooldown ...args
         var bot dynamic = args[0]
         var cmdName dynamic = args[1]
         var seconds dynamic = args[2]
+        if type_of(bot) == "object"
+            bot.cooldown cmdName seconds
+            give bot
         var cds dynamic = {}
         if has_key bot "_cooldowns"
             cds is bot._cooldowns
@@ -2604,6 +2948,9 @@ fun AddUserCommand
     bot
     name
     handlerName
+    if type_of(bot) == "object"
+        bot.user_command name handlerName
+        give bot
     var ucms dynamic = {}
     if has_key bot "_userCommands"
         ucms is bot._userCommands
@@ -2617,6 +2964,9 @@ fun AddMessageCommand
     bot
     name
     handlerName
+    if type_of(bot) == "object"
+        bot.message_command name handlerName
+        give bot
     var mcms dynamic = {}
     if has_key bot "_messageCommands"
         mcms is bot._messageCommands
@@ -3260,7 +3610,7 @@ fun MsgCommand
     prefix
     var content string = msg.content
     var rest string = content[len(prefix):]
-    var parts dynamic = split rest " "
+    var parts dynamic = split(trim(rest), " ")
     if len(parts) == 0
         give ""
     give parts[0]
@@ -3275,6 +3625,9 @@ fun SimpleCommand
     name
     desc
     reply
+    if type_of(bot) == "object"
+        bot.reply_command name desc reply
+        give bot
     var cmd dynamic = {"description": desc, "reply": reply}
     var _cmds3 dynamic = bot.commands
     _cmds3[name] is cmd
@@ -3304,7 +3657,58 @@ fun RegisterCog
     give bot
 
 #! ==============================
-#! 🧭  CONTEXT SYSTEM (discord.py-style)
+#! Experimental OOP Context: a real class, so `ctx.send(...)`, `ctx.reply(...)`
+#! compose naturally while the existing `ctx.token` field access keeps working.
+class Context
+    var bot dynamic
+    var token string = ""
+    var channel_id string = ""
+    var source dynamic
+    var cmd string = ""
+    var args dynamic = {}
+    var author dynamic = {}
+    var guild_id string = ""
+    var user_id string = ""
+    var user_name string = ""
+    var user dynamic = {}
+    var guild dynamic = ""
+    var channel dynamic = ""
+
+    fun send content
+        give Send token channel_id content
+
+    fun reply content
+        if has_key source "author"
+            if source.author != empty
+                give Reply token source.channel_id source.id content
+        give Send token channel_id content
+
+    fun embed e
+        give SendEmbed token channel_id e
+
+    fun send_embed e
+        give SendEmbed token channel_id e
+
+    fun ephemeral content
+        if has_key source "id"
+            if has_key source "token"
+                give InteractionEphemeral token source content
+        give Send token channel_id content
+
+    fun edit content
+        if has_key source "id"
+            if has_key source "token"
+                give InteractionEdit token source content
+        give Send token channel_id content
+
+    fun is_interaction
+        var hasA int = 0
+        if has_key source "author"
+            hasA is 1
+        if hasA == 0
+            give true
+        give false
+
 #! ==============================
 #!
 #! discord.py's ctx, adapted for Indent.
@@ -3389,17 +3793,7 @@ fun Ctx
         uid is author.id
     if has_key author "username"
         uname is author.username
-    var c dynamic = {"bot": bot, "token": token, "source": source, "cmd": cmd, "args": args, "author": author, "channel_id": channelId, "guild_id": guildId, "user_id": uid, "user_name": uname}
-    c["send"] is _ctx_send
-    c["reply"] is _ctx_reply
-    c["embed"] is _ctx_embed
-    c["send_embed"] is _ctx_send_embed
-    c["ephemeral"] is _ctx_ephemeral
-    c["edit"] is _ctx_edit
-    c["is_interaction"] is _ctx_is_interaction
-    c["user"] is _ctx_user
-    c["guild"] is _ctx_guild
-    c["channel"] is _ctx_channel
+    var c dynamic = Context bot token channelId source cmd args author guildId uid uname author guildId channelId
     give c
 
 #! Send a message to the context's channel (works on Context objects & dicts)
@@ -3551,7 +3945,7 @@ fun ReplyWithEmbed
             var path string = "/channels/" + source.channel_id + "/messages"
             Post path token {"embeds": [embed]}
             give empty
-    #! interaction source — reply via interaction callback
+    #! interaction source
     var iPath string = "/interactions/" + source.id + "/" + source.token + "/callback"
     Post iPath token {"type": 4, "data": {"embeds": [embed]}}
 
@@ -4397,4 +4791,243 @@ fun RemoveThreadMember token threadId userId
 fun CreateEvent token guildId name desc channelId startIso
     var path string = "/guilds/" + guildId + "/scheduled-events"
     var payload dynamic = {"name": name, "description": desc, "privacy_level": 2, "scheduled_start_time": startIso, "entity_type": 3, "channel_id": channelId}
+    give Post path token payload
+
+
+#! ==============================================================
+#! TICKETS — a private channel per applicant
+#! ==============================================================
+#! Clicking a ticket panel button should open a PRIVATE channel that only the
+#! applicant, staff and the bot can see. Three pieces:
+#!
+#!   1. Post a panel, so there is a button to click:
+#!        TicketPanel bot "<channel id>" "Open a ticket" "Click below" "ticket_open"
+#!
+#!   2. Point your interaction handler at the built-in opener:
+#!        fun onInteraction interaction
+#!            var d dynamic = interaction.data
+#!            var cid string = d.custom_id
+#!            if starts_with cid "ticket_open"
+#!                OpenTicketFromInteraction interaction "<category id>" "<staff role id>"
+#!
+#!   3. Close it later:
+#!        CloseTicket bot channelId
+#!
+#! `OpenTicketFromInteraction` acknowledges the click immediately (Discord's 3
+#! second window), creates `#ticket-<username>` under the category, welcomes the
+#! applicant, and then edits the ephemeral reply to mention the new channel.
+
+#! The token for a table bot or a `Bot` object.
+fun _BotToken bot
+    var t string = ""
+    do:
+        t is bot.token
+    catch as e:
+        t is ""
+    give t
+
+#! Who can see a ticket: the applicant (yes), @everyone (no), staff (yes) and
+#! the bot (yes, plus Manage Channels so it can close the ticket later).
+#! Returned in Discord's `permission_overwrites` shape.
+fun TicketOverwrites guildId userId staffRoleId
+    var rows dynamic = []
+    var denyView string = string(PermViewChannel)
+    var memberAllow int = PermViewChannel + PermSendMessages + PermEmbedLinks + PermAttachFiles + PermReadHistory
+    var memberAllowStr string = string(memberAllow)
+    var everyone dynamic = {"id": guildId, "type": 0, "allow": "0", "deny": denyView}
+    rows is append rows everyone
+    var member dynamic = {"id": userId, "type": 1, "allow": memberAllowStr, "deny": "0"}
+    rows is append rows member
+    var botId string = BotUserId()
+    if botId != ""
+        var botAllow int = PermViewChannel + PermManageChannels + PermSendMessages + PermManageMessages + PermReadHistory
+        var botAllowStr string = string(botAllow)
+        var botRow dynamic = {"id": botId, "type": 1, "allow": botAllowStr, "deny": "0"}
+        rows is append rows botRow
+    if staffRoleId != empty and staffRoleId != ""
+        var staffRow dynamic = {"id": staffRoleId, "type": 0, "allow": memberAllowStr, "deny": "0"}
+        rows is append rows staffRow
+    give rows
+
+#! `ticket-<username>`, falling back to the user id when the lookup fails.
+fun TicketChannelName token guildId userId
+    var uname string = ""
+    do:
+        var mpath string = "/guilds/" + guildId + "/members/" + userId
+        var r dynamic = Get mpath token
+        if r.status == 200
+            var mem dynamic = json_loads r.body
+            if has_key mem "user"
+                if has_key mem.user "username"
+                    uname is mem.user.username
+    catch as e:
+        uname is ""
+    if uname == ""
+        uname is userId
+    var slug string = lower uname
+    slug is replace slug " " "-"
+    give "ticket-" + slug
+
+#! Create the private channel. `parentId` is the category (pass "" for none),
+#! `staffRoleId` gets access too (pass "" for none). Returns the REST response;
+#! its `.body` is the new channel object.
+fun OpenTicket bot guildId userId parentId staffRoleId
+    var token string = _BotToken bot
+    var name string = TicketChannelName token guildId userId
+    var payload dynamic = {"name": name, "type": 0}
+    var ov dynamic = TicketOverwrites guildId userId staffRoleId
+    payload["permission_overwrites"] is ov
+    if parentId != empty and parentId != ""
+        payload["parent_id"] is parentId
+    var path string = "/guilds/" + guildId + "/channels"
+    give Post path token payload
+
+#! The whole button flow: ack, create, welcome, reply with the channel mention.
+#! Returns the new channel id (or empty on failure).
+fun OpenTicketFromInteraction interaction parentId staffRoleId
+    var bot dynamic = GetBot()
+    var token string = _BotToken bot
+    var guildId string = ""
+    var userId string = ""
+    var uname string = "there"
+    if has_key interaction "guild_id"
+        var gid string = interaction.guild_id
+        guildId is gid
+    if has_key interaction "member"
+        do:
+            var m dynamic = interaction.member
+            if has_key m "user"
+                var u dynamic = m.user
+                if has_key u "id"
+                    userId is u.id
+                if has_key u "username"
+                    uname is u.username
+        catch as e:
+            say "   (ticket: member parse failed)"
+    if userId == ""
+        if has_key interaction "user"
+            do:
+                var u2 dynamic = interaction.user
+                if has_key u2 "id"
+                    userId is u2.id
+                if has_key u2 "username"
+                    uname is u2.username
+            catch as e:
+                say "   (ticket: user parse failed)"
+    var missing int = 0
+    if guildId == ""
+        missing is 1
+    if userId == ""
+        missing is 1
+    if missing == 1
+        do:
+            InteractionEphemeral token interaction "Tickets can only be opened inside a server."
+        catch as e:
+            say "   (ticket: could not acknowledge interaction)"
+        give empty
+    #! 1) acknowledge within Discord's 3 second window
+    do:
+        InteractionEphemeral token interaction "Creating your ticket..."
+    catch as e:
+        say "   (ticket: could not acknowledge interaction: " + string(e) + ")"
+    #! 2) create the private channel
+    var resp dynamic = OpenTicket bot guildId userId parentId staffRoleId
+    if not between_int(resp.status, 200, 299)
+        var code string = string(resp.status)
+        var failMsg string = "Could not create the ticket channel (HTTP " + code + "). Check my Manage Channels permission."
+        do:
+            InteractionEdit token interaction failMsg
+        catch as e:
+            say "   (ticket: reply failed)"
+        give empty
+    var ch dynamic = json_loads resp.body
+    var channelId string = ""
+    if has_key ch "id"
+        var cid string = ch.id
+        channelId is cid
+    #! 3) welcome the applicant in the new channel
+    var mention string = "<@" + userId + ">"
+    var welcome string = mention + " thanks for opening a ticket! A staff member will be with you shortly. Use the close button when you are done."
+    do:
+        Send token channelId welcome
+    catch as e:
+        say "   (ticket: welcome failed: " + string(e) + ")"
+    #! 4) replace the "creating..." reply with the channel mention
+    say "   opened ticket channel " + channelId
+    var chMention string = "<#" + channelId + ">"
+    var doneMsg string = "Your ticket is ready: " + chMention
+    do:
+        InteractionEdit token interaction doneMsg
+    catch as e:
+        say "   (ticket: follow-up failed: " + string(e) + ")"
+    give channelId
+
+#! Delete a ticket channel.
+fun CloseTicket bot channelId
+    var token string = _BotToken bot
+    var path string = "/channels/" + channelId
+    var body dynamic = {}
+    var resp dynamic = Delete path token body
+    give resp
+
+#! Post a ticket panel with one "Open a ticket" button whose custom_id is
+#! `customId` (match it with `starts_with` in your interaction handler).
+fun TicketPanel bot channelId title description customId
+    var token string = _BotToken bot
+    var embed dynamic = MakeEmbed title description 15548997
+    var button dynamic = {"type": 2, "style": 1, "label": "Open a ticket", "custom_id": customId}
+    var row dynamic = {"type": 1, "components": [button]}
+    var payload dynamic = {"embeds": [embed], "components": [row]}
+    var path string = "/channels/" + channelId + "/messages"
+    give Post path token payload
+
+#! One call handles both buttons of a ticket panel:
+#!   - custom_id starting with "ticket_close"  -> deletes the channel
+#!   - any other custom_id starting with "ticket" -> opens a private channel
+#!
+#!   fun onInteraction interaction
+#!       TicketInteraction interaction "<category id>" "<staff role id>"
+fun TicketInteraction interaction parentId staffRoleId
+    var cid string = ""
+    do:
+        var d dynamic = interaction.data
+        cid is d.custom_id
+    catch as e:
+        cid is ""
+    if cid == ""
+        give empty
+    if starts_with cid "ticket_close"
+        var bot dynamic = GetBot()
+        var token string = _BotToken bot
+        var channelId string = ""
+        if has_key interaction "channel_id"
+            var ch string = interaction.channel_id
+            channelId is ch
+        if has_key interaction "channel"
+            do:
+                var cobj dynamic = interaction.channel
+                if has_key cobj "id"
+                    var cid2 string = cobj.id
+                    channelId is cid2
+            catch as e:
+                say "   (ticket close: channel parse failed)"
+        do:
+            InteractionEphemeral token interaction "Closing this ticket..."
+        catch as e:
+            say "   (ticket close: could not acknowledge interaction)"
+        if channelId != ""
+            CloseTicket bot channelId
+            say "   closed ticket channel " + channelId
+        give empty
+    if starts_with cid "ticket"
+        give OpenTicketFromInteraction interaction parentId staffRoleId
+    give empty
+
+#! Post a "Close ticket" button in a ticket channel (custom_id "ticket_close").
+fun AddTicketCloseButton bot channelId
+    var token string = _BotToken bot
+    var button dynamic = {"type": 2, "style": 4, "label": "Close ticket", "custom_id": "ticket_close"}
+    var row dynamic = {"type": 1, "components": [button]}
+    var payload dynamic = {"content": "Press the button below when this ticket is resolved.", "components": [row]}
+    var path string = "/channels/" + channelId + "/messages"
     give Post path token payload

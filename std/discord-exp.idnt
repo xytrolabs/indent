@@ -1,0 +1,12 @@
+#! =============================================================================
+#! discord-exp.idnt — compatibility alias
+#! =============================================================================
+#! This package was promoted to the canonical `discord.idnt` (7.1.0) after it
+#! proved stable: object API (`Bot`/`Context`), live session helpers, tickets
+#! with private channels, and the `Delete`-arity fix.
+#!
+#! It now lives in ONE place. This file only exists so older scripts that
+#! import `discord-exp` / `discord_exp` keep working.
+#! =============================================================================
+
+launch "discord.idnt"
