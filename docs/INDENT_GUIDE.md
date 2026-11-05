@@ -887,9 +887,10 @@ If a file lives inside a project with a `.nest/` environment (see
 [§23](#23-command-line--tooling)), the nest's `air-packages:` and `lib:` paths
 are **prepended** to the search path automatically.
 
-> ⚠️ On Windows the module search does **not** use `.ath` files — rename
-> `foo.ath` to `foo.idnt` (they are the same language; only the extension
-> changed). See [`windows.md`](windows.md).
+> `.idnt` is the current extension. `.ath` and `.ind` are the names it had before,
+> and they are still resolved at import time — by `indent check`, `test` and `lint`
+> too — so an older project keeps working unchanged. New files should be `.idnt`.
+> See [`windows.md`](windows.md).
 
 ### Running another Indent file
 
@@ -1586,7 +1587,7 @@ error: 'file_write_text' is not allowed in safe mode
 
 ### Style notes
 
-- Name files with the `.idnt` extension (`.ath` is the legacy name).
+- Name files with the `.idnt` extension (`.ath` and `.ind` are the legacy names).
 - Put reusable functions in their own `.idnt` file and `launch` or import them
   rather than copy-pasting.
 - Prefer small, single-purpose functions with `give` results.
@@ -1628,8 +1629,8 @@ run).
 
 Check the search order in [§13](#13-imports--the-module-system): script
 directory and parents → `INDENT_PATH` → `~/.local/share/indent/site-packages/`.
-Make sure the file is named `foo.idnt` (not `.ath`) and is in one of those
-places. On Windows, the runtime does not look for `.ath`.
+Make sure the file is named `foo.idnt` — or the legacy `foo.ath` / `foo.ind`, which
+still resolve — and is in one of those places.
 
 ### Windows install fails or 404s
 
