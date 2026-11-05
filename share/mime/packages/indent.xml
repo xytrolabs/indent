@@ -4,7 +4,12 @@
     <comment>Indent source file</comment>
     <acronym>Indent</acronym>
     <expanded-acronym>Indent</expanded-acronym>
+    <!-- `.idnt` is the current spelling. The two below are the extensions it had
+         before, kept so an existing project still gets the Indent icon and opens in
+         Indent; the interpreter accepts all three (INDENT_SOURCE_EXTS). -->
     <glob pattern="*.idnt"/>
+    <glob pattern="*.ath"/>
+    <glob pattern="*.ind"/>
   </mime-type>
   <mime-type type="text/x-indent-env">
     <comment>Indent environment file</comment>
