@@ -3967,7 +3967,6 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut ExecContext<'_>) -> Result<Control, String> 
                 } else {
                     let as_module = raw
                         .trim_end_matches(".idnt")
-                        .trim_end_matches(".ind")
                         .trim_end_matches(".glo")
                         .replace('/', ".");
                     if let Some(found) = find_module_file(&module_dir, &as_module) {
@@ -8054,13 +8053,15 @@ fn load_module(module_name: &str, ctx: &mut ExecContext<'_>) -> Result<Arc<Modul
 }
 
 /// Check a single directory for a module file:
-/// name.idnt, name.ind (legacy), name.ath (legacy), name.glo (env/global),
+/// name.idnt, name.ath (legacy), name.ind (legacy), name.glo (env/global),
 /// name/__init__.idnt.
+///
+/// The order is the precedence. `.idnt` is the current spelling and wins outright;
+/// the two older ones are still resolved so a project written before the rename keeps
+/// working, which matters because a missing module is a hard import error rather than
+/// a warning.
 fn module_in_dir(dir: &Path, module_rel: &str) -> Option<PathBuf> {
-    // `.idnt` first so a project that has both spellings picks the new one, then the
-    // legacy extensions: `.ind` is what every package and user project written
-    // before the rename uses, and a hard break would make them unimportable.
-    for ext in [".idnt", ".ind", ".ath", ".glo"] {
+    for ext in [".idnt", ".ath", ".ind", ".glo"] {
         let candidate = dir.join(format!("{module_rel}{ext}"));
         if candidate.exists() {
             return Some(candidate);
@@ -8069,10 +8070,6 @@ fn module_in_dir(dir: &Path, module_rel: &str) -> Option<PathBuf> {
     let init_candidate = dir.join(module_rel).join("__init__.idnt");
     if init_candidate.exists() {
         return Some(init_candidate);
-    }
-    let legacy_init = dir.join(module_rel).join("__init__.ind");
-    if legacy_init.exists() {
-        return Some(legacy_init);
     }
     None
 }
@@ -16312,7 +16309,7 @@ fn mime_type_for_path(path: &Path) -> &str {
         Some("gif") => "image/gif",
         Some("svg") => "image/svg+xml",
         Some("ico") => "image/x-icon",
-        Some("txt") | Some("ath") => "text/plain",
+        Some("txt") | Some("ath") | Some("idnt") | Some("ind") => "text/plain",
         Some("xml") => "application/xml",
         Some("pdf") => "application/pdf",
         Some("zip") => "application/zip",
@@ -21451,7 +21448,7 @@ fn usage() {
     eprintln!("Commands:");
     eprintln!("  run <file.idnt>            Run a program (also: indent <file.idnt>)");
     eprintln!("  repl                      Interactive REPL");
-    eprintln!("  check <file-or-dir>        Parse/check syntax (.idnt files)");
+    eprintln!("  check <file-or-dir>       Parse/check syntax (.idnt files)");
     eprintln!("  test [path]               Run tests");
     eprintln!("  lint <file.idnt>           Lint a file");
     eprintln!("  fmt [--check] <file.idnt>  Auto-format a file");
@@ -21517,7 +21514,11 @@ fn run_check(path: &Path) -> Result<(), String> {
     files.sort();
 
     if files.is_empty() {
-        return Err(format!("No .idnt files found under {}", path.display()));
+        return Err(format!(
+            "No Indent source files found under {} (looked for .{})",
+            path.display(),
+            INDENT_SOURCE_EXTS.join(", .")
+        ));
     }
 
     let mut passed = 0usize;
@@ -21646,12 +21647,23 @@ fn run_new_project(target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The extensions an Indent *source* can carry.
+///
+/// `.idnt` is current. `.ath` and `.ind` are the two spellings it had before, and they
+/// are still accepted: a project written against an older release keeps working, and
+/// — the reason this matters — a file with an unrecognised extension is not reported,
+/// it is *skipped*, so an old project used to pass `indent check` with nothing checked.
+const INDENT_SOURCE_EXTS: [&str; 3] = ["idnt", "ath", "ind"];
+
+fn is_indent_source_path(p: &Path) -> bool {
+    matches!(
+        p.extension().and_then(|e| e.to_str()),
+        Some(ext) if INDENT_SOURCE_EXTS.iter().any(|want| want.eq_ignore_ascii_case(ext))
+    )
+}
+
 fn collect_ath_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let is_lang_file = |p: &Path| {
-        // `idnt` is the extension; `ind` and `ath` are still accepted so existing
-        // projects keep working with `indent check` / `indent test`.
-        matches!(p.extension().and_then(|e| e.to_str()), Some("idnt") | Some("ind") | Some("ath"))
-    };
+    let is_lang_file = is_indent_source_path;
     if path.is_file() {
         if is_lang_file(path) {
             out.push(path.to_path_buf());
@@ -21679,7 +21691,11 @@ fn run_test_suite(path: &Path) -> Result<(), String> {
     files.sort();
 
     if files.is_empty() {
-        println!("No .idnt test files found under {}", path.display());
+        println!(
+            "No Indent test files found under {} (looked for .{})",
+            path.display(),
+            INDENT_SOURCE_EXTS.join(", .")
+        );
         return Ok(());
     }
 
@@ -23257,6 +23273,24 @@ mod tests {
         assert!(stable_upgrade_hint("v2.4.2-exp1", "v2.4.1").is_none());
         // Already stable: nothing to say.
         assert!(stable_upgrade_hint("v2.4.1", "v2.4.1").is_none());
+    }
+
+    #[test]
+    fn every_indent_source_extension_is_recognised() {
+        use std::path::PathBuf;
+        for name in ["a.idnt", "a.ath", "a.ind", "a.IDNT", "dir/a.ind"] {
+            assert!(
+                is_indent_source_path(&PathBuf::from(name)),
+                "{name} should be recognised as Indent source"
+            );
+        }
+        // Near-misses must not match, or `check` would try to parse a changelog.
+        for name in ["a.indent", "a.indx", "a.index", "a.md", "a", "a.ind.bak"] {
+            assert!(
+                !is_indent_source_path(&PathBuf::from(name)),
+                "{name} should not be recognised as Indent source"
+            );
+        }
     }
 
     #[test]

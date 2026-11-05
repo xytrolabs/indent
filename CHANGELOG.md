@@ -1,25 +1,5 @@
 # Indent Changelog
 
-## Unreleased
-
-### `.idnt` is the source extension
-
-Indent source files are now `.idnt`. The old `.ind` spelling is still read
-everywhere it was before — `import`/`get … from`, `launch`, `indent check`,
-`indent test`, `indent fmt`, `indent lint` — so existing projects keep running
-without a rename; when a directory holds both spellings, `.idnt` wins. `.ath`
-and `.glo` remain accepted for older packages.
-
-`indent new` scaffolds `main.idnt` and `tests/smoke.idnt`.
-
-### Update hints for the experimental channel
-
-`indent --update` on an experimental build says so when the stable channel has
-released the same version (`v2.4.1-exp21` next to `v2.4.1`), and names
-`--switch-to-stable` rather than switching on its own. A hint is only shown for
-the same version: `v2.4.2-exp1` beside a `v2.4.1` stable is a different release
-and stays silent.
-
 ## 2.4.1 — 2026-10-27 (stable)
 
 The first stable release since 2.4.0, and the largest single step on speed, memory and
@@ -95,6 +75,12 @@ that names the flag.
 - **CI** installs the fixture server's dependency and now gates on the `.idnt` suite —
   eighty behavioural tests in both engines — plus the budget checks. Release readiness
   runs the same suite instead of `indent test tests`, which could pass on one test.
+- **Every source extension is recognised.** `.idnt` is the current spelling; `.ath` and
+  `.ind` are still accepted, for module resolution, for `http_serve`'s content type, and
+  — the one that mattered — for the directory scan behind `check`, `test` and `lint`.
+  That scan had been filtering to `.idnt` and `.ath` only, so a project still using
+  `.ind` was **silently skipped**: `indent check .` reported nothing wrong because it
+  looked at nothing. The "no files found" messages now name the extensions searched.
 
 ### Upgrading
 
